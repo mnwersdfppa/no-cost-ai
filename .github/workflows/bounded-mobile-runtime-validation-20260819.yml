@@ -1,0 +1,136 @@
+name: Bounded mobile runtime validation 2026-08-19
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/bounded-mobile-runtime-validation-20260819.yml'
+  schedule:
+    - cron: '7 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: bounded-mobile-runtime-validation-20260819
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      TARGET_BRANCH: feat/openclaw-android-node-absorber
+      TARGET_PR: '2'
+      WORKFLOW_FILE: bounded-mobile-runtime-validation-20260819.yml
+      STOP_AT_UTC: '2026-08-19T06:40:00Z'
+    steps:
+      - name: Enforce fixed stop time
+        id: window
+        shell: bash
+        run: |
+          set -euo pipefail
+          if (( $(date -u +%s) >= $(date -u -d "$STOP_AT_UTC" +%s) )); then
+            echo 'active=false' >> "$GITHUB_OUTPUT"
+            gh api -X PUT "repos/$REPO/actions/workflows/$WORKFLOW_FILE/disable" || true
+            echo "DISABLED_AFTER=$STOP_AT_UTC"
+          else
+            echo 'active=true' >> "$GITHUB_OUTPUT"
+            echo "ACTIVE_UNTIL=$STOP_AT_UTC"
+          fi
+
+      - name: Checkout current absorber branch
+        if: steps.window.outputs.active == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        if: steps.window.outputs.active == 'true'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22.23.2'
+
+      - name: Validate current branch without models or device mutation
+        if: steps.window.outputs.active == 'true'
+        id: validation
+        shell: bash
+        run: |
+          set -u
+          report="$RUNNER_TEMP/mobile-runtime-validation.txt"
+          status=PASS
+          fail() { status=FAIL; printf 'FAIL: %s\n' "$1" | tee -a "$report"; }
+          {
+            echo "run_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "head=$(git rev-parse HEAD)"
+            echo "stop_at_utc=$STOP_AT_UTC"
+            echo 'paid_model_used=false'
+            echo 'device_mutation_performed=false'
+          } > "$report"
+
+          for file in android-node/*.sh pi/*.sh; do
+            [[ -f "$file" ]] || continue
+            bash -n "$file" >> "$report" 2>&1 || fail "shell syntax: $file"
+          done
+          python3 -m py_compile pi/pi-work-queue-worker.py >> "$report" 2>&1 || fail 'Pi worker syntax'
+          node --check android-node/adb-mcp/server.mjs >> "$report" 2>&1 || fail 'ADB MCP syntax'
+          node --check android-node/codex-phone-mcp/server.mjs >> "$report" 2>&1 || fail 'phone Codex MCP syntax'
+
+          for dir in android-node/adb-mcp android-node/codex-phone-mcp android-node/phone-codex-cli-backend; do
+            [[ -s "$dir/package-lock.json" ]] || { fail "missing lockfile: $dir"; continue; }
+            (cd "$dir" && npm ci --ignore-scripts --no-audit --no-fund) >> "$report" 2>&1 || fail "locked install: $dir"
+          done
+
+          grep -Fq 'readonly REVIEWED_PAYLOAD_COMMIT="9ad70a02a2ab2ab0d54cf5ec30396f010f1cbbb6"' android-node/bootstrap-all.sh || fail 'immutable payload missing'
+          grep -Fq 'FIRST_PIN_ATOMICALLY_WRITTEN' android-node/provision-phone-host-key-secure.sh || fail 'first host-key pin gate missing'
+          grep -Fq 'LEGACY_PHONE_CORE_INTERNAL_ONLY' android-node/phone-termux-bootstrap.sh || fail 'phone core direct-execution gate missing'
+          grep -Fq 'LEGACY_VERIFY_CORE_INTERNAL_ONLY' android-node/verify-phone-bridge.sh || fail 'verifier core direct-execution gate missing'
+          grep -Fq 'LEGACY_ROLLBACK_CORE_INTERNAL_ONLY' android-node/rollback-pi-phone-absorber.sh || fail 'rollback core direct-execution gate missing'
+
+          for forbidden in phone_launch_url phone_tap phone_swipe phone_type_text adb_shell; do
+            if grep -RIn --exclude-dir=node_modules --exclude='*.md' --exclude='package-lock.json' "$forbidden" android-node/adb-mcp; then
+              fail "forbidden phone primitive: $forbidden"
+            fi
+          done
+
+          if grep -RInE --exclude-dir=node_modules --exclude='*.md' --exclude='package-lock.json' \
+            '(sk-proj-|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' android-node pi >> "$report" 2>&1; then
+            fail 'secret-like literal detected'
+          fi
+          if grep -RInE --exclude-dir=node_modules --exclude='*.md' \
+            '(Magisk|bootloader[[:space:]]+unlock|adb[[:space:]]+root|su[[:space:]]+-c|getUpdates\(|start_polling\(|run_polling\()' android-node pi >> "$report" 2>&1; then
+            fail 'root or second-poller primitive detected'
+          fi
+
+          gh pr view "$TARGET_PR" --repo "$REPO" --json state,isDraft,headRefOid \
+            --jq '{state,isDraft,headRefOid}' >> "$report" 2>&1 || fail 'PR state check'
+
+          for upstream in openclaw/openclaw openai/codex Genymobile/scrcpy termux/termux-app tailscale/tailscale maton-ai/agent-toolkit n8n-io/n8n supabase/supabase vercel/vercel; do
+            gh api "repos/$upstream" --jq '(.full_name + " archived=" + (.archived|tostring) + " disabled=" + (.disabled|tostring))' >> "$report" 2>&1 || fail "upstream unavailable: $upstream"
+          done
+
+          echo "STATUS=$status" | tee -a "$report"
+          cat "$report" >> "$GITHUB_STEP_SUMMARY"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          [[ "$status" == PASS ]]
+
+      - name: Upload deterministic report
+        if: steps.window.outputs.active == 'true' && always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: bounded-mobile-runtime-${{ github.run_number }}
+          path: ${{ runner.temp }}/mobile-runtime-validation.txt
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Comment only on failure
+        if: steps.window.outputs.active == 'true' && failure()
+        shell: bash
+        run: |
+          gh pr comment "$TARGET_PR" --repo "$REPO" --body "Bounded mobile-runtime validation failed at $(date -u +%Y-%m-%dT%H:%M:%SZ). No paid model, credential mutation, merge, deployment, Telegram polling, or physical-device action was performed. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
