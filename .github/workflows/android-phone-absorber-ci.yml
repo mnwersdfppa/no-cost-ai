@@ -41,6 +41,7 @@ jobs:
 
           phone = Path('android-node/phone-termux-bootstrap.sh').read_text()
           secure_phone = Path('android-node/phone-termux-bootstrap-secure.sh').read_text()
+          core_verify = Path('android-node/verify-phone-bridge.sh').read_text()
           verify = Path('android-node/verify-phone-bridge-secure.sh').read_text()
           adb = Path('android-node/adb-mcp/server.mjs').read_text()
           install = Path('android-node/install-pi-bridge-secure.sh').read_text()
@@ -63,7 +64,7 @@ jobs:
           required_verify = [
               'PINNED_SSH_HOST_KEY_RECORD_COUNT_INVALID',
               'PINNED_SSH_HOST_KEY_NOT_ED25519',
-              'PHONE_CODEX_LIVE_TEST_FAILED',
+              'CORE_PHONE_BRIDGE_VERIFICATION_FAILED',
               'TARGET_ALREADY_PRIMARY_WITHOUT_VALID_ROLLBACK_RECORD',
               'PRIMARY_MODEL_PROMOTION_NOT_VERIFIED',
               'T4_TELEGRAM=NOT_TESTED',
@@ -82,9 +83,11 @@ jobs:
           missing += [f'verify:{item}' for item in required_verify if item not in verify]
           missing += [f'codex:{item}' for item in required_codex if item not in codex_install]
           missing += [f'adb:{item}' for item in required_adb if item not in adb]
-          forbidden = [f'adb:{item}' for item in forbidden_adb if item in adb]
+          if 'PHONE_CODEX_LIVE_TEST_FAILED' not in core_verify:
+              missing.append('core_verify:PHONE_CODEX_LIVE_TEST_FAILED')
           if 'install-pi-bridge.sh' not in install or 'openclaw-phone-bootstrap-core.sh' not in install:
               missing.append('secure-install:base-and-core')
+          forbidden = [f'adb:{item}' for item in forbidden_adb if item in adb]
           if missing or forbidden:
               raise SystemExit('Safety contract failure: missing=' + repr(missing) + ' forbidden=' + repr(forbidden))
 
