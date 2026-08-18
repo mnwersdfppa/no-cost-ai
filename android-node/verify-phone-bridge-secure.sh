@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CORE="$SCRIPT_DIR/verify-phone-bridge.sh"
+PROVISION="$SCRIPT_DIR/provision-phone-host-key-secure.sh"
 ROOT="${OPENCLAW_PHONE_ROOT:-$HOME/.openclaw/phone-bridge}"
 SECRETS="${OPENCLAW_SECRETS_DIR:-$HOME/.openclaw/secrets}"
 ENV_FILE="$SECRETS/phone-bridge.env"
@@ -33,10 +34,16 @@ restart_gateway() {
 
 [[ -r "$ENV_FILE" ]] || { echo "BLOCKED=PHONE_BRIDGE_ENV_MISSING"; exit 101; }
 [[ -x "$CORE" || -r "$CORE" ]] || { echo "BLOCKED=CORE_VERIFIER_MISSING"; exit 102; }
+[[ -x "$PROVISION" || -r "$PROVISION" ]] || { echo "BLOCKED=SECURE_HOST_KEY_PROVISIONER_MISSING"; exit 110; }
 set -a
 # shellcheck disable=SC1090
 source "$ENV_FILE"
 set +a
+
+# Establish or confirm the first host-key pin without TOFU. The provisioner
+# accepts exactly one ED25519 record, verifies the operator-recorded SHA256
+# fingerprint, and atomically writes only that record.
+bash "$PROVISION"
 
 python3 - "$PHONE_SSH_KNOWN_HOSTS" "$PHONE_SSH_HOST_KEY_SHA256" <<'PY'
 import subprocess,sys
@@ -48,7 +55,7 @@ except Exception:
 if len(lines)!=1:
     raise SystemExit('BLOCKED=PINNED_SSH_HOST_KEY_RECORD_COUNT_INVALID')
 parts=lines[0].split()
-if len(parts)<3 or parts[1] != 'ssh-ed25519':
+if len(parts)!=3 or parts[1] != 'ssh-ed25519':
     raise SystemExit('BLOCKED=PINNED_SSH_HOST_KEY_FORMAT_INVALID')
 proc=subprocess.run(['ssh-keygen','-lf',path,'-E','sha256'],capture_output=True,text=True,check=False)
 out=[line for line in proc.stdout.splitlines() if line.strip()]
@@ -98,7 +105,7 @@ if [[ "$CURRENT_PRIMARY" == "$TARGET_PRIMARY" && "$RECORD_STATE" != "valid" ]]; 
 fi
 
 set +e
-RUN_LLM_TEST="$RUN_LLM_TEST" ENABLE_AFTER_VERIFY="$ENABLE_AFTER_VERIFY" SET_PRIMARY=0 bash "$CORE"
+OPENCLAW_SECURE_WRAPPER=1 RUN_LLM_TEST="$RUN_LLM_TEST" ENABLE_AFTER_VERIFY="$ENABLE_AFTER_VERIFY" SET_PRIMARY=0 bash "$CORE"
 CORE_STATUS=$?
 set -e
 if [[ $CORE_STATUS -ne 0 ]]; then
