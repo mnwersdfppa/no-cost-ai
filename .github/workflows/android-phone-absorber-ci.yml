@@ -1,0 +1,38 @@
+name: android-phone-absorber-ci
+
+on:
+  pull_request:
+    paths:
+      - 'android-node/**'
+      - '.github/workflows/android-phone-absorber-ci.yml'
+  push:
+    branches:
+      - feat/openclaw-android-node-absorber
+    paths:
+      - 'android-node/**'
+      - '.github/workflows/android-phone-absorber-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check shell scripts
+        run: |
+          bash -n android-node/install-pi-phone-absorber.sh
+          bash -n android-node/rollback-pi-phone-absorber.sh
+      - name: Install MCP dependencies
+        working-directory: android-node/adb-mcp
+        run: npm install --no-audit --no-fund
+      - name: Check MCP server syntax
+        working-directory: android-node/adb-mcp
+        run: npm run check
+      - name: Validate deployment packet
+        run: python3 -m json.tool android-node/DEPLOYMENT_PACKET.json >/dev/null
