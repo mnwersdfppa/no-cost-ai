@@ -32,7 +32,7 @@ print(previous)
 PY
 )"
 
-bash "$CORE"
+OPENCLAW_SECURE_WRAPPER=1 bash "$CORE"
 
 RESTORED="$(openclaw config get agents.defaults.model.primary 2>/dev/null | normalize_config_string || true)"
 if [[ "$RESTORED" != "$PREVIOUS_PRIMARY" ]]; then
