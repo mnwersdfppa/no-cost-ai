@@ -8,6 +8,14 @@ RUN_LLM_TEST="${RUN_LLM_TEST:-1}"
 ENABLE_AFTER_VERIFY="${ENABLE_AFTER_VERIFY:-1}"
 SET_PRIMARY="${SET_PRIMARY:-1}"
 
+restart_gateway() {
+  if openclaw gateway restart --help 2>&1 | grep -q -- '--safe'; then
+    openclaw gateway restart --safe || true
+  else
+    openclaw gateway restart || true
+  fi
+}
+
 if [[ ! -r "$ENV_FILE" ]]; then
   echo "BLOCKED=PHONE_BRIDGE_ENV_MISSING"
   exit 30
@@ -69,7 +77,7 @@ if ! grep -q 'DENIED=COMMAND_NOT_ALLOWLISTED' <<<"$DENY_TEST"; then
   exit 36
 fi
 
-if ! grep -Eqi 'Logged in using ChatGPT|chatgpt|authenticated|login.*ok' <<<"$REMOTE_STATUS"; then
+if ! grep -Eqi 'Logged in using ChatGPT|chatgpt|authenticated|login.*ok|successfully logged in' <<<"$REMOTE_STATUS"; then
   echo "BLOCKED=PHONE_CODEX_NOT_LOGGED_IN"
   echo "NEXT=run codex login --device-auth in Termux and approve it in the phone browser"
   exit 37
@@ -106,11 +114,12 @@ PLUGIN_RESULT="not_supported"
 BACKEND_TEST="not_run"
 if openclaw plugins --help >/dev/null 2>&1; then
   if ! openclaw plugins inspect phone-codex-cli --runtime >/dev/null 2>&1; then
-    openclaw plugins install -l "$ROOT/phone-codex-cli-backend" --force || true
+    openclaw plugins install -l "$ROOT/phone-codex-cli-backend" || true
   fi
   openclaw plugins enable phone-codex-cli || true
   if openclaw plugins inspect phone-codex-cli --runtime >/dev/null 2>&1; then
     PLUGIN_RESULT="ready"
+    restart_gateway
     set +e
     BACKEND_OUTPUT="$(openclaw agent --agent main --message 'Reply exactly PHONE_BACKEND_OK and nothing else.' --model phone-codex-cli/gpt-5.6-sol 2>&1)"
     BACKEND_STATUS=$?
@@ -135,11 +144,7 @@ if [[ "$SET_PRIMARY" == "1" && "$BACKEND_TEST" == "pass" ]]; then
 fi
 
 openclaw mcp reload || true
-if openclaw gateway restart --help 2>&1 | grep -q -- '--safe'; then
-  openclaw gateway restart --safe || true
-else
-  openclaw gateway restart || true
-fi
+restart_gateway
 openclaw gateway status || true
 
 mkdir -p "$ROOT/logs"
