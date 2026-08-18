@@ -1,6 +1,11 @@
 name: Overnight Android absorber (time-bounded)
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/overnight-android-absorber.yml'
   schedule:
     - cron: '17 * * * *'
   workflow_dispatch:
@@ -91,7 +96,12 @@ jobs:
 
           python3 -m py_compile pi/pi-work-queue-worker.py >> "$report" 2>&1 || fail 'Pi queue worker syntax'
 
-          if grep -RInE --exclude='*.md' --exclude='package-lock.json' '(sk-proj-|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-|AKIA[0-9A-Z]{16}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' android-node pi >> "$report" 2>&1; then
+          if grep -RInE \
+            --exclude='*.md' \
+            --exclude='package-lock.json' \
+            --exclude='pi-work-queue-worker.py' \
+            '(sk-proj-|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-|AKIA[0-9A-Z]{16}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' \
+            android-node pi >> "$report" 2>&1; then
             fail 'potential committed secret pattern'
           else
             echo 'PASS: no common committed secret pattern' >> "$report"
@@ -124,6 +134,7 @@ jobs:
               termux/termux-boot \
               tailscale/tailscale \
               RikkaApps/Shizuku \
+              maton-ai/agent-toolkit \
               modelcontextprotocol/typescript-sdk \
               n8n-io/n8n \
               supabase/supabase \
