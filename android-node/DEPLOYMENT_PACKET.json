@@ -1,0 +1,21 @@
+{
+  "version": "1.0.0",
+  "target": "Raspberry Pi 5 with USB-connected mobile phone",
+  "primary_path": "Official OpenClaw Android/iOS companion node paired to the existing Raspberry Pi OpenClaw Gateway",
+  "fallback_path": "USB ADB allowlisted local MCP server",
+  "root_required": false,
+  "telegram_single_poller_preserved": true,
+  "arbitrary_shell_exposed": false,
+  "write_actions_require_approval": true,
+  "secrets_in_source": false,
+  "rollback_available": true,
+  "status": "PREPARED_NOT_PHYSICALLY_EXECUTED",
+  "files": [
+    "android-node/S_RANK_ABSORPTION.md",
+    "android-node/install-pi-phone-absorber.sh",
+    "android-node/rollback-pi-phone-absorber.sh",
+    "android-node/adb-mcp/package.json",
+    "android-node/adb-mcp/server.mjs"
+  ],
+  "next_user_action": "Run the one-line installer on the Raspberry Pi, approve USB debugging or paste the official OpenClaw setup code into the phone app, then share the RESULT block."
+}
