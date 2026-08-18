@@ -15,7 +15,7 @@ function buildPhoneCodexBackend(): CliBackendPlugin {
       defaultImageProbe: false,
       defaultMcpProbe: false,
     },
-    nativeToolMode: "disabled",
+    nativeToolMode: "none",
     sideQuestionToolMode: "disabled",
     config: {
       command,
