@@ -17,35 +17,30 @@ permissions:
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: '22'
+          node-version: '22.23.2'
       - name: Check shell scripts
+        shell: bash
         run: |
-          for file in \
-            android-node/bootstrap-all.sh \
-            android-node/install-pi-phone-absorber.sh \
-            android-node/install-pi-bridge.sh \
-            android-node/phone-termux-bootstrap.sh \
-            android-node/verify-phone-bridge.sh \
-            android-node/enable-phone-write.sh \
-            android-node/disable-phone-write.sh \
-            android-node/pair-openclaw-node.sh \
-            android-node/rollback-pi-phone-absorber.sh \
-            android-node/phone-codex-cli-backend/phone-codex-cli-backend.sh; do
-            bash -n "$file"
-          done
+          set -euo pipefail
+          find android-node -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
       - name: Assert phone runtime safety contract
+        shell: bash
         run: |
+          set -euo pipefail
           python3 - <<'PY'
+          import json
           from pathlib import Path
 
           phone = Path('android-node/phone-termux-bootstrap.sh').read_text()
           verify = Path('android-node/verify-phone-bridge.sh').read_text()
+          adb = Path('android-node/adb-mcp/server.mjs').read_text()
+          install = Path('android-node/install-pi-bridge.sh').read_text()
           required_phone = [
               'openclaw-phone-ssh-dispatch',
               'restrict,command=',
@@ -53,21 +48,44 @@ jobs:
               'features.web_search_request=false',
               'features.apps=false',
               'features.plugins=false',
-              'approval_policy=',
-              'never',
+              'approval_policy="never"',
               'DENIED=COMMAND_NOT_ALLOWLISTED',
+              '@openai/codex@$CODEX_VERSION',
+              'PHONE_SSH_HOST_KEY_SHA256=',
           ]
           required_verify = [
-              'BLOCKED=LIVE_LLM_TEST_REQUIRED_BEFORE_ENABLE',
+              'OPERATOR_VERIFIED_SSH_FINGERPRINT_REQUIRED',
+              'PHONE_SSH_FINGERPRINT_MISMATCH',
+              'PINNED_SSH_HOST_KEY_CHANGED',
               'PHONE_CODEX_LIVE_TEST_FAILED',
               'PHONE_BACKEND_OK',
+              '! -s "$PROMOTION_RECORD"',
+              '"telegram_single_poller": "not_tested"',
           ]
+          required_adb = ['phone_open_bridge_app', "z.enum(['openclaw', 'termux'])", 'phone_key']
+          forbidden_adb = ['phone_launch_url', 'phone_tap', 'phone_swipe', 'phone_type_text']
           missing = [f'phone:{item}' for item in required_phone if item not in phone]
           missing += [f'verify:{item}' for item in required_verify if item not in verify]
-          if missing:
-              raise SystemExit('Missing safety contract markers: ' + ', '.join(missing))
+          missing += [f'adb:{item}' for item in required_adb if item not in adb]
+          forbidden = [f'adb:{item}' for item in forbidden_adb if item in adb]
+          if 'npm ci --ignore-scripts' not in install:
+              missing.append('install:npm-ci')
+          if missing or forbidden:
+              raise SystemExit('Safety contract failure: missing=' + repr(missing) + ' forbidden=' + repr(forbidden))
+
+          for path in [
+              Path('android-node/adb-mcp/package.json'),
+              Path('android-node/codex-phone-mcp/package.json'),
+              Path('android-node/phone-codex-cli-backend/package.json'),
+          ]:
+              data=json.loads(path.read_text())
+              for group in ('dependencies','devDependencies'):
+                  for name,version in (data.get(group) or {}).items():
+                      if any(ch in version for ch in '^~*><| '):
+                          raise SystemExit(f'Unpinned dependency {path}:{name}={version}')
           PY
           ! grep -RInE --exclude='*.md' --exclude='package-lock.json' '(sk-proj-|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' android-node
+          ! grep -RInE --exclude='*.md' '(npm install -g @openai/codex( |$)|npm install -g .+\|\| true|telegram.*getUpdates|PHONE_RELAY_ENABLED)' android-node
       - name: Validate ADB MCP server
         working-directory: android-node/adb-mcp
         run: |
