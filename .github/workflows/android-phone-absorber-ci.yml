@@ -41,15 +41,32 @@ jobs:
           done
       - name: Assert phone runtime safety contract
         run: |
-          set -euo pipefail
-          grep -Fq 'restrict,command="$HOME/.local/bin/openclaw-phone-ssh-dispatch"' android-node/phone-termux-bootstrap.sh
-          grep -Fq 'features.shell_tool=false' android-node/phone-termux-bootstrap.sh
-          grep -Fq 'features.web_search_request=false' android-node/phone-termux-bootstrap.sh
-          grep -Fq 'features.apps=false' android-node/phone-termux-bootstrap.sh
-          grep -Fq 'features.plugins=false' android-node/phone-termux-bootstrap.sh
-          grep -Fq 'approval_policy="never"' android-node/phone-termux-bootstrap.sh || grep -Fq 'approval_policy="never"' <(sed 's/\\"/"/g' android-node/phone-termux-bootstrap.sh)
-          grep -Fq 'BLOCKED=LIVE_LLM_TEST_REQUIRED_BEFORE_ENABLE' android-node/verify-phone-bridge.sh
-          grep -Fq 'DENIED=COMMAND_NOT_ALLOWLISTED' android-node/phone-termux-bootstrap.sh
+          python3 - <<'PY'
+          from pathlib import Path
+
+          phone = Path('android-node/phone-termux-bootstrap.sh').read_text()
+          verify = Path('android-node/verify-phone-bridge.sh').read_text()
+          required_phone = [
+              'openclaw-phone-ssh-dispatch',
+              'restrict,command=',
+              'features.shell_tool=false',
+              'features.web_search_request=false',
+              'features.apps=false',
+              'features.plugins=false',
+              'approval_policy=',
+              'never',
+              'DENIED=COMMAND_NOT_ALLOWLISTED',
+          ]
+          required_verify = [
+              'BLOCKED=LIVE_LLM_TEST_REQUIRED_BEFORE_ENABLE',
+              'PHONE_CODEX_LIVE_TEST_FAILED',
+              'PHONE_BACKEND_OK',
+          ]
+          missing = [f'phone:{item}' for item in required_phone if item not in phone]
+          missing += [f'verify:{item}' for item in required_verify if item not in verify]
+          if missing:
+              raise SystemExit('Missing safety contract markers: ' + ', '.join(missing))
+          PY
           ! grep -RInE --exclude='*.md' --exclude='package-lock.json' '(sk-proj-|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' android-node
       - name: Validate ADB MCP server
         working-directory: android-node/adb-mcp
