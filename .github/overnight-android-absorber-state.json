@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "runs_left": 8,
+  "runs_completed": 0,
+  "last_status": "queued",
+  "last_run_utc": null,
+  "target_branch": "feat/openclaw-android-node-absorber",
+  "target_pr": 2,
+  "paid_ai_calls": false,
+  "physical_device_mutation": false
+}
