@@ -1,0 +1,18 @@
+{
+  "name": "openclaw-phone-codex-safe-mcp",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Read-only MCP bridge from Raspberry Pi OpenClaw to an already-authenticated Codex CLI in Android Termux",
+  "scripts": {
+    "start": "node server.mjs",
+    "check": "node --check server.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.25.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
