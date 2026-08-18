@@ -1,0 +1,188 @@
+name: Overnight Android absorber v2 (bounded 8 runs)
+
+on:
+  schedule:
+    - cron: '7 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+  pull-requests: write
+
+concurrency:
+  group: overnight-android-absorber-v2
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      STATE_FILE: .github/overnight-android-absorber-state.json
+      TARGET_BRANCH: feat/openclaw-android-node-absorber
+      TARGET_PR: '2'
+    steps:
+      - name: Checkout control state from main
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: main
+          path: control
+          persist-credentials: true
+          fetch-depth: 1
+
+      - name: Read bounded state
+        id: state
+        shell: bash
+        run: |
+          set -euo pipefail
+          file="control/$STATE_FILE"
+          test -s "$file"
+          runs_left="$(node -e 'const s=require(process.argv[1]); console.log(Number(s.runs_left))' "$file")"
+          completed="$(node -e 'const s=require(process.argv[1]); console.log(Number(s.runs_completed))' "$file")"
+          [[ "$runs_left" =~ ^[0-9]+$ ]]
+          [[ "$completed" =~ ^[0-9]+$ ]]
+          if (( runs_left <= 0 )); then
+            echo 'active=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'active=true' >> "$GITHUB_OUTPUT"
+          fi
+          echo "runs_left=$runs_left" >> "$GITHUB_OUTPUT"
+          echo "completed=$completed" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout target branch
+        if: steps.state.outputs.active == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          path: target
+          fetch-depth: 1
+
+      - name: Set up Node.js
+        if: steps.state.outputs.active == 'true'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22.23.2'
+
+      - name: Run independent static, supply-chain and safety checks
+        if: steps.state.outputs.active == 'true'
+        id: checks
+        shell: bash
+        run: |
+          set +e
+          report="$RUNNER_TEMP/android-absorber-report.txt"
+          status=PASS
+          {
+            echo "run_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "run_index=$(( ${{ steps.state.outputs.completed }} + 1 ))"
+            echo "target_branch=$TARGET_BRANCH"
+            echo '--- locked dependency validation ---'
+          } > "$report"
+
+          for dir in target/android-node/adb-mcp target/android-node/codex-phone-mcp target/android-node/phone-codex-cli-backend; do
+            test -s "$dir/package-lock.json" || status=FAIL
+            (cd "$dir" && npm ci --ignore-scripts --no-audit --no-fund) >> "$report" 2>&1 || status=FAIL
+          done
+
+          node --check target/android-node/adb-mcp/server.mjs >> "$report" 2>&1 || status=FAIL
+          node --check target/android-node/codex-phone-mcp/server.mjs >> "$report" 2>&1 || status=FAIL
+          find target/android-node -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n >> "$report" 2>&1 || status=FAIL
+
+          {
+            echo '--- policy invariants ---'
+            grep -F 'phone_open_bridge_app' target/android-node/adb-mcp/server.mjs
+            grep -F "z.enum(['openclaw', 'termux'])" target/android-node/adb-mcp/server.mjs
+            grep -F 'phone_key' target/android-node/adb-mcp/server.mjs
+            grep -F 'OPERATOR_VERIFIED_SSH_FINGERPRINT_REQUIRED' target/android-node/verify-phone-bridge.sh
+            grep -F 'PINNED_SSH_HOST_KEY_CHANGED' target/android-node/verify-phone-bridge.sh
+            grep -F '"telegram_single_poller": "not_tested"' target/android-node/verify-phone-bridge.sh
+            grep -F 'npm ci --ignore-scripts' target/android-node/install-pi-bridge.sh
+          } >> "$report" 2>&1 || status=FAIL
+
+          if grep -E 'phone_(launch_url|tap|swipe|type_text)' target/android-node/adb-mcp/server.mjs >> "$report" 2>&1; then
+            echo 'FAIL: generic production UI primitive returned' >> "$report"
+            status=FAIL
+          fi
+          if grep -RInE --exclude='*.md' --exclude='package-lock.json' '(sk-proj-|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' target/android-node >> "$report" 2>&1; then
+            echo 'FAIL: secret-like literal detected' >> "$report"
+            status=FAIL
+          fi
+
+          {
+            echo '--- official upstream snapshot ---'
+            for upstream in \
+              openclaw/openclaw \
+              openai/codex \
+              Genymobile/scrcpy \
+              termux/termux-app \
+              termux/termux-api \
+              termux/termux-boot \
+              tailscale/tailscale \
+              RikkaApps/Shizuku \
+              modelcontextprotocol/typescript-sdk \
+              n8n-io/n8n; do
+              branch="$(gh api "repos/$upstream" --jq .default_branch 2>/dev/null)" || { echo "$upstream=UNREACHABLE"; status=FAIL; continue; }
+              head="$(gh api "repos/$upstream/commits/$branch" --jq .sha 2>/dev/null | cut -c1-12)" || { echo "$upstream=HEAD_UNAVAILABLE"; status=FAIL; continue; }
+              release="$(gh api "repos/$upstream/releases/latest" --jq .tag_name 2>/dev/null || echo none)"
+              echo "$upstream branch=$branch head=$head release=$release"
+            done
+          } >> "$report" 2>&1
+
+          echo "STATUS=$status" >> "$report"
+          cat "$report"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "report=$report" >> "$GITHUB_OUTPUT"
+
+      - name: Upload run evidence
+        if: steps.state.outputs.active == 'true' && always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: android-absorber-v2-${{ github.run_number }}
+          path: ${{ steps.checks.outputs.report }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Decrement immutable run budget and record result
+        if: steps.state.outputs.active == 'true' && always()
+        shell: bash
+        env:
+          CHECK_STATUS: ${{ steps.checks.outputs.status }}
+        run: |
+          set -euo pipefail
+          status="${CHECK_STATUS:-FAIL}"
+          file="control/$STATE_FILE"
+          node - "$file" "$status" <<'NODE'
+          const fs = require('fs');
+          const [file, status] = process.argv.slice(2);
+          const state = JSON.parse(fs.readFileSync(file, 'utf8'));
+          state.runs_left = Math.max(0, Number(state.runs_left) - 1);
+          state.runs_completed = Number(state.runs_completed) + 1;
+          state.last_status = status;
+          state.last_run_utc = new Date().toISOString();
+          state.paid_ai_calls = false;
+          state.physical_device_mutation = false;
+          fs.writeFileSync(file, JSON.stringify(state, null, 2) + '\n');
+          NODE
+          cd control
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add "$STATE_FILE"
+          git commit -m "ci: record Android absorber run $(( ${{ steps.state.outputs.completed }} + 1 ))/8 [$status]"
+          git push origin HEAD:main
+
+          remaining="$(node -e 'const s=require(process.argv[1]); console.log(s.runs_left)' "$STATE_FILE")"
+          if [[ "$status" != PASS ]]; then
+            gh pr comment "$TARGET_PR" --repo "$GITHUB_REPOSITORY" --body "Bounded Android absorber run $(( ${{ steps.state.outputs.completed }} + 1 ))/8 failed. Evidence: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          fi
+          if (( remaining == 0 )); then
+            gh pr comment "$TARGET_PR" --repo "$GITHUB_REPOSITORY" --body "Eight bounded overnight validation runs completed. Final status: $status. No paid AI call, credential mutation, root/jailbreak, or physical-device action was performed."
+            gh api -X PUT "repos/$GITHUB_REPOSITORY/actions/workflows/overnight-android-absorber-v2.yml/disable" || true
+          fi
+
+      - name: Stop immediately when budget is already exhausted
+        if: steps.state.outputs.active != 'true'
+        shell: bash
+        run: |
+          gh api -X PUT "repos/$GITHUB_REPOSITORY/actions/workflows/overnight-android-absorber-v2.yml/disable" || true
+          echo 'RUN_BUDGET_EXHAUSTED=1'
