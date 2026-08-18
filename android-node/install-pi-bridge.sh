@@ -8,6 +8,7 @@ BIN="$HOME/.openclaw/bin"
 LOGS="$ROOT/logs"
 ENV_FILE="$SECRETS/phone-bridge.env"
 SSH_KEY="$SECRETS/phone_ssh_ed25519"
+SSH_KNOWN_HOSTS="$SECRETS/phone_ssh_known_hosts"
 INSTALL_PACKAGES="${INSTALL_PACKAGES:-0}"
 AUTO_TYPE_TERMUX="${AUTO_TYPE_TERMUX:-0}"
 
@@ -15,15 +16,15 @@ mkdir -p "$ROOT" "$SECRETS" "$BIN" "$LOGS"
 chmod 700 "$ROOT" "$SECRETS" "$BIN" "$LOGS"
 
 need=()
-for cmd in adb node npm ssh ssh-keygen python3 openclaw; do
+for cmd in adb node npm ssh ssh-keygen python3 openclaw git; do
   command -v "$cmd" >/dev/null 2>&1 || need+=("$cmd")
 done
 
 if ((${#need[@]} > 0)) && [[ "$INSTALL_PACKAGES" == "1" ]] && command -v apt-get >/dev/null 2>&1; then
-  sudo apt-get update
-  sudo apt-get install -y android-tools-adb nodejs npm openssh-client python3
+  sudo apt-get update -qq
+  sudo apt-get install -y adb nodejs npm openssh-client python3 git
   need=()
-  for cmd in adb node npm ssh ssh-keygen python3 openclaw; do
+  for cmd in adb node npm ssh ssh-keygen python3 openclaw git; do
     command -v "$cmd" >/dev/null 2>&1 || need+=("$cmd")
   done
 fi
@@ -63,24 +64,28 @@ if [[ ! -f "$SSH_KEY" ]]; then
 fi
 chmod 600 "$SSH_KEY"
 chmod 644 "$SSH_KEY.pub"
+: > "$SSH_KNOWN_HOSTS"
+chmod 600 "$SSH_KNOWN_HOSTS"
 
 adb -s "$SERIAL" push "$SSH_KEY.pub" /sdcard/Download/openclaw_pi.pub >/dev/null
 adb -s "$SERIAL" push "$SCRIPT_DIR/phone-termux-bootstrap.sh" /sdcard/Download/openclaw-phone-bootstrap.sh >/dev/null
+adb -s "$SERIAL" forward --remove tcp:8022 >/dev/null 2>&1 || true
 adb -s "$SERIAL" forward tcp:8022 tcp:8022 >/dev/null
 
-rm -rf "$ROOT/adb-mcp" "$ROOT/codex-phone-mcp"
-cp -a "$SCRIPT_DIR/adb-mcp" "$ROOT/adb-mcp"
-cp -a "$SCRIPT_DIR/codex-phone-mcp" "$ROOT/codex-phone-mcp"
-(
-  cd "$ROOT/adb-mcp"
-  npm install --omit=dev --no-audit --no-fund
-  npm run check
-)
-(
-  cd "$ROOT/codex-phone-mcp"
-  npm install --omit=dev --no-audit --no-fund
-  npm run check
-)
+for component in adb-mcp codex-phone-mcp phone-codex-cli-backend; do
+  if [[ -d "$ROOT/$component" ]]; then
+    mv "$ROOT/$component" "$ROOT/$component.backup.$(date -u +%Y%m%dT%H%M%SZ)"
+  fi
+  cp -a "$SCRIPT_DIR/$component" "$ROOT/$component"
+done
+
+for component in adb-mcp codex-phone-mcp; do
+  (
+    cd "$ROOT/$component"
+    npm install --omit=dev --no-audit --no-fund
+    npm run check
+  )
+done
 
 TERMUX_UID="$(adb -s "$SERIAL" shell dumpsys package com.termux 2>/dev/null | sed -n 's/.*userId=\([0-9][0-9]*\).*/\1/p' | head -n1 | tr -d '\r')"
 PHONE_SSH_USER="${PHONE_SSH_USER:-}"
@@ -95,10 +100,13 @@ PHONE_SSH_HOST=127.0.0.1
 PHONE_SSH_PORT=8022
 PHONE_SSH_USER=$PHONE_SSH_USER
 PHONE_SSH_KEY=$SSH_KEY
+PHONE_SSH_KNOWN_HOSTS=$SSH_KNOWN_HOSTS
 PHONE_CODEX_MODEL=gpt-5.6-sol
 PHONE_CODEX_ENABLED=0
 PHONE_WRITE_ENABLED=0
 PHONE_CODEX_TIMEOUT_MS=240000
+PHONE_CODEX_MAX_PROMPT=12000
+PHONE_CODEX_WRAPPER=$BIN/phone-codex-cli-backend
 ENV
 chmod 600 "$ENV_FILE"
 
@@ -128,9 +136,10 @@ source "$ENV_FILE"
 set +a
 exec node "$ROOT/codex-phone-mcp/server.mjs"
 LAUNCH
-chmod 700 "$BIN/android-phone-read-mcp" "$BIN/android-phone-write-mcp" "$BIN/phone-codex-mcp"
+cp "$ROOT/phone-codex-cli-backend/phone-codex-cli-backend.sh" "$BIN/phone-codex-cli-backend"
+chmod 700 "$BIN/android-phone-read-mcp" "$BIN/android-phone-write-mcp" "$BIN/phone-codex-mcp" "$BIN/phone-codex-cli-backend"
 
-python3 - "$BIN" <<'PY' > "$ROOT/mcp.android-phone-read.json"
+python3 - "$BIN" <<'PY' > "$ROOT/mcp.android-phone-status.json"
 import json,sys
 b=sys.argv[1]
 print(json.dumps({
@@ -138,11 +147,23 @@ print(json.dumps({
   "enabled": True,
   "requestTimeoutMs": 30000,
   "connectionTimeoutMs": 10000,
-  "toolFilter": {"include": ["phone_status","phone_screenshot","phone_ui_dump"]},
+  "toolFilter": {"include": ["phone_status"]},
   "codex": {"defaultToolsApprovalMode": "auto"}
 }))
 PY
-python3 - "$BIN" <<'PY' > "$ROOT/mcp.android-phone-write.json"
+python3 - "$BIN" <<'PY' > "$ROOT/mcp.android-phone-inspect.json"
+import json,sys
+b=sys.argv[1]
+print(json.dumps({
+  "command": f"{b}/android-phone-read-mcp",
+  "enabled": True,
+  "requestTimeoutMs": 30000,
+  "connectionTimeoutMs": 10000,
+  "toolFilter": {"include": ["phone_screenshot","phone_ui_dump"]},
+  "codex": {"defaultToolsApprovalMode": "prompt"}
+}))
+PY
+python3 - "$BIN" <<'PY' > "$ROOT/mcp.android-phone-actions.json"
 import json,sys
 b=sys.argv[1]
 print(json.dumps({
@@ -151,7 +172,7 @@ print(json.dumps({
   "requestTimeoutMs": 30000,
   "connectionTimeoutMs": 10000,
   "toolFilter": {"include": ["phone_open_app","phone_launch_url","phone_key","phone_tap","phone_swipe","phone_type_text"]},
-  "codex": {"defaultToolsApprovalMode": "approve"}
+  "codex": {"defaultToolsApprovalMode": "prompt"}
 }))
 PY
 python3 - "$BIN" <<'PY' > "$ROOT/mcp.phone-codex.json"
@@ -163,15 +184,30 @@ print(json.dumps({
   "requestTimeoutMs": 260000,
   "connectionTimeoutMs": 15000,
   "toolFilter": {"include": ["phone_codex_status","phone_codex_ask"]},
-  "codex": {"defaultToolsApprovalMode": "auto"}
+  "codex": {"defaultToolsApprovalMode": "prompt"}
 }))
 PY
 
-openclaw mcp set android-phone-read "$(cat "$ROOT/mcp.android-phone-read.json")"
-openclaw mcp set android-phone-write "$(cat "$ROOT/mcp.android-phone-write.json")"
+openclaw mcp set android-phone-status "$(cat "$ROOT/mcp.android-phone-status.json")"
+openclaw mcp set android-phone-inspect "$(cat "$ROOT/mcp.android-phone-inspect.json")"
+openclaw mcp set android-phone-actions "$(cat "$ROOT/mcp.android-phone-actions.json")"
 openclaw mcp set phone-codex "$(cat "$ROOT/mcp.phone-codex.json")"
-openclaw mcp doctor android-phone-read --probe
+openclaw mcp doctor android-phone-status --probe
+openclaw mcp doctor android-phone-inspect --probe
 openclaw mcp doctor phone-codex --probe
+
+PLUGIN_STATUS="prepared"
+if openclaw plugins --help >/dev/null 2>&1; then
+  if openclaw plugins install -l "$ROOT/phone-codex-cli-backend" --force; then
+    openclaw plugins enable phone-codex-cli || true
+    openclaw plugins inspect phone-codex-cli --runtime || true
+    PLUGIN_STATUS="installed"
+  else
+    PLUGIN_STATUS="blocked_fallback_mcp_ready"
+  fi
+else
+  PLUGIN_STATUS="unsupported_fallback_mcp_ready"
+fi
 
 cat > "$LOGS/install-receipt.json" <<JSON
 {
@@ -181,10 +217,14 @@ cat > "$LOGS/install-receipt.json" <<JSON
   "android_version": "$ANDROID_VERSION",
   "termux_user_detected": "$PHONE_SSH_USER",
   "adb_forward": "127.0.0.1:8022 -> phone:8022",
-  "mcp_read": "enabled",
-  "mcp_write": "disabled",
-  "phone_codex": "registered_disabled_at_tool_level",
+  "mcp_status": "enabled",
+  "mcp_inspect": "enabled_prompt",
+  "mcp_actions": "disabled_ready",
+  "phone_codex_mcp": "registered_prompt",
+  "phone_codex_cli_plugin": "$PLUGIN_STATUS",
+  "phone_codex_enabled": false,
   "paid_api_fallback": "unchanged",
+  "forced_command_ssh": true,
   "secrets_embedded": false
 }
 JSON
@@ -197,6 +237,7 @@ if [[ "$AUTO_TYPE_TERMUX" == "1" ]]; then
   adb -s "$SERIAL" shell input keyevent 66
 fi
 
+openclaw mcp reload || true
 if openclaw gateway restart --help 2>&1 | grep -q -- '--safe'; then
   openclaw gateway restart --safe || true
 else
@@ -205,5 +246,6 @@ fi
 
 printf 'RESULT=PI_BRIDGE_PREPARED\n'
 printf 'PHONE=%s Android=%s Serial=%s\n' "$MODEL" "$ANDROID_VERSION" "$SERIAL"
+printf 'CLI_PLUGIN=%s\n' "$PLUGIN_STATUS"
 printf 'NEXT_ON_PHONE=bash /sdcard/Download/openclaw-phone-bootstrap.sh\n'
-printf 'AFTER_PHONE=run %s/verify-phone-bridge.sh\n' "$SCRIPT_DIR"
+printf 'AFTER_PHONE=RUN_LLM_TEST=1 %s/verify-phone-bridge.sh\n' "$SCRIPT_DIR"
