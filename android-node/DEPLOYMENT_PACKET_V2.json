@@ -1,0 +1,70 @@
+{
+  "schema_version": 2,
+  "name": "openclaw-android-node-absorber",
+  "target": {
+    "gateway_host": "raspberry-pi-5",
+    "phone_platform": "android",
+    "telegram_pollers": 1
+  },
+  "decision": {
+    "jailbreak_or_root": "not_required_and_not_preapplied",
+    "primary_path": "official_openclaw_android_node",
+    "fallback_path": "usb_adb_allowlisted_mcp",
+    "optional_runtime": "termux_ssh_phone_codex",
+    "private_remote_transport": "tailscale"
+  },
+  "s_rank_sources": [
+    "openclaw/openclaw",
+    "Genymobile/scrcpy",
+    "termux/termux-app",
+    "termux/termux-api",
+    "termux/termux-boot",
+    "tailscale/tailscale",
+    "modelcontextprotocol/typescript-sdk",
+    "openai/codex"
+  ],
+  "conditional_sources": [
+    "RikkaApps/Shizuku"
+  ],
+  "mcp_lanes": {
+    "android-phone-read": {
+      "enabled_after_install": true,
+      "approval": "auto",
+      "tools": ["phone_status", "phone_screenshot", "phone_ui_dump"]
+    },
+    "android-phone-write": {
+      "enabled_after_install": false,
+      "approval": "approve",
+      "tools": ["phone_open_app", "phone_launch_url", "phone_key", "phone_tap", "phone_swipe", "phone_type_text"]
+    },
+    "phone-codex": {
+      "registered_after_install": true,
+      "route_enabled_after_install": false,
+      "enable_gate": "verify-phone-bridge.sh",
+      "tools": ["phone_codex_status", "phone_codex_ask"]
+    }
+  },
+  "prohibited": [
+    "arbitrary_adb_shell",
+    "public_adb_port",
+    "public_mcp_endpoint",
+    "root_or_custom_rom_mutation",
+    "automatic_calls_or_sms",
+    "automatic_purchase_or_payment",
+    "automatic_install_or_uninstall",
+    "automatic_account_or_security_setting_change",
+    "secret_copy_from_phone"
+  ],
+  "rollback": {
+    "command": "android-node/rollback-pi-bridge.sh",
+    "default_deletes_files": false,
+    "removes": ["three_mcp_definitions", "usb_port_forward"]
+  },
+  "completion_gates": {
+    "T1_source_review": "complete",
+    "T2_predeployment_and_ci": "complete_when_branch_ci_passes",
+    "T3_pi_phone_physical_probe": "pending",
+    "T4_existing_telegram_round_trip": "pending"
+  },
+  "one_line_bootstrap": "bash <(curl -fsSL https://raw.githubusercontent.com/mnwersdfppa/no-cost-ai/feat/openclaw-android-node-absorber/android-node/bootstrap-one-line.sh)"
+}
