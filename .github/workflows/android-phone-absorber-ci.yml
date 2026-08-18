@@ -54,6 +54,6 @@ jobs:
         run: |
           npm install --no-audit --no-fund
           npx tsc --noEmit --skipLibCheck --module NodeNext --moduleResolution NodeNext --target ES2022 --esModuleInterop index.ts
-          npx openclaw plugins validate --entry index.ts --json
+          npx openclaw plugins validate --entry index.ts
       - name: Validate deployment packet
         run: python3 -m json.tool android-node/DEPLOYMENT_PACKET.json >/dev/null
