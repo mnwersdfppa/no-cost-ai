@@ -47,7 +47,8 @@ jobs:
           grep -F 'readonly REVIEWED_PAYLOAD_COMMIT="9ad70a02a2ab2ab0d54cf5ec30396f010f1cbbb6"' android-node/bootstrap-all.sh
           grep -F 'PHONE_ABSORBER_REPOSITORY_OVERRIDE_DENIED' android-node/bootstrap-all.sh
           grep -F 'PHONE_ABSORBER_COMMIT_OVERRIDE_DENIED' android-node/bootstrap-all.sh
-          ! grep -Fq 'PHONE_ABSORBER_REPO:-' android-node/bootstrap-all.sh
+          ! grep -Fq 'REPO="${PHONE_ABSORBER_REPO:-' android-node/bootstrap-all.sh
+          ! grep -Fq 'COMMIT="${PHONE_ABSORBER_COMMIT:-' android-node/bootstrap-all.sh
 
       - name: Enforce first host-key pinning boundary
         shell: bash
