@@ -122,7 +122,7 @@ jobs:
           grep -Fq '/organizations?' "$file"
           grep -Fq '/scenarios?teamId=' "$file"
           ! grep -Eq '(curl[^\n]*-[XP][[:space:]]*(POST|PATCH|PUT|DELETE)|/scenarios/[^ ]+/(start|stop|run)|/users/me/api-tokens)' "$file"
-          ! grep -Eq '(echo|printf).*(MAKE_API_TOKEN|MAKE_API_KEY|MAKE_TOKEN)' "$file"
+          ! grep -Eq '(echo|printf)[^\n]*\$TOKEN' "$file"
       - name: Verify n8n probe is read-only and local-first
         shell: bash
         run: |
@@ -133,7 +133,7 @@ jobs:
           grep -Fq '/api/v1/workflows?limit=1' "$file"
           grep -Fq 'http://127.0.0.1:5678' "$file"
           ! grep -Eq '(curl[^\n]*-[XP][[:space:]]*(POST|PATCH|PUT|DELETE)|/api/v1/workflows/[^? ]+|/audit)' "$file"
-          ! grep -Eq '(echo|printf).*(N8N_API_KEY|N8N_OWNER_API_KEY|N8N_TOKEN)' "$file"
+          ! grep -Eq '(echo|printf)[^\n]*\$KEY' "$file"
       - name: Verify master bootstrap keeps high-risk lanes off
         shell: bash
         run: |
