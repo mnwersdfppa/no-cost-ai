@@ -6,6 +6,7 @@ BIN="$HOME/.local/bin"
 PUB_CANDIDATE_1="$HOME/storage/downloads/openclaw_pi.pub"
 PUB_CANDIDATE_2="/sdcard/Download/openclaw_pi.pub"
 INSTALL_CODEX="${INSTALL_CODEX:-1}"
+CODEX_VERSION="${PHONE_CODEX_VERSION:-0.146.0}"
 
 mkdir -p "$STATE/codex-home" "$STATE/work" "$BIN" "$HOME/.ssh" "$HOME/.termux/boot"
 chmod 700 "$STATE" "$STATE/codex-home" "$STATE/work" "$BIN" "$HOME/.ssh" "$HOME/.termux/boot"
@@ -14,10 +15,35 @@ if command -v pkg >/dev/null 2>&1; then
   pkg update -y || true
   pkg install -y openssh python nodejs-lts coreutils || pkg install -y openssh python nodejs coreutils
 fi
-
 if [[ ! -e "$HOME/storage/downloads" ]] && command -v termux-setup-storage >/dev/null 2>&1; then
   termux-setup-storage || true
   sleep 2
+fi
+
+installed_codex_version() {
+  codex --version 2>/dev/null | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true
+}
+
+CURRENT_CODEX_VERSION=""
+if command -v codex >/dev/null 2>&1; then
+  CURRENT_CODEX_VERSION="$(installed_codex_version)"
+fi
+if [[ "$CURRENT_CODEX_VERSION" != "$CODEX_VERSION" ]]; then
+  if [[ "$INSTALL_CODEX" != "1" ]]; then
+    echo "BLOCKED=OFFICIAL_CODEX_VERSION_MISMATCH"
+    echo "REQUIRED=$CODEX_VERSION"
+    echo "FOUND=${CURRENT_CODEX_VERSION:-missing}"
+    exit 4
+  fi
+  echo "INSTALLING=OFFICIAL_CODEX_CLI@$CODEX_VERSION"
+  npm install -g "@openai/codex@$CODEX_VERSION"
+  CURRENT_CODEX_VERSION="$(installed_codex_version)"
+fi
+if [[ "$CURRENT_CODEX_VERSION" != "$CODEX_VERSION" ]]; then
+  echo "BLOCKED=OFFICIAL_CODEX_VERSION_NOT_VERIFIED"
+  echo "REQUIRED=$CODEX_VERSION"
+  echo "FOUND=${CURRENT_CODEX_VERSION:-missing}"
+  exit 5
 fi
 
 cat > "$BIN/openclaw-phone-codex-run" <<'PY'
@@ -32,7 +58,24 @@ from pathlib import Path
 
 MAX_PROMPT = int(os.environ.get("PHONE_CODEX_MAX_PROMPT", "12000"))
 TIMEOUT = int(os.environ.get("PHONE_CODEX_TIMEOUT_SECONDS", "220"))
+REQUIRED_VERSION = os.environ.get("PHONE_CODEX_VERSION", "0.146.0")
 ALLOWED_MODELS = {"gpt-5.6-sol", "gpt-5.6"}
+ALLOWED_EVENT_TYPES = {
+    "thread.started",
+    "turn.started",
+    "turn.completed",
+    "item.started",
+    "item.completed",
+    "error",
+    "turn.failed",
+}
+FORBIDDEN_ITEM_TYPES = {
+    "command_execution",
+    "mcp_tool_call",
+    "web_search",
+    "image_generation",
+    "computer_use",
+}
 
 raw = sys.stdin.readline(MAX_PROMPT * 2 + 4096)
 try:
@@ -52,8 +95,12 @@ if model not in ALLOWED_MODELS:
 
 codex = shutil.which("codex")
 if not codex:
-    print(json.dumps({"type": "error", "message": "codex CLI not installed"}))
+    print(json.dumps({"type": "error", "message": "official Codex CLI not installed"}))
     sys.exit(127)
+version = subprocess.run([codex, "--version"], capture_output=True, text=True, timeout=10)
+if REQUIRED_VERSION not in ((version.stdout or "") + (version.stderr or "")):
+    print(json.dumps({"type": "error", "message": "Codex CLI version not allowlisted"}))
+    sys.exit(78)
 
 state = Path.home() / ".openclaw-phone"
 codex_home = state / "codex-home"
@@ -62,7 +109,6 @@ codex_home.mkdir(parents=True, exist_ok=True)
 workdir.mkdir(parents=True, exist_ok=True)
 os.chmod(codex_home, 0o700)
 os.chmod(workdir, 0o500)
-
 source_auth = Path.home() / ".codex" / "auth.json"
 target_auth = codex_home / "auth.json"
 if source_auth.exists() and not target_auth.exists():
@@ -71,16 +117,8 @@ if source_auth.exists() and not target_auth.exists():
     except FileExistsError:
         pass
 
-
-def help_text(args):
-    try:
-        proc = subprocess.run(args, capture_output=True, text=True, timeout=15)
-        return (proc.stdout or "") + (proc.stderr or "")
-    except Exception:
-        return ""
-
-
-help_out = help_text([codex, "exec", "--help"])
+help_proc = subprocess.run([codex, "exec", "--help"], capture_output=True, text=True, timeout=15)
+help_out = (help_proc.stdout or "") + (help_proc.stderr or "")
 required_flags = (
     "--strict-config",
     "--ephemeral",
@@ -92,17 +130,9 @@ required_flags = (
 )
 missing = [flag for flag in required_flags if flag not in help_out]
 if missing:
-    print(json.dumps({
-        "type": "error",
-        "message": "incompatible Codex CLI; required safety flags missing",
-        "missing": missing,
-    }))
+    print(json.dumps({"type": "error", "message": "required safety flags missing", "missing": missing}))
     sys.exit(78)
 
-# Disable local execution, file/image inspection, web search, apps, plugins,
-# code-mode and multi-agent surfaces. This turns the Codex session into a
-# text-only subscription-backed inference lane. --strict-config makes unknown
-# or obsolete safety keys fail closed instead of being silently ignored.
 safe_overrides = (
     'approval_policy="never"',
     'features.shell_tool=false',
@@ -119,7 +149,6 @@ safe_overrides = (
     'features.image_generation=false',
     'features.artifact=false',
 )
-
 args = [
     codex,
     "exec",
@@ -155,6 +184,7 @@ for name in (
 ):
     env.pop(name, None)
 env["CODEX_HOME"] = str(codex_home)
+env["PHONE_CODEX_VERSION"] = REQUIRED_VERSION
 
 proc = subprocess.Popen(
     args,
@@ -180,24 +210,30 @@ if stderr:
 if proc.returncode != 0:
     sys.exit(proc.returncode)
 
+# This is a postcondition/telemetry gate, not the primary execution boundary.
+# The primary boundary is the exact CLI allowlist plus strict config, disabled
+# tool surfaces, never approval policy, isolated workdir and read-only sandbox.
 fatal = False
+unknown = []
 for line in stdout.splitlines():
     try:
         event = json.loads(line)
     except Exception:
         continue
-    if event.get("type") in {"error", "turn.failed"}:
+    typ = str(event.get("type", ""))
+    if typ and typ not in ALLOWED_EVENT_TYPES:
+        unknown.append(typ)
+    if typ in {"error", "turn.failed"}:
         fatal = True
-    item = event.get("item") or ((event.get("data") or {}).get("item") if isinstance(event.get("data"), dict) else None)
-    if isinstance(item, dict) and item.get("type") in {
-        "command_execution",
-        "mcp_tool_call",
-        "web_search",
-        "image_generation",
-        "computer_use",
-    }:
+    item = event.get("item")
+    if not isinstance(item, dict) and isinstance(event.get("data"), dict):
+        item = event["data"].get("item")
+    if isinstance(item, dict) and item.get("type") in FORBIDDEN_ITEM_TYPES:
         print(json.dumps({"type": "error", "message": "unexpected tool event denied"}))
         sys.exit(79)
+if unknown:
+    print(json.dumps({"type": "error", "message": "unknown Codex event schema", "events": sorted(set(unknown))}))
+    sys.exit(80)
 if fatal:
     sys.exit(70)
 PY
@@ -212,6 +248,9 @@ case "${SSH_ORIGINAL_COMMAND:-}" in
     command -v codex || true
     codex --version 2>/dev/null || true
     codex login status 2>/dev/null || true
+    if [[ -r "$PREFIX/etc/ssh/ssh_host_ed25519_key.pub" ]]; then
+      printf 'host_key_fingerprint=%s\n' "$(ssh-keygen -lf "$PREFIX/etc/ssh/ssh_host_ed25519_key.pub" -E sha256 | awk '{print $2}')"
+    fi
     [[ -x "$HOME/.local/bin/openclaw-phone-codex-run" ]] && echo runner=ready || echo runner=missing
     ;;
   phone-codex-run)
@@ -232,7 +271,6 @@ for candidate in "$PUB_CANDIDATE_1" "$PUB_CANDIDATE_2"; do
     break
   fi
 done
-
 if [[ -n "$PUB" ]]; then
   touch "$HOME/.ssh/authorized_keys"
   chmod 600 "$HOME/.ssh/authorized_keys"
@@ -249,11 +287,6 @@ if [[ -n "$PUB" ]]; then
 else
   echo "BLOCKED=PI_PUBLIC_KEY_NOT_FOUND"
   echo "EXPECTED=$PUB_CANDIDATE_1"
-fi
-
-if [[ "$INSTALL_CODEX" == "1" ]] && ! command -v codex >/dev/null 2>&1; then
-  echo "INSTALLING=OFFICIAL_CODEX_CLI"
-  npm install -g @openai/codex || true
 fi
 
 cat > "$HOME/.termux/boot/openclaw-phone-bridge" <<'BOOT'
@@ -273,23 +306,24 @@ fi
 printf 'TERMUX_USER=%s\n' "$(id -un)"
 printf 'SSHD_PORT=8022\n'
 printf 'SSH_POLICY=FORCED_COMMAND_ALLOWLIST\n'
-if command -v codex >/dev/null 2>&1; then
-  codex --version || true
-  codex login status || true
-  if codex exec --help 2>&1 | grep -q -- '--strict-config' \
-    && codex exec --help 2>&1 | grep -q -- '--ephemeral' \
-    && codex exec --help 2>&1 | grep -q -- '--ignore-user-config' \
-    && codex exec --help 2>&1 | grep -q -- '--ignore-rules' \
-    && codex exec --help 2>&1 | grep -q -- '--sandbox' \
-    && codex exec --help 2>&1 | grep -q -- '--config'; then
-    echo "CODEX_SAFETY_FLAGS=READY"
-  else
-    echo "BLOCKED=CODEX_REQUIRED_SAFETY_FLAGS_MISSING"
-  fi
-  echo "NEXT_IF_NOT_LOGGED_IN=codex login --device-auth"
+printf 'CODEX_VERSION=%s\n' "$CURRENT_CODEX_VERSION"
+if [[ -r "$PREFIX/etc/ssh/ssh_host_ed25519_key.pub" ]]; then
+  printf 'PHONE_SSH_HOST_KEY_SHA256=%s\n' "$(ssh-keygen -lf "$PREFIX/etc/ssh/ssh_host_ed25519_key.pub" -E sha256 | awk '{print $2}')"
 else
-  echo "BLOCKED=OFFICIAL_CODEX_CLI_NOT_EXECUTABLE_ON_THIS_ANDROID"
-  echo "POLICY=NO_THIRD_PARTY_CODEX_BINARY_AUTO_INSTALL"
+  echo "BLOCKED=SSH_ED25519_HOST_KEY_MISSING"
+  exit 6
 fi
-
+codex login status || true
+if codex exec --help 2>&1 | grep -q -- '--strict-config' \
+  && codex exec --help 2>&1 | grep -q -- '--ephemeral' \
+  && codex exec --help 2>&1 | grep -q -- '--ignore-user-config' \
+  && codex exec --help 2>&1 | grep -q -- '--ignore-rules' \
+  && codex exec --help 2>&1 | grep -q -- '--sandbox' \
+  && codex exec --help 2>&1 | grep -q -- '--config'; then
+  echo "CODEX_SAFETY_FLAGS=READY"
+else
+  echo "BLOCKED=CODEX_REQUIRED_SAFETY_FLAGS_MISSING"
+  exit 7
+fi
+echo "NEXT_IF_NOT_LOGGED_IN=codex login --device-auth"
 echo "RESULT=PHONE_BOOTSTRAP_READY"
