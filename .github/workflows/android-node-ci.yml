@@ -46,7 +46,8 @@ jobs:
             android-node/disable-phone-write-lane.sh \
             pi/install-work-queue-timer.sh \
             pi/install-maton-readonly-oauth.sh \
-            pi/remove-maton-readonly-oauth.sh; do
+            pi/remove-maton-readonly-oauth.sh \
+            pi/check-make-readonly.sh; do
             bash -n "$script"
           done
       - name: Check for committed secret patterns
@@ -111,3 +112,14 @@ jobs:
             grep -Fq "\"$denied\"" "$file"
           done
           ! grep -Fq '@maton/mcp --api-key' "$file"
+      - name: Verify Make probe is read-only and redacted
+        shell: bash
+        run: |
+          set -euo pipefail
+          file=pi/check-make-readonly.sh
+          grep -Fq 'Authorization: Token $TOKEN' "$file"
+          grep -Fq '/users/me?' "$file"
+          grep -Fq '/organizations?' "$file"
+          grep -Fq '/scenarios?teamId=' "$file"
+          ! grep -Eq '(curl[^\n]*-[XP][[:space:]]*(POST|PATCH|PUT|DELETE)|/scenarios/[^ ]+/(start|stop|run)|/users/me/api-tokens)' "$file"
+          ! grep -Eq '(echo|printf).*(MAKE_API_TOKEN|MAKE_API_KEY|MAKE_TOKEN)' "$file"
