@@ -24,6 +24,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '22.23.2'
@@ -48,11 +50,37 @@ jobs:
             bash -n "$script"
           done
       - name: Check for committed secret patterns
+        shell: bash
         run: |
-          if grep -RInE --exclude='package-lock.json' '(sk-proj-|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-|AKIA[0-9A-Z]{16}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' android-node pi; then
+          set -euo pipefail
+          if grep -RInE \
+            --exclude='package-lock.json' \
+            --exclude='pi-work-queue-worker.py' \
+            '(sk-proj-|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-|AKIA[0-9A-Z]{16}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' \
+            android-node pi; then
             echo 'Potential secret detected' >&2
             exit 1
           fi
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          text = Path('pi/pi-work-queue-worker.py').read_text(encoding='utf-8')
+          # The worker intentionally contains redaction regex definitions. Remove
+          # only those declaration lines, then scan the remaining source for literals.
+          filtered = '\n'.join(line for line in text.splitlines() if 're.compile(' not in line)
+          patterns = [
+              r'sk-proj-[A-Za-z0-9_-]{20,}',
+              r'sk-[A-Za-z0-9_-]{20,}',
+              r'ghp_[A-Za-z0-9]{20,}',
+              r'xox[baprs]-[A-Za-z0-9-]{20,}',
+              r'AKIA[0-9A-Z]{16}',
+              r'BEGIN (RSA|OPENSSH|EC) PRIVATE KEY',
+          ]
+          hits = [pattern for pattern in patterns if re.search(pattern, filtered)]
+          if hits:
+              raise SystemExit('Potential worker secret literal: ' + ', '.join(hits))
+          PY
       - name: Verify write-gate and task-scoped tool invariants
         shell: bash
         run: |
