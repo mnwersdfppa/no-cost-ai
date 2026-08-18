@@ -20,21 +20,28 @@ if openclaw plugins --help >/dev/null 2>&1; then
   openclaw plugins disable phone-codex-cli 2>/dev/null || true
 fi
 
-if [[ -s "$ROOT/previous-primary.txt" ]]; then
+PREVIOUS=""
+if [[ -s "$ROOT/previous-primary.json" ]]; then
+  PREVIOUS="$(python3 - "$ROOT/previous-primary.json" <<'PY'
+import json,sys
+try: data=json.load(open(sys.argv[1],encoding="utf-8"))
+except Exception: data={}
+value=data.get("previous_primary")
+if isinstance(value,str) and value: print(value)
+PY
+)"
+elif [[ -s "$ROOT/previous-primary.txt" ]]; then
   PREVIOUS="$(python3 - "$ROOT/previous-primary.txt" <<'PY'
 import json,sys
 raw=open(sys.argv[1],encoding='utf-8').read().strip()
-try:
-    value=json.loads(raw)
-except Exception:
-    value=raw
-if isinstance(value,str) and value:
-    print(value)
+try: value=json.loads(raw)
+except Exception: value=raw
+if isinstance(value,str) and value: print(value)
 PY
 )"
-  if [[ -n "$PREVIOUS" ]]; then
-    openclaw config set agents.defaults.model.primary "$PREVIOUS" || true
-  fi
+fi
+if [[ -n "$PREVIOUS" && "$PREVIOUS" != "phone-codex-cli/gpt-5.6-sol" ]]; then
+  openclaw config set agents.defaults.model.primary "$PREVIOUS" || true
 fi
 
 if command -v adb >/dev/null 2>&1; then
@@ -43,11 +50,23 @@ fi
 openclaw mcp reload 2>/dev/null || true
 openclaw gateway restart --safe 2>/dev/null || openclaw gateway restart 2>/dev/null || true
 
+mkdir -p "$ROOT/logs"
+cat > "$ROOT/logs/rollback-receipt.json" <<JSON
+{
+  "result": "rolled_back",
+  "restored_primary": "$PREVIOUS",
+  "phone_data": "unchanged",
+  "pairing": "unchanged",
+  "telegram": "unchanged"
+}
+JSON
+chmod 600 "$ROOT/logs/rollback-receipt.json"
+
 printf '%s\n' \
   'RESULT=ROLLED_BACK' \
   'REMOVED_MCP=android-phone-status,android-phone-inspect,android-phone-actions,phone-codex' \
   'PHONE_CODEX_PLUGIN=DISABLED' \
-  'PREVIOUS_PRIMARY=RESTORED_IF_RECORDED' \
+  "PREVIOUS_PRIMARY=${PREVIOUS:-NOT_RECORDED}" \
   'PHONE_DATA=UNCHANGED' \
   'OPENCLAW_PAIRING=UNCHANGED' \
   'TELEGRAM=UNCHANGED'
