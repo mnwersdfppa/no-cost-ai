@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "${OPENCLAW_SECURE_WRAPPER:-0}" != "1" ]]; then
+  echo "BLOCKED=LEGACY_VERIFY_CORE_INTERNAL_ONLY"
+  echo "NEXT=use verify-phone-bridge-secure.sh"
+  exit 90
+fi
+
 ROOT="${OPENCLAW_PHONE_ROOT:-$HOME/.openclaw/phone-bridge}"
 SECRETS="${OPENCLAW_SECRETS_DIR:-$HOME/.openclaw/secrets}"
 ENV_FILE="$SECRETS/phone-bridge.env"
@@ -50,7 +56,6 @@ set +a
 
 if [[ -z "${PHONE_SSH_HOST_KEY_SHA256:-}" || "$PHONE_SSH_HOST_KEY_SHA256" != SHA256:* ]]; then
   echo "BLOCKED=OPERATOR_VERIFIED_SSH_FINGERPRINT_REQUIRED"
-  echo "NEXT=run the phone bootstrap, compare its PHONE_SSH_HOST_KEY_SHA256 on the phone screen, then record that exact value in $ENV_FILE"
   exit 31
 fi
 
@@ -64,7 +69,6 @@ adb -s "$ANDROID_SERIAL" forward tcp:"$PHONE_SSH_PORT" tcp:8022 >/dev/null
 
 if [[ -z "${PHONE_SSH_USER:-}" ]]; then
   echo "BLOCKED=TERMUX_USER_UNKNOWN"
-  echo "NEXT=run id -un in Termux and set PHONE_SSH_USER in $ENV_FILE"
   exit 33
 fi
 
@@ -72,31 +76,49 @@ TMP_KNOWN="$(mktemp)"
 trap 'rm -f "$TMP_KNOWN"' EXIT
 if ! ssh-keyscan -T 10 -t ed25519 -p "$PHONE_SSH_PORT" "$PHONE_SSH_HOST" > "$TMP_KNOWN" 2>/dev/null; then
   echo "BLOCKED=PHONE_SSHD_NOT_REACHABLE"
-  echo "NEXT=run bash /sdcard/Download/openclaw-phone-bootstrap.sh in Termux"
   exit 34
 fi
 if [[ ! -s "$TMP_KNOWN" ]]; then
   echo "BLOCKED=PHONE_SSH_HOST_KEY_EMPTY"
   exit 35
 fi
+python3 - "$TMP_KNOWN" <<'PY'
+import sys
+lines=[line.strip() for line in open(sys.argv[1],encoding='utf-8',errors='strict') if line.strip() and not line.lstrip().startswith('#')]
+if len(lines)!=1:
+    raise SystemExit('BLOCKED=SCANNED_SSH_HOST_KEY_RECORD_COUNT_INVALID')
+parts=lines[0].split()
+if len(parts)!=3 or parts[1]!='ssh-ed25519':
+    raise SystemExit('BLOCKED=SCANNED_SSH_HOST_KEY_FORMAT_INVALID')
+PY
 SCANNED_FP="$(fingerprint_file "$TMP_KNOWN")"
 if [[ "$SCANNED_FP" != "$PHONE_SSH_HOST_KEY_SHA256" ]]; then
   echo "BLOCKED=PHONE_SSH_FINGERPRINT_MISMATCH"
-  echo "EXPECTED=$PHONE_SSH_HOST_KEY_SHA256"
-  echo "SCANNED=$SCANNED_FP"
   exit 36
 fi
-if [[ -s "$PHONE_SSH_KNOWN_HOSTS" ]]; then
-  EXISTING_FP="$(fingerprint_file "$PHONE_SSH_KNOWN_HOSTS")"
-  if [[ "$EXISTING_FP" != "$PHONE_SSH_HOST_KEY_SHA256" ]]; then
-    echo "BLOCKED=PINNED_SSH_HOST_KEY_CHANGED"
-    echo "EXPECTED=$PHONE_SSH_HOST_KEY_SHA256"
-    echo "PINNED=$EXISTING_FP"
-    exit 37
-  fi
-else
-  install -m 600 "$TMP_KNOWN" "$PHONE_SSH_KNOWN_HOSTS"
+if [[ ! -s "$PHONE_SSH_KNOWN_HOSTS" ]]; then
+  echo "BLOCKED=PINNED_SSH_HOST_KEY_MISSING"
+  echo "NEXT=use provision-phone-host-key-secure.sh"
+  exit 37
 fi
+python3 - "$PHONE_SSH_KNOWN_HOSTS" <<'PY'
+import sys
+lines=[line.strip() for line in open(sys.argv[1],encoding='utf-8',errors='strict') if line.strip() and not line.lstrip().startswith('#')]
+if len(lines)!=1:
+    raise SystemExit('BLOCKED=PINNED_SSH_HOST_KEY_RECORD_COUNT_INVALID')
+parts=lines[0].split()
+if len(parts)!=3 or parts[1]!='ssh-ed25519':
+    raise SystemExit('BLOCKED=PINNED_SSH_HOST_KEY_FORMAT_INVALID')
+PY
+EXISTING_FP="$(fingerprint_file "$PHONE_SSH_KNOWN_HOSTS")"
+if [[ "$EXISTING_FP" != "$PHONE_SSH_HOST_KEY_SHA256" ]]; then
+  echo "BLOCKED=PINNED_SSH_HOST_KEY_CHANGED"
+  exit 38
+fi
+cmp -s "$TMP_KNOWN" "$PHONE_SSH_KNOWN_HOSTS" || {
+  echo "BLOCKED=SCANNED_AND_PINNED_SSH_KEY_DIFFER"
+  exit 39
+}
 
 SSH=(
   ssh
@@ -114,27 +136,26 @@ REMOTE_STATUS="$("${SSH[@]}" phone-status 2>&1 || true)"
 printf '%s\n' "$REMOTE_STATUS"
 if ! grep -q 'runner=ready' <<<"$REMOTE_STATUS"; then
   echo "BLOCKED=PHONE_RUNNER_NOT_READY"
-  exit 38
+  exit 40
 fi
 REMOTE_FP="$(sed -n 's/^host_key_fingerprint=//p' <<<"$REMOTE_STATUS" | tail -n1)"
 if [[ "$REMOTE_FP" != "$PHONE_SSH_HOST_KEY_SHA256" ]]; then
   echo "BLOCKED=REMOTE_STATUS_FINGERPRINT_MISMATCH"
-  exit 39
+  exit 41
 fi
 if ! grep -q "CODEX_VERSION=${PHONE_CODEX_VERSION:-0.146.0}\|codex-cli ${PHONE_CODEX_VERSION:-0.146.0}\|codex ${PHONE_CODEX_VERSION:-0.146.0}" <<<"$REMOTE_STATUS"; then
   echo "BLOCKED=PHONE_CODEX_VERSION_NOT_ALLOWLISTED"
-  exit 40
+  exit 42
 fi
 
 DENY_TEST="$("${SSH[@]}" uname -a 2>&1 || true)"
 if ! grep -q 'DENIED=COMMAND_NOT_ALLOWLISTED' <<<"$DENY_TEST"; then
   echo "BLOCKED=FORCED_COMMAND_POLICY_NOT_ACTIVE"
-  exit 41
+  exit 43
 fi
 if ! grep -Eqi 'Logged in using ChatGPT|chatgpt|authenticated|login.*ok|successfully logged in' <<<"$REMOTE_STATUS"; then
   echo "BLOCKED=PHONE_CODEX_NOT_LOGGED_IN"
-  echo "NEXT=run codex login --device-auth in Termux and approve it in the phone browser"
-  exit 42
+  exit 44
 fi
 
 parse_phone_final() {
@@ -181,7 +202,7 @@ if [[ "$RUN_LLM_TEST" == "1" ]]; then
   else
     printf '%s\n' "$LLM_OUTPUT" | tail -n 40
     echo "BLOCKED=PHONE_CODEX_LIVE_TEST_FAILED"
-    exit 43
+    exit 45
   fi
 fi
 
