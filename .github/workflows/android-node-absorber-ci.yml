@@ -18,23 +18,19 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: npm
-          cache-dependency-path: |
-            android-node/adb-mcp/package.json
-            android-node/codex-phone-mcp/package.json
+          node-version: '22'
 
       - name: Validate shell syntax
         shell: bash
         run: |
           set -euo pipefail
-          find android-node -maxdepth 1 -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+          find android-node -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
 
       - name: Validate package metadata and JavaScript syntax
         shell: bash
@@ -44,6 +40,8 @@ jobs:
             node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "$dir/package.json"
             (cd "$dir" && npm install --ignore-scripts --no-audit --no-fund && npm run check)
           done
+          node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' android-node/phone-codex-cli-backend/package.json
+          node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' android-node/phone-codex-cli-backend/openclaw.plugin.json
 
       - name: Reject embedded secret-like values
         shell: bash
@@ -58,13 +56,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if grep -RInE --exclude='*.md' '(adb[^\n]*shell[^\n]*(rm -rf|su\b|settings put|pm uninstall|am force-stop)|sendTextMessage|ACTION_CALL|ACTION_DIAL)' android-node; then
-            echo 'High-risk primitive detected.' >&2
+          if grep -RInE --exclude='*.md' '(adb[^\n]*shell[^\n]*(rm -rf|su\b|settings put|pm uninstall|am force-stop)|sendTextMessage|ACTION_CALL|ACTION_DIAL|PHONE_RELAY_ENABLED|openclaw[^\n]*mcp[^\n]*serve)' android-node; then
+            echo 'High-risk or duplicate-channel primitive detected.' >&2
             exit 1
           fi
+
+      - name: Confirm forced-command SSH and API-key stripping
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F 'restrict,command=' android-node/phone-termux-bootstrap.sh
+          grep -F 'DENIED=COMMAND_NOT_ALLOWLISTED' android-node/phone-termux-bootstrap.sh
+          grep -F -- '-u OPENAI_API_KEY' android-node/phone-codex-cli-backend/phone-codex-cli-backend.sh
+          grep -F 'StrictHostKeyChecking=yes' android-node/phone-codex-cli-backend/phone-codex-cli-backend.sh
 
       - name: Summarize packet
         shell: bash
         run: |
-          printf 'scripts=%s\n' "$(find android-node -maxdepth 1 -name '*.sh' | wc -l)"
+          printf 'scripts=%s\n' "$(find android-node -type f -name '*.sh' | wc -l)"
           printf 'mcp_servers=%s\n' "$(find android-node -mindepth 2 -maxdepth 2 -name 'server.mjs' | wc -l)"
+          printf 'cli_backend_plugins=%s\n' "$(find android-node -name 'openclaw.plugin.json' | wc -l)"
