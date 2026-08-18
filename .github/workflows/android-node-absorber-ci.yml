@@ -17,21 +17,18 @@ permissions:
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: '22'
-
+          node-version: '22.23.2'
       - name: Validate shell syntax
         shell: bash
         run: |
           set -euo pipefail
           find android-node -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
-
       - name: Validate package metadata and JavaScript syntax
         shell: bash
         run: |
@@ -42,8 +39,7 @@ jobs:
           done
           node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' android-node/phone-codex-cli-backend/package.json
           node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' android-node/phone-codex-cli-backend/openclaw.plugin.json
-
-      - name: Reject embedded secret-like values
+      - name: Reject embedded secrets and high-risk primitives
         shell: bash
         run: |
           set -euo pipefail
@@ -51,25 +47,22 @@ jobs:
             echo 'Secret-like literal detected.' >&2
             exit 1
           fi
-
-      - name: Confirm high-risk primitives are absent
-        shell: bash
-        run: |
-          set -euo pipefail
-          if grep -RInE --exclude='*.md' '(adb[^\n]*shell[^\n]*(rm -rf|su\b|settings put|pm uninstall|am force-stop)|sendTextMessage|ACTION_CALL|ACTION_DIAL|PHONE_RELAY_ENABLED|openclaw[^\n]*mcp[^\n]*serve)' android-node; then
+          if grep -RInE --exclude='*.md' '(adb[^\n]*shell[^\n]*(rm -rf|su\b|settings put|pm uninstall|am force-stop)|sendTextMessage|ACTION_CALL|ACTION_DIAL|PHONE_RELAY_ENABLED|openclaw[^\n]*mcp[^\n]*serve|phone_(launch_url|tap|swipe|type_text))' android-node; then
             echo 'High-risk or duplicate-channel primitive detected.' >&2
             exit 1
           fi
-
-      - name: Confirm forced-command SSH and API-key stripping
+      - name: Confirm forced-command SSH, pinning and API-key stripping
         shell: bash
         run: |
           set -euo pipefail
           grep -F 'restrict,command=' android-node/phone-termux-bootstrap.sh
           grep -F 'DENIED=COMMAND_NOT_ALLOWLISTED' android-node/phone-termux-bootstrap.sh
+          grep -F 'PHONE_SSH_HOST_KEY_SHA256=' android-node/phone-termux-bootstrap.sh
+          grep -F 'OPERATOR_VERIFIED_SSH_FINGERPRINT_REQUIRED' android-node/verify-phone-bridge.sh
+          grep -F 'PINNED_SSH_HOST_KEY_CHANGED' android-node/verify-phone-bridge.sh
           grep -F -- '-u OPENAI_API_KEY' android-node/phone-codex-cli-backend/phone-codex-cli-backend.sh
           grep -F 'StrictHostKeyChecking=yes' android-node/phone-codex-cli-backend/phone-codex-cli-backend.sh
-
+          grep -F '"telegram_single_poller": "not_tested"' android-node/verify-phone-bridge.sh
       - name: Summarize packet
         shell: bash
         run: |
