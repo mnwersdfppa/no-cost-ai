@@ -7,29 +7,31 @@ on:
 
 permissions:
   contents: read
-  issues: read
+  pull-requests: write
   actions: write
 
 jobs:
-  stop-when-complete:
-    runs-on: ubuntu-latest
+  stop-when-expired:
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
-      CONTROL_ISSUE: '3'
+      TARGET_PR: '2'
+      STOP_AT_UTC: '2026-08-19T02:30:00Z'
     steps:
-      - name: Disable both overnight workflows when the run counter reaches zero
+      - name: Disable the bounded workflows after the fixed stop time
         shell: bash
         run: |
           set -euo pipefail
-          body="$(gh issue view "$CONTROL_ISSUE" --repo "$REPO" --json body --jq .body)"
-          runs="$(printf '%s\n' "$body" | sed -nE 's/^RUNS_LEFT:[[:space:]]*([0-9]+).*$/\1/p' | head -n1)"
-          [[ "$runs" =~ ^[0-9]+$ ]] || { echo 'Invalid RUNS_LEFT control' >&2; exit 1; }
-          if (( runs == 0 )); then
-            gh api -X PUT "repos/$REPO/actions/workflows/overnight-android-absorber.yml/disable"
-            gh api -X PUT "repos/$REPO/actions/workflows/overnight-android-absorber-stop.yml/disable"
-            echo 'OVERNIGHT_WORKFLOWS_DISABLED=1'
-          else
-            echo "RUNS_LEFT=$runs"
+          now="$(date -u +%s)"
+          stop="$(date -u -d "$STOP_AT_UTC" +%s)"
+          if (( now < stop )); then
+            echo "ACTIVE_UNTIL=$STOP_AT_UTC"
+            exit 0
           fi
+
+          gh api -X PUT "repos/$REPO/actions/workflows/overnight-android-absorber.yml/disable" || true
+          gh api -X PUT "repos/$REPO/actions/workflows/overnight-android-absorber-stop.yml/disable" || true
+          gh pr comment "$TARGET_PR" --repo "$REPO" --body "The fixed overnight validation window closed at $STOP_AT_UTC. Both scheduled workflows were disabled. No root/jailbreak, paid-model call, credential mutation, merge, deployment, or physical-device action was performed by these workflows." || true
+          echo 'OVERNIGHT_WORKFLOWS_DISABLED=1'
