@@ -1,0 +1,23 @@
+{
+  "name": "@mnwersdfppa/openclaw-phone-codex-cli",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "openclaw": {
+    "extensions": ["./index.ts"],
+    "compat": {
+      "pluginApi": ">=2026.3.24-beta.2",
+      "minGatewayVersion": "2026.3.24-beta.2"
+    },
+    "build": {
+      "openclawVersion": "2026.8.0",
+      "pluginSdkVersion": "2026.8.0"
+    }
+  },
+  "dependencies": {
+    "openclaw": ">=2026.3.24-beta.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0"
+  }
+}
