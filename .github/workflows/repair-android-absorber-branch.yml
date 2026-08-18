@@ -1,0 +1,148 @@
+name: Repair Android absorber branch wrappers
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/repair-android-absorber-branch.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: repair-android-absorber-branch
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_BRANCH: feat/openclaw-android-node-absorber
+      TARGET_PR: '2'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          persist-credentials: true
+          fetch-depth: 1
+
+      - name: Replace contradictory duplicate entrypoints with hardened delegates
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > android-node/install-pi-android-node.sh <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+          echo 'DELEGATE=HARDENED_STAGED_INSTALLER'
+          exec "$DIR/bootstrap-all.sh" "$@"
+          SH
+
+          cat > android-node/enable-phone-write-lane.sh <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+          echo 'DELEGATE=TASK_SCOPED_PHONE_ACTIONS_ONLY'
+          exec "$DIR/enable-phone-write.sh" "$@"
+          SH
+
+          cat > android-node/disable-phone-write-lane.sh <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+          echo 'DELEGATE=DISABLE_PHONE_ACTIONS'
+          exec "$DIR/disable-phone-write.sh" "$@"
+          SH
+
+          chmod 755 \
+            android-node/install-pi-android-node.sh \
+            android-node/enable-phone-write-lane.sh \
+            android-node/disable-phone-write-lane.sh
+
+          cat > .github/workflows/android-node-ci.yml <<'YML'
+          name: Android node compatibility safety checks
+
+          on:
+            pull_request:
+              paths:
+                - 'android-node/**'
+                - '.github/workflows/android-node-ci.yml'
+            push:
+              branches:
+                - feat/openclaw-android-node-absorber
+              paths:
+                - 'android-node/**'
+                - '.github/workflows/android-node-ci.yml'
+            workflow_dispatch:
+
+          permissions:
+            contents: read
+
+          jobs:
+            validate:
+              runs-on: ubuntu-24.04
+              timeout-minutes: 15
+              steps:
+                - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+                - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+                  with:
+                    node-version: '22.23.2'
+                - name: Validate locked packages and JavaScript
+                  shell: bash
+                  run: |
+                    set -euo pipefail
+                    for dir in android-node/adb-mcp android-node/codex-phone-mcp android-node/phone-codex-cli-backend; do
+                      test -s "$dir/package-lock.json"
+                      (cd "$dir" && npm ci --ignore-scripts --no-audit --no-fund)
+                    done
+                    node --check android-node/adb-mcp/server.mjs
+                    node --check android-node/codex-phone-mcp/server.mjs
+                - name: Validate shell entrypoints
+                  shell: bash
+                  run: |
+                    set -euo pipefail
+                    find android-node -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+                - name: Enforce task-scoped production phone controls
+                  shell: bash
+                  run: |
+                    set -euo pipefail
+                    grep -F 'phone_open_bridge_app' android-node/adb-mcp/server.mjs
+                    grep -F "z.enum(['openclaw', 'termux'])" android-node/adb-mcp/server.mjs
+                    grep -F 'phone_key' android-node/adb-mcp/server.mjs
+                    ! grep -E 'phone_(launch_url|tap|swipe|type_text)' android-node/adb-mcp/server.mjs
+                    ! grep -RInE --exclude='*.md' '(adb_shell|ACTION_CALL|ACTION_DIAL|sendTextMessage|PHONE_RELAY_ENABLED)' android-node
+                    grep -F 'exec "$DIR/bootstrap-all.sh"' android-node/install-pi-android-node.sh
+                    grep -F 'exec "$DIR/enable-phone-write.sh"' android-node/enable-phone-write-lane.sh
+                - name: Reject secret literals
+                  shell: bash
+                  run: |
+                    set -euo pipefail
+                    ! grep -RInE --exclude='*.md' --exclude='package-lock.json' '(sk-proj-|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' android-node
+          YML
+
+      - name: Commit hardened wrappers
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            android-node/install-pi-android-node.sh \
+            android-node/enable-phone-write-lane.sh \
+            android-node/disable-phone-write-lane.sh \
+            .github/workflows/android-node-ci.yml
+          if git diff --cached --quiet; then
+            echo 'No repair changes required.'
+          else
+            git commit -m 'fix: route duplicate Android entrypoints through hardened implementation'
+            git push origin HEAD:${TARGET_BRANCH}
+          fi
+
+      - name: Record repair on draft PR
+        shell: bash
+        run: |
+          gh pr comment "$TARGET_PR" --repo "$GITHUB_REPOSITORY" --body 'Automated repair completed: contradictory duplicate Android scripts now delegate to the hardened staged installer and task-scoped action lane; compatibility CI no longer expects removed generic URL/tap/swipe/text tools.'
