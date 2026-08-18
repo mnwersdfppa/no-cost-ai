@@ -57,11 +57,13 @@ sys.stdout.write(data)
   exit 62
 fi
 
-REQUEST="$(python3 - "$MODEL" "$PROMPT" <<'PY'
+REQUEST="$(printf '%s' "$PROMPT" | python3 -c '
 import json,sys
-print(json.dumps({"version":1,"model":sys.argv[1],"prompt":sys.argv[2]},ensure_ascii=False))
-PY
-)"
+model=sys.argv[1]
+prompt=sys.stdin.read()
+print(json.dumps({"version":1,"model":model,"prompt":prompt},ensure_ascii=False))
+' "$MODEL")"
+unset PROMPT
 
 OUT="$(mktemp)"
 ERR="$(mktemp)"
@@ -88,6 +90,7 @@ printf '%s\n' "$REQUEST" | env \
     phone-codex-run >"$OUT" 2>"$ERR"
 SSH_STATUS=$?
 set -e
+unset REQUEST
 
 python3 - "$OUT" "$ERR" "$SSH_STATUS" <<'PY'
 import json,sys
