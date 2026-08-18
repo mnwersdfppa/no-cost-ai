@@ -18,16 +18,16 @@ permissions:
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: '20'
+          node-version: '22.23.2'
       - name: Install MCP dependencies without lifecycle scripts
         working-directory: android-node/adb-mcp
-        run: npm install --ignore-scripts --no-audit --no-fund
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Validate JavaScript syntax
         run: node --check android-node/adb-mcp/server.mjs
       - name: Validate shell syntax
@@ -37,13 +37,23 @@ jobs:
           bash -n android-node/disable-phone-write-lane.sh
       - name: Check for committed secret patterns
         run: |
-          if grep -RInE '(sk-proj-|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-|AKIA[0-9A-Z]{16})' android-node; then
+          if grep -RInE --exclude='package-lock.json' '(sk-proj-|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-|AKIA[0-9A-Z]{16}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' android-node; then
             echo 'Potential secret detected' >&2
             exit 1
           fi
-      - name: Verify write-gate and tool denylist invariants
+      - name: Verify write-gate and task-scoped tool invariants
+        shell: bash
         run: |
-          grep -q "PHONE_WRITE_ENABLED === '1'" android-node/adb-mcp/server.mjs
-          grep -q 'Only https:// URLs are allowed' android-node/adb-mcp/server.mjs
-          ! grep -q "registerTool(.*adb_shell" android-node/adb-mcp/server.mjs
-          ! grep -q "child_process.*exec(" android-node/adb-mcp/server.mjs
+          set -euo pipefail
+          grep -Fq "PHONE_WRITE_ENABLED === '1'" android-node/adb-mcp/server.mjs
+          grep -Fq "phone_open_bridge_app" android-node/adb-mcp/server.mjs
+          grep -Fq "z.enum(['openclaw', 'termux'])" android-node/adb-mcp/server.mjs
+          grep -Fq "phone_key" android-node/adb-mcp/server.mjs
+          grep -Fq "phone_open_bridge_app" android-node/enable-phone-write-lane.sh
+          for forbidden in phone_launch_url phone_tap phone_swipe phone_type_text phone_open_app adb_shell; do
+            if grep -RIn --exclude='*.md' --exclude='package-lock.json' "$forbidden" android-node/adb-mcp android-node/enable-phone-write-lane.sh; then
+              echo "Forbidden generic phone tool found: $forbidden" >&2
+              exit 1
+            fi
+          done
+          ! grep -Eq "child_process.*exec\(" android-node/adb-mcp/server.mjs
