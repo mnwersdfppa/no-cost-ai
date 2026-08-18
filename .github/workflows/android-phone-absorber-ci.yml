@@ -106,5 +106,23 @@ jobs:
           npx openclaw plugins install -l "$PWD"
           npx openclaw plugins enable phone-codex-cli
           npx openclaw plugins inspect phone-codex-cli --runtime
+      - name: Verify generated lockfiles
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in android-node/*/package-lock.json; do
+            test -s "$file"
+            node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "$file"
+          done
+      - name: Upload generated lockfiles
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: android-bridge-lockfiles
+          path: |
+            android-node/adb-mcp/package-lock.json
+            android-node/codex-phone-mcp/package-lock.json
+            android-node/phone-codex-cli-backend/package-lock.json
+          if-no-files-found: error
+          retention-days: 1
       - name: Validate deployment packet
         run: python3 -m json.tool android-node/DEPLOYMENT_PACKET.json >/dev/null
