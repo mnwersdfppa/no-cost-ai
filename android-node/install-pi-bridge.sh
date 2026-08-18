@@ -194,7 +194,9 @@ openclaw mcp set android-phone-actions "$(cat "$ROOT/mcp.android-phone-actions.j
 openclaw mcp set phone-codex "$(cat "$ROOT/mcp.phone-codex.json")"
 openclaw mcp doctor android-phone-status --probe
 openclaw mcp doctor android-phone-inspect --probe
-openclaw mcp doctor phone-codex --probe
+# Phone-side SSH/Codex does not exist until Stage 2, so validate configuration
+# now and defer the live probe to verify-phone-bridge.sh.
+openclaw mcp doctor phone-codex
 
 PLUGIN_STATUS="prepared"
 if openclaw plugins --help >/dev/null 2>&1; then
@@ -220,7 +222,7 @@ cat > "$LOGS/install-receipt.json" <<JSON
   "mcp_status": "enabled",
   "mcp_inspect": "enabled_prompt",
   "mcp_actions": "disabled_ready",
-  "phone_codex_mcp": "registered_prompt",
+  "phone_codex_mcp": "registered_unprobed_until_stage_3",
   "phone_codex_cli_plugin": "$PLUGIN_STATUS",
   "phone_codex_enabled": false,
   "paid_api_fallback": "unchanged",
