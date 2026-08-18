@@ -1,0 +1,158 @@
+name: Overnight Android absorber (8 runs)
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: overnight-android-absorber
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      CONTROL_ISSUE: '3'
+      TARGET_BRANCH: feat/openclaw-android-node-absorber
+      TARGET_PR: '2'
+    steps:
+      - name: Read bounded run control
+        id: control
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="$(gh issue view "$CONTROL_ISSUE" --repo "$REPO" --json body --jq .body)"
+          runs="$(printf '%s\n' "$body" | sed -nE 's/^RUNS_LEFT:[[:space:]]*([0-9]+).*$/\1/p' | head -n1)"
+          [[ "$runs" =~ ^[0-9]+$ ]] || { echo 'Invalid RUNS_LEFT control' >&2; exit 1; }
+          if (( runs <= 0 )); then
+            echo 'active=false' >> "$GITHUB_OUTPUT"
+            echo 'runs=0' >> "$GITHUB_OUTPUT"
+          else
+            echo 'active=true' >> "$GITHUB_OUTPUT"
+            echo "runs=$runs" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout absorber branch
+        if: steps.control.outputs.active == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+
+      - name: Set up Node.js
+        if: steps.control.outputs.active == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run static and safety validation
+        if: steps.control.outputs.active == 'true'
+        id: checks
+        shell: bash
+        run: |
+          set +e
+          mkdir -p /tmp/absorber
+          report=/tmp/absorber/report.txt
+          status=PASS
+          {
+            echo "run_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "target_branch=$TARGET_BRANCH"
+            echo '--- local validation ---'
+          } > "$report"
+
+          (
+            cd android-node/adb-mcp &&
+            npm install --ignore-scripts --no-audit --no-fund &&
+            node --check server.mjs
+          ) >> "$report" 2>&1 || status=FAIL
+
+          for script in \
+            android-node/install-pi-android-node.sh \
+            android-node/enable-phone-write-lane.sh \
+            android-node/disable-phone-write-lane.sh; do
+            bash -n "$script" >> "$report" 2>&1 || status=FAIL
+          done
+
+          if grep -RInE '(sk-proj-|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-|AKIA[0-9A-Z]{16})' android-node >> "$report" 2>&1; then
+            echo 'FAIL: potential committed secret pattern' >> "$report"
+            status=FAIL
+          else
+            echo 'PASS: no common committed secret pattern' >> "$report"
+          fi
+
+          grep -q "PHONE_WRITE_ENABLED === '1'" android-node/adb-mcp/server.mjs || status=FAIL
+          grep -q 'Only https:// URLs are allowed' android-node/adb-mcp/server.mjs || status=FAIL
+          if grep -q 'adb_shell' android-node/adb-mcp/server.mjs; then status=FAIL; fi
+
+          {
+            echo '--- official upstream snapshot ---'
+            for upstream in \
+              openclaw/openclaw \
+              Genymobile/scrcpy \
+              termux/termux-app \
+              termux/termux-api \
+              termux/termux-boot \
+              tailscale/tailscale \
+              RikkaApps/Shizuku \
+              modelcontextprotocol/typescript-sdk; do
+              default_branch="$(gh api "repos/$upstream" --jq .default_branch 2>/dev/null)" || { echo "$upstream=UNREACHABLE"; status=FAIL; continue; }
+              head_sha="$(gh api "repos/$upstream/commits/$default_branch" --jq .sha 2>/dev/null | cut -c1-12)" || { echo "$upstream=HEAD_UNAVAILABLE"; status=FAIL; continue; }
+              release="$(gh api "repos/$upstream/releases/latest" --jq .tag_name 2>/dev/null || echo none)"
+              echo "$upstream branch=$default_branch head=$head_sha release=$release"
+            done
+          } >> "$report" 2>&1
+
+          echo "STATUS=$status" >> "$report"
+          cat "$report"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+
+      - name: Upload bounded-run report
+        if: steps.control.outputs.active == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-absorber-${{ github.run_number }}
+          path: /tmp/absorber/report.txt
+          retention-days: 7
+
+      - name: Update control issue and stop after eight runs
+        if: steps.control.outputs.active == 'true' && always()
+        shell: bash
+        env:
+          CHECK_STATUS: ${{ steps.checks.outputs.status }}
+        run: |
+          set -euo pipefail
+          current='${{ steps.control.outputs.runs }}'
+          next=$(( current - 1 ))
+          now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          status="${CHECK_STATUS:-FAIL}"
+          cat > /tmp/control-body.md <<EOF
+          RUNS_LEFT: $next
+          TARGET_BRANCH: $TARGET_BRANCH
+          TARGET_PR: $TARGET_PR
+          LAST_RUN_UTC: $now
+          LAST_STATUS: $status
+          LAST_WORKFLOW_RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          Boundaries remain enforced:
+          - no root/jailbreak/custom ROM
+          - no credentials or secret values
+          - no paid model/API calls
+          - no unrestricted ADB shell
+          - no physical-device mutation
+          EOF
+          gh issue edit "$CONTROL_ISSUE" --repo "$REPO" --body-file /tmp/control-body.md
+          if [[ "$status" != PASS ]]; then
+            gh pr comment "$TARGET_PR" --repo "$REPO" --body "Overnight absorber validation failed at $now. Review workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          fi
+          if (( next == 0 )); then
+            gh issue edit "$CONTROL_ISSUE" --repo "$REPO" --title '[COMPLETE] Overnight Android/OpenClaw absorber — 8 runs'
+            gh issue comment "$CONTROL_ISSUE" --repo "$REPO" --body "Eight bounded validation runs are complete. Final status: $status. No physical-device or credential mutations were performed."
+          fi
