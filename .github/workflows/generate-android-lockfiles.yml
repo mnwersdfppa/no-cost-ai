@@ -1,0 +1,56 @@
+name: Generate Android bridge lockfiles
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/openclaw-android-node-absorber
+    paths:
+      - 'android-node/*/package.json'
+      - '.github/workflows/generate-android-lockfiles.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  lockfiles:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22.23.2'
+      - name: Generate deterministic npm lockfiles
+        shell: bash
+        run: |
+          set -euo pipefail
+          for dir in \
+            android-node/adb-mcp \
+            android-node/codex-phone-mcp \
+            android-node/phone-codex-cli-backend; do
+            (
+              cd "$dir"
+              rm -f package-lock.json
+              npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+              npm ci --ignore-scripts --no-audit --no-fund
+            )
+          done
+      - name: Verify lockfiles
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in android-node/*/package-lock.json; do
+            test -s "$file"
+            node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "$file"
+          done
+      - name: Upload lockfiles
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: android-bridge-lockfiles
+          path: |
+            android-node/adb-mcp/package-lock.json
+            android-node/codex-phone-mcp/package-lock.json
+            android-node/phone-codex-cli-backend/package-lock.json
+          if-no-files-found: error
+          retention-days: 1
