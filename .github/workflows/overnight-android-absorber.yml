@@ -1,4 +1,4 @@
-name: Overnight Android absorber (8 runs)
+name: Overnight Android absorber (time-bounded)
 
 on:
   schedule:
@@ -7,8 +7,8 @@ on:
 
 permissions:
   contents: read
-  issues: write
   pull-requests: write
+  actions: write
 
 concurrency:
   group: overnight-android-absorber
@@ -16,93 +16,118 @@ concurrency:
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     env:
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
-      CONTROL_ISSUE: '3'
       TARGET_BRANCH: feat/openclaw-android-node-absorber
       TARGET_PR: '2'
+      STOP_AT_UTC: '2026-08-19T02:30:00Z'
     steps:
-      - name: Read bounded run control
-        id: control
+      - name: Enforce the eight-hour window
+        id: window
         shell: bash
         run: |
           set -euo pipefail
-          body="$(gh issue view "$CONTROL_ISSUE" --repo "$REPO" --json body --jq .body)"
-          runs="$(printf '%s\n' "$body" | sed -nE 's/^RUNS_LEFT:[[:space:]]*([0-9]+).*$/\1/p' | head -n1)"
-          [[ "$runs" =~ ^[0-9]+$ ]] || { echo 'Invalid RUNS_LEFT control' >&2; exit 1; }
-          if (( runs <= 0 )); then
+          now="$(date -u +%s)"
+          stop="$(date -u -d "$STOP_AT_UTC" +%s)"
+          if (( now >= stop )); then
             echo 'active=false' >> "$GITHUB_OUTPUT"
-            echo 'runs=0' >> "$GITHUB_OUTPUT"
+            gh api -X PUT "repos/$REPO/actions/workflows/overnight-android-absorber.yml/disable" || true
+            gh api -X PUT "repos/$REPO/actions/workflows/overnight-android-absorber-stop.yml/disable" || true
+            echo "Window closed at $STOP_AT_UTC. Scheduled workflows disabled."
           else
             echo 'active=true' >> "$GITHUB_OUTPUT"
-            echo "runs=$runs" >> "$GITHUB_OUTPUT"
+            echo "Window active until $STOP_AT_UTC."
           fi
 
       - name: Checkout absorber branch
-        if: steps.control.outputs.active == 'true'
-        uses: actions/checkout@v4
+        if: steps.window.outputs.active == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ env.TARGET_BRANCH }}
+          persist-credentials: false
 
       - name: Set up Node.js
-        if: steps.control.outputs.active == 'true'
-        uses: actions/setup-node@v4
+        if: steps.window.outputs.active == 'true'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: '20'
+          node-version: '22.23.2'
 
-      - name: Run static and safety validation
-        if: steps.control.outputs.active == 'true'
+      - name: Run static, security and upstream validation
+        if: steps.window.outputs.active == 'true'
         id: checks
         shell: bash
         run: |
-          set +e
+          set -u
           mkdir -p /tmp/absorber
           report=/tmp/absorber/report.txt
           status=PASS
+          fail() { status=FAIL; printf 'FAIL: %s\n' "$1" | tee -a "$report"; }
+
           {
             echo "run_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             echo "target_branch=$TARGET_BRANCH"
+            echo "target_commit=$(git rev-parse HEAD)"
+            echo "stop_at_utc=$STOP_AT_UTC"
             echo '--- local validation ---'
           } > "$report"
 
-          (
-            cd android-node/adb-mcp &&
-            npm install --ignore-scripts --no-audit --no-fund &&
-            node --check server.mjs
-          ) >> "$report" 2>&1 || status=FAIL
-
-          for script in \
-            android-node/install-pi-android-node.sh \
-            android-node/enable-phone-write-lane.sh \
-            android-node/disable-phone-write-lane.sh; do
-            bash -n "$script" >> "$report" 2>&1 || status=FAIL
+          for dir in android-node/adb-mcp android-node/codex-phone-mcp android-node/phone-codex-cli-backend; do
+            if [[ ! -s "$dir/package-lock.json" ]]; then
+              fail "missing lockfile: $dir/package-lock.json"
+              continue
+            fi
+            (cd "$dir" && npm ci --ignore-scripts --no-audit --no-fund) >> "$report" 2>&1 || fail "npm ci failed: $dir"
           done
 
-          if grep -RInE '(sk-proj-|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-|AKIA[0-9A-Z]{16})' android-node >> "$report" 2>&1; then
-            echo 'FAIL: potential committed secret pattern' >> "$report"
-            status=FAIL
+          node --check android-node/adb-mcp/server.mjs >> "$report" 2>&1 || fail 'ADB MCP syntax'
+          node --check android-node/codex-phone-mcp/server.mjs >> "$report" 2>&1 || fail 'phone Codex MCP syntax'
+
+          while IFS= read -r -d '' script; do
+            bash -n "$script" >> "$report" 2>&1 || fail "shell syntax: $script"
+          done < <(find android-node pi -type f -name '*.sh' -print0 2>/dev/null)
+
+          python3 -m py_compile pi/pi-work-queue-worker.py >> "$report" 2>&1 || fail 'Pi queue worker syntax'
+
+          if grep -RInE --exclude='*.md' --exclude='package-lock.json' '(sk-proj-|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-|AKIA[0-9A-Z]{16}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' android-node pi >> "$report" 2>&1; then
+            fail 'potential committed secret pattern'
           else
             echo 'PASS: no common committed secret pattern' >> "$report"
           fi
 
-          grep -q "PHONE_WRITE_ENABLED === '1'" android-node/adb-mcp/server.mjs || status=FAIL
-          grep -q 'Only https:// URLs are allowed' android-node/adb-mcp/server.mjs || status=FAIL
-          if grep -q 'adb_shell' android-node/adb-mcp/server.mjs; then status=FAIL; fi
+          grep -Fq "PHONE_WRITE_ENABLED === '1'" android-node/adb-mcp/server.mjs || fail 'write gate missing'
+          grep -Fq 'phone_open_bridge_app' android-node/adb-mcp/server.mjs || fail 'task-scoped app tool missing'
+          grep -Fq "z.enum(['openclaw', 'termux'])" android-node/adb-mcp/server.mjs || fail 'bridge app enum missing'
+          grep -Fq 'phone_key' android-node/adb-mcp/server.mjs || fail 'bounded key tool missing'
+          grep -Fq 'defaultToolsApprovalMode": "prompt"' android-node/enable-phone-write-lane.sh || fail 'approval prompt missing'
+
+          for forbidden in phone_launch_url phone_tap phone_swipe phone_type_text phone_open_app adb_shell; do
+            if grep -RIn --exclude='*.md' --exclude='package-lock.json' "$forbidden" android-node/adb-mcp android-node/enable-phone-write-lane.sh >> "$report" 2>&1; then
+              fail "forbidden generic phone tool: $forbidden"
+            fi
+          done
+
+          if grep -RInE --exclude='*.md' '(getUpdates|PHONE_RELAY_ENABLED|telegram.*poller)' android-node pi >> "$report" 2>&1; then
+            fail 'second Telegram poller primitive detected'
+          fi
 
           {
             echo '--- official upstream snapshot ---'
             for upstream in \
               openclaw/openclaw \
+              openai/codex \
               Genymobile/scrcpy \
               termux/termux-app \
               termux/termux-api \
               termux/termux-boot \
               tailscale/tailscale \
               RikkaApps/Shizuku \
-              modelcontextprotocol/typescript-sdk; do
+              modelcontextprotocol/typescript-sdk \
+              n8n-io/n8n \
+              supabase/supabase \
+              vercel/vercel; do
               default_branch="$(gh api "repos/$upstream" --jq .default_branch 2>/dev/null)" || { echo "$upstream=UNREACHABLE"; status=FAIL; continue; }
               head_sha="$(gh api "repos/$upstream/commits/$default_branch" --jq .sha 2>/dev/null | cut -c1-12)" || { echo "$upstream=HEAD_UNAVAILABLE"; status=FAIL; continue; }
               release="$(gh api "repos/$upstream/releases/latest" --jq .tag_name 2>/dev/null || echo none)"
@@ -110,49 +135,22 @@ jobs:
             done
           } >> "$report" 2>&1
 
-          echo "STATUS=$status" >> "$report"
-          cat "$report"
+          echo "STATUS=$status" | tee -a "$report"
+          cat "$report" >> "$GITHUB_STEP_SUMMARY"
           echo "status=$status" >> "$GITHUB_OUTPUT"
+          [[ "$status" == PASS ]]
 
       - name: Upload bounded-run report
-        if: steps.control.outputs.active == 'true'
-        uses: actions/upload-artifact@v4
+        if: steps.window.outputs.active == 'true' && always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: android-absorber-${{ github.run_number }}
           path: /tmp/absorber/report.txt
+          if-no-files-found: warn
           retention-days: 7
 
-      - name: Update control issue and stop after eight runs
-        if: steps.control.outputs.active == 'true' && always()
+      - name: Report a failed validation to the draft PR
+        if: steps.window.outputs.active == 'true' && failure()
         shell: bash
-        env:
-          CHECK_STATUS: ${{ steps.checks.outputs.status }}
         run: |
-          set -euo pipefail
-          current='${{ steps.control.outputs.runs }}'
-          next=$(( current - 1 ))
-          now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          status="${CHECK_STATUS:-FAIL}"
-          cat > /tmp/control-body.md <<EOF
-          RUNS_LEFT: $next
-          TARGET_BRANCH: $TARGET_BRANCH
-          TARGET_PR: $TARGET_PR
-          LAST_RUN_UTC: $now
-          LAST_STATUS: $status
-          LAST_WORKFLOW_RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-          Boundaries remain enforced:
-          - no root/jailbreak/custom ROM
-          - no credentials or secret values
-          - no paid model/API calls
-          - no unrestricted ADB shell
-          - no physical-device mutation
-          EOF
-          gh issue edit "$CONTROL_ISSUE" --repo "$REPO" --body-file /tmp/control-body.md
-          if [[ "$status" != PASS ]]; then
-            gh pr comment "$TARGET_PR" --repo "$REPO" --body "Overnight absorber validation failed at $now. Review workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          fi
-          if (( next == 0 )); then
-            gh issue edit "$CONTROL_ISSUE" --repo "$REPO" --title '[COMPLETE] Overnight Android/OpenClaw absorber — 8 runs'
-            gh issue comment "$CONTROL_ISSUE" --repo "$REPO" --body "Eight bounded validation runs are complete. Final status: $status. No physical-device or credential mutations were performed."
-          fi
+          gh pr comment "$TARGET_PR" --repo "$REPO" --body "Bounded overnight validation failed at $(date -u +%Y-%m-%dT%H:%M:%SZ). No physical-device or credential mutation was performed. Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
