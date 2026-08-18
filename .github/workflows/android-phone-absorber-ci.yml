@@ -27,6 +27,7 @@ jobs:
       - name: Check shell scripts
         run: |
           for file in \
+            android-node/bootstrap-all.sh \
             android-node/install-pi-phone-absorber.sh \
             android-node/install-pi-bridge.sh \
             android-node/phone-termux-bootstrap.sh \
