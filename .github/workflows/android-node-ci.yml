@@ -47,7 +47,8 @@ jobs:
             pi/install-work-queue-timer.sh \
             pi/install-maton-readonly-oauth.sh \
             pi/remove-maton-readonly-oauth.sh \
-            pi/check-make-readonly.sh; do
+            pi/check-make-readonly.sh \
+            pi/check-n8n-readonly.sh; do
             bash -n "$script"
           done
       - name: Check for committed secret patterns
@@ -67,8 +68,6 @@ jobs:
           from pathlib import Path
 
           text = Path('pi/pi-work-queue-worker.py').read_text(encoding='utf-8')
-          # The worker intentionally contains redaction regex definitions. Remove
-          # only those declaration lines, then scan the remaining source for literals.
           filtered = '\n'.join(line for line in text.splitlines() if 're.compile(' not in line)
           patterns = [
               r'sk-proj-[A-Za-z0-9_-]{20,}',
@@ -123,3 +122,14 @@ jobs:
           grep -Fq '/scenarios?teamId=' "$file"
           ! grep -Eq '(curl[^\n]*-[XP][[:space:]]*(POST|PATCH|PUT|DELETE)|/scenarios/[^ ]+/(start|stop|run)|/users/me/api-tokens)' "$file"
           ! grep -Eq '(echo|printf).*(MAKE_API_TOKEN|MAKE_API_KEY|MAKE_TOKEN)' "$file"
+      - name: Verify n8n probe is read-only and local-first
+        shell: bash
+        run: |
+          set -euo pipefail
+          file=pi/check-n8n-readonly.sh
+          grep -Fq 'X-N8N-API-KEY: $KEY' "$file"
+          grep -Fq '/healthz' "$file"
+          grep -Fq '/api/v1/workflows?limit=1' "$file"
+          grep -Fq 'http://127.0.0.1:5678' "$file"
+          ! grep -Eq '(curl[^\n]*-[XP][[:space:]]*(POST|PATCH|PUT|DELETE)|/api/v1/workflows/[^? ]+|/audit)' "$file"
+          ! grep -Eq '(echo|printf).*(N8N_API_KEY|N8N_OWNER_API_KEY|N8N_TOKEN)' "$file"
