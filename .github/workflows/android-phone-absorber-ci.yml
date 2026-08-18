@@ -56,7 +56,7 @@ jobs:
           npx tsc --noEmit --skipLibCheck --module NodeNext --moduleResolution NodeNext --target ES2022 --esModuleInterop index.ts
           export HOME="$RUNNER_TEMP/openclaw-home"
           mkdir -p "$HOME"
-          npx openclaw plugins install -l "$PWD" --force
+          npx openclaw plugins install -l "$PWD"
           npx openclaw plugins enable phone-codex-cli
           npx openclaw plugins inspect phone-codex-cli --runtime
       - name: Validate deployment packet
