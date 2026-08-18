@@ -7,13 +7,32 @@ ENV_FILE="$SECRETS/phone-bridge.env"
 RUN_LLM_TEST="${RUN_LLM_TEST:-1}"
 ENABLE_AFTER_VERIFY="${ENABLE_AFTER_VERIFY:-1}"
 SET_PRIMARY="${SET_PRIMARY:-1}"
+TARGET_PRIMARY="phone-codex-cli/gpt-5.6-sol"
+PROMOTION_RECORD="$ROOT/previous-primary.json"
 
 restart_gateway() {
   if openclaw gateway restart --help 2>&1 | grep -q -- '--safe'; then
-    openclaw gateway restart --safe || true
+    openclaw gateway restart --safe
   else
-    openclaw gateway restart || true
+    openclaw gateway restart
   fi
+}
+
+normalize_config_string() {
+  python3 -c '
+import json,sys
+raw=sys.stdin.read().strip()
+try:
+    value=json.loads(raw)
+except Exception:
+    value=raw
+if isinstance(value,str):
+    print(value)
+'
+}
+
+fingerprint_file() {
+  ssh-keygen -lf "$1" -E sha256 2>/dev/null | awk 'NR==1 {print $2}'
 }
 
 if [[ "$ENABLE_AFTER_VERIFY" == "1" && "$RUN_LLM_TEST" != "1" ]]; then
@@ -29,10 +48,16 @@ set -a
 source "$ENV_FILE"
 set +a
 
+if [[ -z "${PHONE_SSH_HOST_KEY_SHA256:-}" || "$PHONE_SSH_HOST_KEY_SHA256" != SHA256:* ]]; then
+  echo "BLOCKED=OPERATOR_VERIFIED_SSH_FINGERPRINT_REQUIRED"
+  echo "NEXT=run the phone bootstrap, compare its PHONE_SSH_HOST_KEY_SHA256 on the phone screen, then record that exact value in $ENV_FILE"
+  exit 31
+fi
+
 adb start-server >/dev/null
 if [[ "$(adb -s "$ANDROID_SERIAL" get-state 2>/dev/null || true)" != "device" ]]; then
   echo "BLOCKED=ADB_DEVICE_NOT_READY"
-  exit 31
+  exit 32
 fi
 adb -s "$ANDROID_SERIAL" forward --remove tcp:"$PHONE_SSH_PORT" >/dev/null 2>&1 || true
 adb -s "$ANDROID_SERIAL" forward tcp:"$PHONE_SSH_PORT" tcp:8022 >/dev/null
@@ -40,21 +65,38 @@ adb -s "$ANDROID_SERIAL" forward tcp:"$PHONE_SSH_PORT" tcp:8022 >/dev/null
 if [[ -z "${PHONE_SSH_USER:-}" ]]; then
   echo "BLOCKED=TERMUX_USER_UNKNOWN"
   echo "NEXT=run id -un in Termux and set PHONE_SSH_USER in $ENV_FILE"
-  exit 32
+  exit 33
 fi
 
 TMP_KNOWN="$(mktemp)"
 trap 'rm -f "$TMP_KNOWN"' EXIT
-if ! ssh-keyscan -T 10 -p "$PHONE_SSH_PORT" "$PHONE_SSH_HOST" > "$TMP_KNOWN" 2>/dev/null; then
+if ! ssh-keyscan -T 10 -t ed25519 -p "$PHONE_SSH_PORT" "$PHONE_SSH_HOST" > "$TMP_KNOWN" 2>/dev/null; then
   echo "BLOCKED=PHONE_SSHD_NOT_REACHABLE"
   echo "NEXT=run bash /sdcard/Download/openclaw-phone-bootstrap.sh in Termux"
-  exit 33
+  exit 34
 fi
 if [[ ! -s "$TMP_KNOWN" ]]; then
   echo "BLOCKED=PHONE_SSH_HOST_KEY_EMPTY"
-  exit 34
+  exit 35
 fi
-install -m 600 "$TMP_KNOWN" "$PHONE_SSH_KNOWN_HOSTS"
+SCANNED_FP="$(fingerprint_file "$TMP_KNOWN")"
+if [[ "$SCANNED_FP" != "$PHONE_SSH_HOST_KEY_SHA256" ]]; then
+  echo "BLOCKED=PHONE_SSH_FINGERPRINT_MISMATCH"
+  echo "EXPECTED=$PHONE_SSH_HOST_KEY_SHA256"
+  echo "SCANNED=$SCANNED_FP"
+  exit 36
+fi
+if [[ -s "$PHONE_SSH_KNOWN_HOSTS" ]]; then
+  EXISTING_FP="$(fingerprint_file "$PHONE_SSH_KNOWN_HOSTS")"
+  if [[ "$EXISTING_FP" != "$PHONE_SSH_HOST_KEY_SHA256" ]]; then
+    echo "BLOCKED=PINNED_SSH_HOST_KEY_CHANGED"
+    echo "EXPECTED=$PHONE_SSH_HOST_KEY_SHA256"
+    echo "PINNED=$EXISTING_FP"
+    exit 37
+  fi
+else
+  install -m 600 "$TMP_KNOWN" "$PHONE_SSH_KNOWN_HOSTS"
+fi
 
 SSH=(
   ssh
@@ -72,19 +114,27 @@ REMOTE_STATUS="$("${SSH[@]}" phone-status 2>&1 || true)"
 printf '%s\n' "$REMOTE_STATUS"
 if ! grep -q 'runner=ready' <<<"$REMOTE_STATUS"; then
   echo "BLOCKED=PHONE_RUNNER_NOT_READY"
-  exit 35
+  exit 38
+fi
+REMOTE_FP="$(sed -n 's/^host_key_fingerprint=//p' <<<"$REMOTE_STATUS" | tail -n1)"
+if [[ "$REMOTE_FP" != "$PHONE_SSH_HOST_KEY_SHA256" ]]; then
+  echo "BLOCKED=REMOTE_STATUS_FINGERPRINT_MISMATCH"
+  exit 39
+fi
+if ! grep -q "CODEX_VERSION=${PHONE_CODEX_VERSION:-0.146.0}\|codex-cli ${PHONE_CODEX_VERSION:-0.146.0}\|codex ${PHONE_CODEX_VERSION:-0.146.0}" <<<"$REMOTE_STATUS"; then
+  echo "BLOCKED=PHONE_CODEX_VERSION_NOT_ALLOWLISTED"
+  exit 40
 fi
 
 DENY_TEST="$("${SSH[@]}" uname -a 2>&1 || true)"
 if ! grep -q 'DENIED=COMMAND_NOT_ALLOWLISTED' <<<"$DENY_TEST"; then
   echo "BLOCKED=FORCED_COMMAND_POLICY_NOT_ACTIVE"
-  exit 36
+  exit 41
 fi
-
 if ! grep -Eqi 'Logged in using ChatGPT|chatgpt|authenticated|login.*ok|successfully logged in' <<<"$REMOTE_STATUS"; then
   echo "BLOCKED=PHONE_CODEX_NOT_LOGGED_IN"
   echo "NEXT=run codex login --device-auth in Termux and approve it in the phone browser"
-  exit 37
+  exit 42
 fi
 
 parse_phone_final() {
@@ -129,10 +179,9 @@ if [[ "$RUN_LLM_TEST" == "1" ]]; then
   if [[ "$LLM_FINAL" == "PHONE_CODEX_OK" ]]; then
     LLM_RESULT="pass"
   else
-    LLM_RESULT="fail"
     printf '%s\n' "$LLM_OUTPUT" | tail -n 40
     echo "BLOCKED=PHONE_CODEX_LIVE_TEST_FAILED"
-    exit 38
+    exit 43
   fi
 fi
 
@@ -155,23 +204,21 @@ BACKEND_PROVIDER=""
 BACKEND_MODEL=""
 if openclaw plugins --help >/dev/null 2>&1; then
   if ! openclaw plugins inspect phone-codex-cli --runtime >/dev/null 2>&1; then
-    openclaw plugins install -l "$ROOT/phone-codex-cli-backend" || true
+    openclaw plugins install -l "$ROOT/phone-codex-cli-backend"
   fi
   openclaw plugins enable phone-codex-cli || true
   if openclaw plugins inspect phone-codex-cli --runtime >/dev/null 2>&1; then
     PLUGIN_RESULT="ready"
     restart_gateway
     set +e
-    BACKEND_OUTPUT="$(openclaw agent --agent main --message 'Reply exactly PHONE_BACKEND_OK and nothing else.' --model phone-codex-cli/gpt-5.6-sol --json 2>&1)"
+    BACKEND_OUTPUT="$(openclaw agent --agent main --message 'Reply exactly PHONE_BACKEND_OK and nothing else.' --model "$TARGET_PRIMARY" --json 2>&1)"
     BACKEND_STATUS=$?
     set -e
     BACKEND_CHECK="$(printf '%s' "$BACKEND_OUTPUT" | python3 -c '
 import json,sys
 raw=sys.stdin.read()
-try:
-    data=json.loads(raw)
-except Exception:
-    raise SystemExit(2)
+try: data=json.loads(raw)
+except Exception: raise SystemExit(2)
 status=data.get("status")
 meta=data.get("meta") if isinstance(data.get("meta"),dict) else {}
 agent=meta.get("agentMeta") if isinstance(meta.get("agentMeta"),dict) else {}
@@ -205,55 +252,83 @@ print(json.dumps({"ok":status in (None,"ok") and final=="PHONE_BACKEND_OK", "pro
   fi
 fi
 
+CURRENT_PRIMARY="$(openclaw config get agents.defaults.model.primary 2>/dev/null | normalize_config_string || true)"
+PREVIOUS_PRIMARY=""
+if [[ -s "$PROMOTION_RECORD" ]]; then
+  PREVIOUS_PRIMARY="$(python3 - "$PROMOTION_RECORD" <<'PY'
+import json,sys
+try: data=json.load(open(sys.argv[1],encoding="utf-8"))
+except Exception: data={}
+value=data.get("previous_primary")
+if isinstance(value,str): print(value)
+PY
+)"
+fi
 PRIMARY_RESULT="unchanged"
+PROMOTED_AT=""
 if [[ "$SET_PRIMARY" == "1" && "$BACKEND_TEST" == "pass" ]]; then
-  openclaw config get agents.defaults.model.primary > "$ROOT/previous-primary.txt" 2>/dev/null || true
-  chmod 600 "$ROOT/previous-primary.txt" 2>/dev/null || true
-  openclaw config set agents.defaults.model.primary phone-codex-cli/gpt-5.6-sol
-  PRIMARY_RESULT="phone-codex-cli/gpt-5.6-sol"
+  if [[ "$CURRENT_PRIMARY" != "$TARGET_PRIMARY" && ! -s "$PROMOTION_RECORD" ]]; then
+    PROMOTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    python3 - "$PROMOTION_RECORD" "$CURRENT_PRIMARY" "$TARGET_PRIMARY" "$PROMOTED_AT" <<'PY'
+import json,os,sys
+path,previous,target,at=sys.argv[1:]
+with open(path,"w",encoding="utf-8") as f:
+    json.dump({"previous_primary":previous,"target_primary":target,"recorded_at":at},f,ensure_ascii=False,indent=2)
+os.chmod(path,0o600)
+PY
+    PREVIOUS_PRIMARY="$CURRENT_PRIMARY"
+  fi
+  openclaw config set agents.defaults.model.primary "$TARGET_PRIMARY"
+  PRIMARY_RESULT="$TARGET_PRIMARY"
 fi
 
 openclaw mcp reload || true
-restart_gateway
-openclaw gateway status || true
+GATEWAY_RESULT="fail"
+if restart_gateway && openclaw gateway status; then
+  GATEWAY_RESULT="pass"
+fi
 
 mkdir -p "$ROOT/logs"
-OVERALL="partial"
-if [[ "$LLM_RESULT" == "pass" && "$BACKEND_TEST" == "pass" && "$PRIMARY_RESULT" == "phone-codex-cli/gpt-5.6-sol" ]]; then
-  OVERALL="pass"
+T3_RESULT="partial"
+if [[ "$LLM_RESULT" == "pass" && "$BACKEND_TEST" == "pass" && "$PRIMARY_RESULT" == "$TARGET_PRIMARY" && "$GATEWAY_RESULT" == "pass" ]]; then
+  T3_RESULT="pass"
 fi
 cat > "$ROOT/logs/verify-receipt.json" <<JSON
 {
-  "result": "$OVERALL",
+  "result": "partial_t4_required",
+  "t3_bridge": "$T3_RESULT",
+  "t4_telegram_round_trip": "not_tested",
   "adb": "device",
-  "ssh": "pinned_host_key",
+  "ssh": "operator_verified_fingerprint",
+  "ssh_fingerprint": "$PHONE_SSH_HOST_KEY_SHA256",
   "forced_command": "pass",
   "codex_login": "chatgpt",
+  "codex_version": "${PHONE_CODEX_VERSION:-0.146.0}",
   "runner": "ready",
   "direct_llm_test": "$LLM_RESULT",
   "cli_plugin": "$PLUGIN_RESULT",
   "cli_backend_test": "$BACKEND_TEST",
   "backend_provider": "$BACKEND_PROVIDER",
   "backend_model": "$BACKEND_MODEL",
+  "previous_primary": "$PREVIOUS_PRIMARY",
   "primary_model": "$PRIMARY_RESULT",
+  "promoted_at": "$PROMOTED_AT",
+  "gateway_health": "$GATEWAY_RESULT",
   "phone_codex_enabled": "$ENABLE_AFTER_VERIFY",
   "mcp_actions_enabled": false,
   "secrets_printed": false,
-  "telegram_single_poller": true
+  "telegram_single_poller": "not_tested"
 }
 JSON
 chmod 600 "$ROOT/logs/verify-receipt.json"
 
-if [[ "$OVERALL" == "pass" ]]; then
-  echo "RESULT=PASS"
-else
-  echo "RESULT=PARTIAL"
-fi
-echo "PHONE_CODEX=$([[ "$ENABLE_AFTER_VERIFY" == "1" ]] && echo ENABLED || echo DISABLED)"
+echo "RESULT=PARTIAL_T4_REQUIRED"
+echo "T3_BRIDGE=$T3_RESULT"
 echo "DIRECT_LLM_TEST=$LLM_RESULT"
 echo "CLI_PLUGIN=$PLUGIN_RESULT"
 echo "CLI_BACKEND_TEST=$BACKEND_TEST"
 echo "BACKEND_PROVIDER=$BACKEND_PROVIDER"
 echo "BACKEND_MODEL=$BACKEND_MODEL"
 echo "PRIMARY_MODEL=$PRIMARY_RESULT"
-echo "TELEGRAM_TEST=send a normal message to the existing OpenClaw bot; do not create another poller"
+echo "GATEWAY=$GATEWAY_RESULT"
+echo "TELEGRAM_TEST=not_tested; use the existing OpenClaw bot only and record a correlation ID before claiming completion"
