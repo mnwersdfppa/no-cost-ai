@@ -43,15 +43,15 @@ jobs:
           (cd android-node/adb-mcp && npm run check)
           (cd android-node/codex-phone-mcp && npm run check)
           node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' android-node/phone-codex-cli-backend/openclaw.plugin.json
-      - name: Reject embedded secrets and high-risk primitives
+      - name: Reject embedded source secrets and high-risk primitives
         shell: bash
         run: |
           set -euo pipefail
-          if grep -RInE --exclude='*.md' --exclude='package-lock.json' '(sk-proj-|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' android-node; then
-            echo 'Secret-like literal detected.' >&2
+          if grep -RInE --exclude-dir=node_modules --exclude='*.md' --exclude='package-lock.json' '(sk-proj-|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' android-node; then
+            echo 'Secret-like literal detected in source.' >&2
             exit 1
           fi
-          if grep -RInE --exclude='*.md' '(adb[^\n]*shell[^\n]*(rm -rf|su\b|settings put|pm uninstall|am force-stop)|sendTextMessage|ACTION_CALL|ACTION_DIAL|PHONE_RELAY_ENABLED|openclaw[^\n]*mcp[^\n]*serve|phone_(launch_url|tap|swipe|type_text))' android-node; then
+          if grep -RInE --exclude-dir=node_modules --exclude='*.md' '(adb[^\n]*shell[^\n]*(rm -rf|su\b|settings put|pm uninstall|am force-stop)|sendTextMessage|ACTION_CALL|ACTION_DIAL|PHONE_RELAY_ENABLED|openclaw[^\n]*mcp[^\n]*serve|phone_(launch_url|tap|swipe|type_text))' android-node; then
             echo 'High-risk or duplicate-channel primitive detected.' >&2
             exit 1
           fi
