@@ -28,7 +28,7 @@ jobs:
       REPO: ${{ github.repository }}
       TARGET_BRANCH: feat/openclaw-android-node-absorber
       TARGET_PR: '2'
-      STOP_AT_UTC: '2026-08-19T02:30:00Z'
+      STOP_AT_UTC: '2026-08-19T06:20:00Z'
     steps:
       - name: Enforce the eight-hour window
         id: window
