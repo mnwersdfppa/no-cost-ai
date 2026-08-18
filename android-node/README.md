@@ -1,79 +1,78 @@
-# OpenClaw Android Node + Phone Runtime Bridge
+# OpenClaw mobile runtime bridge for Raspberry Pi 5
 
-This package turns an Android phone attached to a Raspberry Pi 5 into bounded OpenClaw capabilities **without rooting or jailbreaking it**.
+This package turns a USB-connected mini Android phone into a bounded OpenClaw companion and, when Codex works on the phone but not on the Pi, into a subscription-backed text backend. **Root/jailbreak is not required.**
 
 ## Architecture
 
 ```text
 Telegram (one existing poller)
   -> Raspberry Pi 5 OpenClaw Gateway
-     -> official OpenClaw Android node (primary)
-     -> android-phone-read MCP over USB ADB (automatic read-only fallback)
-     -> android-phone-write MCP over USB ADB (disabled by default, approval gated)
-     -> phone-codex MCP over USB-forwarded SSH to Termux (conditional)
+     -> official OpenClaw Android/iOS node (primary device lane)
+     -> USB ADB MCP status/inspection/actions (bounded fallback)
+     -> phone-codex-cli/gpt-5.6-sol (phone Termux + ChatGPT/Codex login)
 ```
 
 The phone never becomes a second Telegram poller. The Pi remains the single Gateway and routing owner.
 
 ## Why no jailbreak/root
 
-The official OpenClaw Android node, ADB/scrcpy and Termux all work without root for this design. Root would weaken Android app isolation, expand the attack surface and complicate recovery without solving the core OpenClaw routing problem.
+The official OpenClaw mobile app connects to a Linux Gateway and exposes node capabilities. Android ADB/scrcpy and Termux also work without root for this design. Root would weaken app isolation and recovery without solving the routing problem.
 
 ## S-rank absorption
 
-- `openclaw/openclaw`: official Android companion node, durable chat/outbox, Gateway pairing and device capabilities.
-- `Genymobile/scrcpy` + Android platform-tools: no-root USB/TCP inspection and operator fallback.
-- `termux/termux-app`, `termux-api`, `termux-boot`: optional phone shell/API/startup lane.
-- `tailscale/tailscale`: private remote transport; never expose ADB or MCP publicly.
-- `modelcontextprotocol/typescript-sdk`: local stdio MCP servers with tool allowlists.
-- `openai/codex`: optional phone-side subscription runtime only when the official CLI is executable and `codex login status` confirms ChatGPT authentication.
+- `openclaw/openclaw`: official Android/iOS nodes, setup-code pairing, durable chat and device capabilities.
+- `openai/codex`: official phone-side Codex CLI and ChatGPT subscription login.
+- OpenClaw CLI backend plugin API: presents the phone runtime as `phone-codex-cli/gpt-5.6-sol`, so normal Telegram turns can use it directly.
+- `Genymobile/scrcpy` + Android platform-tools: no-root USB inspection/control fallback.
+- `termux/termux-app`, `termux-api`, `termux-boot`: phone shell/API/startup lane.
+- `modelcontextprotocol/typescript-sdk`: local stdio MCP servers with annotations and allowlists.
+- `tailscale/tailscale`: private remote transport; ADB and MCP are never exposed publicly.
 
-`RikkaApps/Shizuku` remains conditional A-rank for a documented capability gap. Third-party OpenClaw/Codex-on-Termux installers are not installed automatically.
+`RikkaApps/Shizuku` remains conditional A-rank for a proven capability gap. Third-party root, Magisk, custom-ROM and unofficial Codex binary installers are excluded from automatic absorption.
 
-## Prepared capabilities
+## Prepared lanes
 
-### Automatic read-only
+### Official mobile node
 
-- phone connection, model, Android version, battery and current activity
-- screenshot
-- UI hierarchy
-- official Android node status
+Use the setup code printed by `pair-openclaw-node.sh` in the official OpenClaw Android or iOS app.
 
-### Present but disabled
+### ADB MCP
 
-- app launch from a package allowlist
-- HTTPS URL launch
-- HOME/BACK/WAKEUP/SLEEP
-- tap, swipe and restricted ASCII input
+- `android-phone-status`: status only; annotation-aware automatic approval.
+- `android-phone-inspect`: screenshot/UI hierarchy; approval required.
+- `android-phone-actions`: allowlisted UI actions; disabled initially and approval required when enabled.
 
-The code does **not** implement calls, SMS, purchases, installation, uninstallation, security-setting changes or arbitrary `adb shell`.
+No arbitrary `adb shell` tool exists. Calls, SMS, purchases, app install/uninstall and security-setting changes are not implemented.
 
-### Conditional phone Codex
+### Phone Codex CLI backend
 
-When the official Codex CLI runs in Termux and is signed in with ChatGPT, OpenClaw can call a fixed remote runner through USB-forwarded SSH. The runner:
+The Pi uses USB-forwarded SSH to Termux. The SSH key is forced-command restricted, port forwarding/PTY/agent forwarding are denied, and only two remote commands exist: status and the fixed Codex runner. The runner:
 
-- accepts only `{model,prompt}` JSON
+- accepts only `{model,prompt}` JSON through stdin
 - allowlists `gpt-5.6-sol` and `gpt-5.6`
-- uses ephemeral, read-only, no-approval execution flags when available
-- runs in a dedicated empty directory
-- enforces a wall-clock timeout and process-group termination
-- leaves OAuth credentials on the phone
-- rejects arbitrary remote commands
+- removes API-key environment variables, preserving the phone's ChatGPT/Codex OAuth path
+- uses ephemeral read-only/no-approval Codex flags when supported
+- runs inside an empty non-writable work directory
+- enforces prompt and wall-clock limits
+- exposes no arbitrary shell
 
-This route stays disabled until the verification script passes.
+After a real live test, OpenClaw promotes `phone-codex-cli/gpt-5.6-sol` to the primary model and records the previous primary for rollback.
 
-## Fast installation
+## Fast staged installation
 
-Clone this branch on the Pi and run:
+### Stage 1 — Pi preparation
+
+Run this one line in the Raspberry Pi terminal:
 
 ```bash
-git clone -b feat/openclaw-android-node-absorber https://github.com/mnwersdfppa/no-cost-ai.git
-cd no-cost-ai/android-node
-chmod +x *.sh
-./install-pi-bridge.sh
+bash <(curl -fsSL https://raw.githubusercontent.com/mnwersdfppa/no-cost-ai/feat/openclaw-android-node-absorber/android-node/bootstrap-all.sh)
 ```
 
-The installer pushes one bootstrap script and the Pi public SSH key to the phone. In Termux, run:
+It installs/prepares ADB, MCP lanes, the CLI backend plugin, pushes the phone bootstrap file, and prints an official mobile-node setup code.
+
+### Stage 2 — phone preparation
+
+In Termux on the phone:
 
 ```bash
 bash /sdcard/Download/openclaw-phone-bootstrap.sh
@@ -85,48 +84,44 @@ When Codex is not signed in:
 codex login --device-auth
 ```
 
-Approve the code in the phone browser. Then on the Pi:
+Approve the short-lived code in the phone browser.
+
+### Stage 3 — verification and promotion
+
+Back on the Pi:
 
 ```bash
-RUN_LLM_TEST=1 ./verify-phone-bridge.sh
+RUN_LLM_TEST=1 ~/.openclaw/source/phone-absorber/android-node/verify-phone-bridge.sh
 ```
 
-Pair the official Android node:
+Success requires: ADB, pinned SSH host key, forced-command denial test, ChatGPT login, direct phone Codex response, OpenClaw CLI backend response and primary-model promotion.
+
+### Stage 4 — Telegram
+
+Send a normal message to the existing OpenClaw Telegram bot. Do not create a second bot process or poller.
+
+## Optional phone actions
 
 ```bash
-./pair-openclaw-node.sh
+~/.openclaw/source/phone-absorber/android-node/enable-phone-write.sh
+~/.openclaw/source/phone-absorber/android-node/disable-phone-write.sh
 ```
 
-Paste the setup code into the official OpenClaw Android app.
-
-## Write gate
-
-Write MCP is not enabled during installation.
-
-```bash
-./enable-phone-write.sh
-./disable-phone-write.sh
-```
-
-Even when enabled, tools remain allowlisted and approval-gated.
-
-## Official Android APK lane
-
-`install-openclaw-android.sh` downloads release assets from `openclaw/openclaw`, verifies SHA-256 and GitHub attestation when supported, and uses `adb install -r`. It never auto-uninstalls an existing app when signing channels conflict.
+Every enabled action remains allowlisted and approval-prompted.
 
 ## Rollback
 
 ```bash
-./rollback-pi-bridge.sh
+~/.openclaw/source/phone-absorber/android-node/rollback-pi-phone-absorber.sh
 ```
 
-This removes only the three OpenClaw MCP definitions and USB port forward. Files are retained for inspection unless `DELETE_FILES=1` is explicitly used.
+Rollback disables the plugin, removes bridge MCP registrations, removes the local USB forward and restores the recorded previous primary model. Phone data, apps, pairings, OAuth files and Telegram configuration remain unchanged.
 
 ## Completion gates
 
-- T1: official source and security/license review
-- T2: separate branch, static checks, no secret literals
-- T3: real Pi install, ADB + SSH + MCP probes, Android pairing
-- T4: existing Telegram bot round trip through OpenClaw with receipts
+- T1: official-source and design review
+- T2: separate branch, static checks, no secret literals, forced-command SSH
+- T3: real Pi/phone install and live backend probe
+- T4: existing Telegram bot round trip with `phone-codex-cli/gpt-5.6-sol`
 
 Code or PR existence is not T4 completion.
