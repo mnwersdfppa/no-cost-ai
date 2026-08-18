@@ -41,21 +41,21 @@ esac
 }
 
 MAX_PROMPT="${PHONE_CODEX_MAX_PROMPT:-12000}"
-PROMPT="$(python3 - "$MAX_PROMPT" <<'PY'
+if ! PROMPT="$(python3 -c '
 import sys
 limit=int(sys.argv[1])
 data=sys.stdin.read(limit+1)
 if not data:
+    print("prompt is empty", file=sys.stderr)
     raise SystemExit(2)
 if len(data)>limit:
+    print("prompt exceeds limit", file=sys.stderr)
     raise SystemExit(3)
 sys.stdout.write(data)
-PY
-)" || {
-  code=$?
+' "$MAX_PROMPT")"; then
   echo "PHONE_CODEX_BACKEND_ERROR: prompt missing or too long" >&2
-  exit $((60 + code))
-}
+  exit 62
+fi
 
 REQUEST="$(python3 - "$MODEL" "$PROMPT" <<'PY'
 import json,sys
