@@ -1,22 +1,29 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+readonly PRODUCTION_REPO="https://github.com/mnwersdfppa/no-cost-ai.git"
+readonly REVIEWED_PAYLOAD_COMMIT="9ad70a02a2ab2ab0d54cf5ec30396f010f1cbbb6"
 SRC="${PHONE_ABSORBER_SOURCE:-$HOME/.openclaw/source/phone-absorber}"
-REPO="${PHONE_ABSORBER_REPO:-https://github.com/mnwersdfppa/no-cost-ai.git}"
-COMMIT="${PHONE_ABSORBER_COMMIT:-}"
 ROOT="${OPENCLAW_PHONE_ROOT:-$HOME/.openclaw/phone-bridge}"
 
-if [[ ! "$COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
-  echo "BLOCKED=IMMUTABLE_PHONE_ABSORBER_COMMIT_REQUIRED"
-  echo "NEXT=set PHONE_ABSORBER_COMMIT to the reviewed 40-character Git commit"
+if [[ -n "${PHONE_ABSORBER_REPO:-}" && "$PHONE_ABSORBER_REPO" != "$PRODUCTION_REPO" ]]; then
+  echo "BLOCKED=PHONE_ABSORBER_REPOSITORY_OVERRIDE_DENIED"
+  echo "EXPECTED=$PRODUCTION_REPO"
   exit 11
 fi
+if [[ -n "${PHONE_ABSORBER_COMMIT:-}" && "$PHONE_ABSORBER_COMMIT" != "$REVIEWED_PAYLOAD_COMMIT" ]]; then
+  echo "BLOCKED=PHONE_ABSORBER_COMMIT_OVERRIDE_DENIED"
+  echo "EXPECTED=$REVIEWED_PAYLOAD_COMMIT"
+  exit 12
+fi
+readonly REPO="$PRODUCTION_REPO"
+readonly COMMIT="$REVIEWED_PAYLOAD_COMMIT"
 
 mkdir -p "$(dirname "$SRC")"
 if [[ -d "$SRC/.git" ]]; then
   if [[ -n "$(git -C "$SRC" status --porcelain --untracked-files=no)" ]]; then
     echo "BLOCKED=PHONE_ABSORBER_SOURCE_HAS_LOCAL_CHANGES"
-    exit 12
+    exit 13
   fi
   git -C "$SRC" remote set-url origin "$REPO"
 else
@@ -33,7 +40,7 @@ if [[ "$ACTUAL_COMMIT" != "$COMMIT" ]]; then
   echo "BLOCKED=PHONE_ABSORBER_COMMIT_VERIFICATION_FAILED"
   echo "EXPECTED=$COMMIT"
   echo "ACTUAL=$ACTUAL_COMMIT"
-  exit 13
+  exit 14
 fi
 
 cd "$SRC/android-node"
