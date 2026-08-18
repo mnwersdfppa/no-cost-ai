@@ -17,11 +17,31 @@ fi
 
 cd "$SRC/android-node"
 chmod 700 ./*.sh phone-codex-cli-backend/phone-codex-cli-backend.sh
-INSTALL_PACKAGES="${INSTALL_PACKAGES:-1}" ./install-pi-bridge.sh
 
-# Current OpenClaw does not allow --force together with --link. Ensure the
-# managed CLI backend is linked through the supported path even when an older
-# compatibility installer attempted that combination.
+set +e
+BRIDGE_OUTPUT="$(INSTALL_PACKAGES="${INSTALL_PACKAGES:-1}" ./install-pi-bridge.sh 2>&1)"
+BRIDGE_STATUS=$?
+set -e
+printf '%s\n' "$BRIDGE_OUTPUT"
+
+if [[ $BRIDGE_STATUS -ne 0 ]]; then
+  # An iPhone, an Android phone without USB debugging, or a phone reachable only
+  # over the network can still use the official OpenClaw mobile node. Do not
+  # weaken device security or attempt a jailbreak/root fallback.
+  if grep -qE 'BLOCKED=(NO_ANDROID_DEVICE|ADB_UNAUTHORIZED)' <<<"$BRIDGE_OUTPUT"; then
+    ./pair-openclaw-node.sh || true
+    printf '%s\n' \
+      'RESULT=OFFICIAL_MOBILE_NODE_PREPARED' \
+      'USB_RUNTIME=NOT_READY' \
+      'JAILBREAK_ROOT=NOT_REQUIRED' \
+      'NEXT=pair the official OpenClaw Android or iOS app with the printed setup code'
+    exit 0
+  fi
+  echo "RESULT=BLOCKED"
+  exit "$BRIDGE_STATUS"
+fi
+
+# Ensure the managed CLI backend is linked through the supported local path.
 if ! openclaw plugins inspect phone-codex-cli --runtime >/dev/null 2>&1; then
   openclaw plugins install -l "$ROOT/phone-codex-cli-backend"
 fi
