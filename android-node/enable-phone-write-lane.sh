@@ -7,6 +7,7 @@ MCP_SERVER="$MCP_DIR/server.mjs"
 
 command -v openclaw >/dev/null 2>&1 || { echo 'ERROR: openclaw is required' >&2; exit 1; }
 command -v adb >/dev/null 2>&1 || { echo 'ERROR: adb is required' >&2; exit 1; }
+command -v python3 >/dev/null 2>&1 || { echo 'ERROR: python3 is required' >&2; exit 1; }
 
 mapfile -t DEVICES < <(adb devices | awk 'NR>1 && $2=="device" {print $1}')
 [[ ${#DEVICES[@]} -eq 1 ]] || { echo "ERROR: expected exactly one authorized Android device; found ${#DEVICES[@]}" >&2; exit 1; }
@@ -21,8 +22,7 @@ print(json.dumps({
   "cwd": cwd,
   "env": {
     "ANDROID_SERIAL": serial,
-    "PHONE_WRITE_ENABLED": "1",
-    "PHONE_ALLOWED_PACKAGES": "ai.openclaw.app,com.termux,org.telegram.messenger,com.android.chrome"
+    "PHONE_WRITE_ENABLED": "1"
   },
   "enabled": True,
   "connectionTimeoutMs": 10000,
@@ -33,12 +33,8 @@ print(json.dumps({
       "phone_status",
       "phone_screenshot",
       "phone_ui_dump",
-      "phone_open_app",
-      "phone_launch_url",
-      "phone_key",
-      "phone_tap",
-      "phone_swipe",
-      "phone_type_text"
+      "phone_open_bridge_app",
+      "phone_key"
     ]
   },
   "codex": {"defaultToolsApprovalMode": "prompt"}
@@ -50,5 +46,6 @@ openclaw mcp set android-safe "$MCP_JSON"
 openclaw mcp doctor android-safe --probe
 openclaw mcp reload || true
 
-echo 'PHONE_WRITE_LANE=ENABLED_ALLOWLIST_ONLY'
-echo 'Arbitrary adb shell, installs, uninstalls, calls, purchases, account changes and security-setting changes remain unavailable.'
+echo 'PHONE_WRITE_LANE=ENABLED_TASK_SCOPED'
+echo 'Allowed writes: launch OpenClaw or Termux; HOME/BACK/WAKEUP/SLEEP only.'
+echo 'Generic URL, tap, swipe, free-text input, arbitrary shell, install/uninstall, calls, messages, purchases, account changes and security-setting changes remain unavailable.'
