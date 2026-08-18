@@ -47,7 +47,7 @@ jobs:
           grep -Fq 'features.web_search_request=false' android-node/phone-termux-bootstrap.sh
           grep -Fq 'features.apps=false' android-node/phone-termux-bootstrap.sh
           grep -Fq 'features.plugins=false' android-node/phone-termux-bootstrap.sh
-          grep -Fq 'approval_policy=\"never\"' android-node/phone-termux-bootstrap.sh
+          grep -Fq 'approval_policy="never"' android-node/phone-termux-bootstrap.sh || grep -Fq 'approval_policy="never"' <(sed 's/\\"/"/g' android-node/phone-termux-bootstrap.sh)
           grep -Fq 'BLOCKED=LIVE_LLM_TEST_REQUIRED_BEFORE_ENABLE' android-node/verify-phone-bridge.sh
           grep -Fq 'DENIED=COMMAND_NOT_ALLOWLISTED' android-node/phone-termux-bootstrap.sh
           ! grep -RInE --exclude='*.md' --exclude='package-lock.json' '(sk-proj-|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' android-node
