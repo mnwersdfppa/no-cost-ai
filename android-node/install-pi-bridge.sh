@@ -19,7 +19,6 @@ need=()
 for cmd in adb node npm ssh ssh-keygen python3 openclaw git; do
   command -v "$cmd" >/dev/null 2>&1 || need+=("$cmd")
 done
-
 if ((${#need[@]} > 0)) && [[ "$INSTALL_PACKAGES" == "1" ]] && command -v apt-get >/dev/null 2>&1; then
   sudo apt-get update -qq
   sudo apt-get install -y adb nodejs npm openssh-client python3 git
@@ -28,10 +27,9 @@ if ((${#need[@]} > 0)) && [[ "$INSTALL_PACKAGES" == "1" ]] && command -v apt-get
     command -v "$cmd" >/dev/null 2>&1 || need+=("$cmd")
   done
 fi
-
 if ((${#need[@]} > 0)); then
   printf 'BLOCKED=MISSING_COMMANDS:%s\n' "$(IFS=,; echo "${need[*]}")"
-  echo "NEXT=rerun with INSTALL_PACKAGES=1 or install the listed commands"
+  echo "NEXT=install the listed commands, then rerun"
   exit 20
 fi
 
@@ -55,7 +53,6 @@ if ((${#READY[@]} > 1)) && [[ -z "${ANDROID_SERIAL:-}" ]]; then
 fi
 SERIAL="${ANDROID_SERIAL:-${READY[0]}}"
 export ANDROID_SERIAL="$SERIAL"
-
 MODEL="$(adb -s "$SERIAL" shell getprop ro.product.model | tr -d '\r')"
 ANDROID_VERSION="$(adb -s "$SERIAL" shell getprop ro.build.version.release | tr -d '\r')"
 
@@ -64,8 +61,15 @@ if [[ ! -f "$SSH_KEY" ]]; then
 fi
 chmod 600 "$SSH_KEY"
 chmod 644 "$SSH_KEY.pub"
-: > "$SSH_KNOWN_HOSTS"
+touch "$SSH_KNOWN_HOSTS"
 chmod 600 "$SSH_KNOWN_HOSTS"
+
+# Preserve an operator-approved host fingerprint across reinstalls. Verification
+# refuses first use until the phone prints the same SHA256 fingerprint.
+PHONE_SSH_HOST_KEY_SHA256="${PHONE_SSH_HOST_KEY_SHA256:-}"
+if [[ -z "$PHONE_SSH_HOST_KEY_SHA256" && -r "$ENV_FILE" ]]; then
+  PHONE_SSH_HOST_KEY_SHA256="$(sed -n 's/^PHONE_SSH_HOST_KEY_SHA256=//p' "$ENV_FILE" | tail -n1)"
+fi
 
 adb -s "$SERIAL" push "$SSH_KEY.pub" /sdcard/Download/openclaw_pi.pub >/dev/null
 adb -s "$SERIAL" push "$SCRIPT_DIR/phone-termux-bootstrap.sh" /sdcard/Download/openclaw-phone-bootstrap.sh >/dev/null
@@ -79,12 +83,19 @@ for component in adb-mcp codex-phone-mcp phone-codex-cli-backend; do
   cp -a "$SCRIPT_DIR/$component" "$ROOT/$component"
 done
 
-for component in adb-mcp codex-phone-mcp; do
+for component in adb-mcp codex-phone-mcp phone-codex-cli-backend; do
+  if [[ ! -s "$ROOT/$component/package-lock.json" ]]; then
+    echo "BLOCKED=LOCKFILE_MISSING:$component"
+    echo "NEXT=use the reviewed PR head containing committed package-lock.json files"
+    exit 23
+  fi
   (
     cd "$ROOT/$component"
-    npm install --omit=dev --no-audit --no-fund
-    npm run check
+    npm ci --ignore-scripts --no-audit --no-fund
   )
+done
+for component in adb-mcp codex-phone-mcp; do
+  (cd "$ROOT/$component" && npm run check)
 done
 
 TERMUX_UID="$(adb -s "$SERIAL" shell dumpsys package com.termux 2>/dev/null | sed -n 's/.*userId=\([0-9][0-9]*\).*/\1/p' | head -n1 | tr -d '\r')"
@@ -95,13 +106,14 @@ fi
 
 cat > "$ENV_FILE" <<ENV
 ANDROID_SERIAL=$SERIAL
-PHONE_ALLOWED_PACKAGES=ai.openclaw.app,com.termux,org.telegram.messenger,com.android.chrome
 PHONE_SSH_HOST=127.0.0.1
 PHONE_SSH_PORT=8022
 PHONE_SSH_USER=$PHONE_SSH_USER
 PHONE_SSH_KEY=$SSH_KEY
 PHONE_SSH_KNOWN_HOSTS=$SSH_KNOWN_HOSTS
+PHONE_SSH_HOST_KEY_SHA256=$PHONE_SSH_HOST_KEY_SHA256
 PHONE_CODEX_MODEL=gpt-5.6-sol
+PHONE_CODEX_VERSION=0.146.0
 PHONE_CODEX_ENABLED=0
 PHONE_WRITE_ENABLED=0
 PHONE_CODEX_TIMEOUT_MS=240000
@@ -171,7 +183,7 @@ print(json.dumps({
   "enabled": False,
   "requestTimeoutMs": 30000,
   "connectionTimeoutMs": 10000,
-  "toolFilter": {"include": ["phone_open_app","phone_launch_url","phone_key","phone_tap","phone_swipe","phone_type_text"]},
+  "toolFilter": {"include": ["phone_open_bridge_app","phone_key"]},
   "codex": {"defaultToolsApprovalMode": "prompt"}
 }))
 PY
@@ -194,8 +206,6 @@ openclaw mcp set android-phone-actions "$(cat "$ROOT/mcp.android-phone-actions.j
 openclaw mcp set phone-codex "$(cat "$ROOT/mcp.phone-codex.json")"
 openclaw mcp doctor android-phone-status --probe
 openclaw mcp doctor android-phone-inspect --probe
-# Phone-side SSH/Codex does not exist until Stage 2, so validate configuration
-# now and defer the live probe to verify-phone-bridge.sh.
 openclaw mcp doctor phone-codex
 
 PLUGIN_STATUS="prepared"
@@ -219,15 +229,17 @@ cat > "$LOGS/install-receipt.json" <<JSON
   "android_version": "$ANDROID_VERSION",
   "termux_user_detected": "$PHONE_SSH_USER",
   "adb_forward": "127.0.0.1:8022 -> phone:8022",
+  "ssh_host_fingerprint": "$([[ -n "$PHONE_SSH_HOST_KEY_SHA256" ]] && echo operator_recorded || echo pending_operator_verification)",
   "mcp_status": "enabled",
   "mcp_inspect": "enabled_prompt",
-  "mcp_actions": "disabled_ready",
+  "mcp_actions": "disabled_task_scoped",
   "phone_codex_mcp": "registered_unprobed_until_stage_3",
   "phone_codex_cli_plugin": "$PLUGIN_STATUS",
   "phone_codex_enabled": false,
   "paid_api_fallback": "unchanged",
   "forced_command_ssh": true,
-  "secrets_embedded": false
+  "secrets_embedded": false,
+  "telegram_single_poller": "not_tested"
 }
 JSON
 chmod 600 "$LOGS/install-receipt.json"
@@ -249,5 +261,6 @@ fi
 printf 'RESULT=PI_BRIDGE_PREPARED\n'
 printf 'PHONE=%s Android=%s Serial=%s\n' "$MODEL" "$ANDROID_VERSION" "$SERIAL"
 printf 'CLI_PLUGIN=%s\n' "$PLUGIN_STATUS"
+printf 'HOST_KEY_PIN=%s\n' "$([[ -n "$PHONE_SSH_HOST_KEY_SHA256" ]] && echo RECORDED || echo REQUIRED)"
 printf 'NEXT_ON_PHONE=bash /sdcard/Download/openclaw-phone-bootstrap.sh\n'
-printf 'AFTER_PHONE=RUN_LLM_TEST=1 %s/verify-phone-bridge.sh\n' "$SCRIPT_DIR"
+printf 'AFTER_PHONE=record the printed PHONE_SSH_HOST_KEY_SHA256 in %s, then run RUN_LLM_TEST=1 %s/verify-phone-bridge.sh\n' "$ENV_FILE" "$SCRIPT_DIR"
