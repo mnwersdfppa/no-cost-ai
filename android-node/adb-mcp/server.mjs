@@ -8,13 +8,13 @@ const execFileAsync = promisify(execFile);
 const ADB = process.env.ADB_BIN || 'adb';
 const SERIAL = process.env.ANDROID_SERIAL || '';
 const WRITE_ENABLED = process.env.PHONE_WRITE_ENABLED === '1';
-const MAX_TEXT = 500;
-const allowedPackages = new Set(
-  (process.env.PHONE_ALLOWED_PACKAGES || 'ai.openclaw.app,com.termux,org.telegram.messenger,com.android.chrome')
-    .split(',')
-    .map((value) => value.trim())
-    .filter(Boolean),
-);
+
+// Production actions are task-specific. Telegram, browsers, arbitrary URLs,
+// coordinates and free-form text input are intentionally not exposed.
+const BRIDGE_APPS = Object.freeze({
+  openclaw: 'ai.openclaw.app',
+  termux: 'com.termux',
+});
 
 const READ_ONLY = Object.freeze({
   readOnlyHint: true,
@@ -27,18 +27,6 @@ const BOUNDED_WRITE = Object.freeze({
   destructiveHint: false,
   idempotentHint: false,
   openWorldHint: false,
-});
-const UI_WRITE = Object.freeze({
-  readOnlyHint: false,
-  destructiveHint: true,
-  idempotentHint: false,
-  openWorldHint: false,
-});
-const URL_WRITE = Object.freeze({
-  readOnlyHint: false,
-  destructiveHint: false,
-  idempotentHint: false,
-  openWorldHint: true,
 });
 
 function adbArgs(args) {
@@ -110,15 +98,9 @@ function requireWrite() {
   }
 }
 
-function assertCoordinate(value, name) {
-  if (!Number.isInteger(value) || value < 0 || value > 10000) {
-    throw new Error(`${name} must be an integer between 0 and 10000`);
-  }
-}
-
 const server = new McpServer({
   name: 'openclaw-android-adb-safe',
-  version: '1.1.0',
+  version: '1.2.0',
 });
 
 server.registerTool(
@@ -149,7 +131,7 @@ server.registerTool(
       battery: battery.stdout.trim(),
       resumedActivity: resumed || null,
       writeEnabled: WRITE_ENABLED,
-      allowedPackages: [...allowedPackages],
+      productionActions: ['phone_open_bridge_app', 'phone_key'],
     });
   }),
 );
@@ -191,18 +173,17 @@ server.registerTool(
 );
 
 server.registerTool(
-  'phone_open_app',
+  'phone_open_bridge_app',
   {
-    title: 'Open allowlisted Android app',
-    description: 'Launch an allowlisted package. Cannot install, uninstall, send, purchase or change settings.',
-    inputSchema: { packageName: z.string().min(3).max(200) },
+    title: 'Open an approved bridge app',
+    description: 'Launch only the official OpenClaw app or Termux. Telegram, browser, settings and arbitrary packages are denied.',
+    inputSchema: { app: z.enum(['openclaw', 'termux']) },
     annotations: BOUNDED_WRITE,
   },
-  guarded(async ({ packageName }) => {
+  guarded(async ({ app }) => {
     requireWrite();
-    if (!allowedPackages.has(packageName)) {
-      throw new Error(`Package is not allowlisted: ${packageName}`);
-    }
+    const packageName = BRIDGE_APPS[app];
+    if (!packageName) throw new Error(`Unsupported bridge app: ${app}`);
     const { stdout, stderr } = await runAdb([
       'shell',
       'monkey',
@@ -212,41 +193,15 @@ server.registerTool(
       'android.intent.category.LAUNCHER',
       '1',
     ]);
-    return textResult({ packageName, stdout: stdout.trim(), stderr: stderr.trim() });
-  }),
-);
-
-server.registerTool(
-  'phone_launch_url',
-  {
-    title: 'Open HTTPS URL on Android',
-    description: 'Open an HTTPS URL in the phone browser. Other URI schemes are denied.',
-    inputSchema: { url: z.string().url().max(2000) },
-    annotations: URL_WRITE,
-  },
-  guarded(async ({ url }) => {
-    requireWrite();
-    const parsed = new URL(url);
-    if (parsed.protocol !== 'https:') throw new Error('Only https:// URLs are allowed');
-    const { stdout } = await runAdb([
-      'shell',
-      'am',
-      'start',
-      '-W',
-      '-a',
-      'android.intent.action.VIEW',
-      '-d',
-      url,
-    ]);
-    return textResult(stdout.trim());
+    return textResult({ app, packageName, stdout: stdout.trim(), stderr: stderr.trim() });
   }),
 );
 
 server.registerTool(
   'phone_key',
   {
-    title: 'Send safe Android key',
-    description: 'Send HOME, BACK, WAKEUP or SLEEP. All other key events are denied.',
+    title: 'Send a bounded Android navigation key',
+    description: 'Send only HOME, BACK, WAKEUP or SLEEP. All other key events are denied.',
     inputSchema: { key: z.enum(['HOME', 'BACK', 'WAKEUP', 'SLEEP']) },
     annotations: BOUNDED_WRITE,
   },
@@ -254,73 +209,6 @@ server.registerTool(
     requireWrite();
     await runAdb(['shell', 'input', 'keyevent', `KEYCODE_${key}`]);
     return textResult({ ok: true, key });
-  }),
-);
-
-server.registerTool(
-  'phone_tap',
-  {
-    title: 'Tap Android screen',
-    description: 'Tap one bounded coordinate. This can activate UI controls and requires approval.',
-    inputSchema: { x: z.number().int(), y: z.number().int() },
-    annotations: UI_WRITE,
-  },
-  guarded(async ({ x, y }) => {
-    requireWrite();
-    assertCoordinate(x, 'x');
-    assertCoordinate(y, 'y');
-    await runAdb(['shell', 'input', 'tap', String(x), String(y)]);
-    return textResult({ ok: true, x, y });
-  }),
-);
-
-server.registerTool(
-  'phone_swipe',
-  {
-    title: 'Swipe Android screen',
-    description: 'Swipe between bounded coordinates. This changes UI state and requires approval.',
-    inputSchema: {
-      x1: z.number().int(),
-      y1: z.number().int(),
-      x2: z.number().int(),
-      y2: z.number().int(),
-      durationMs: z.number().int().min(50).max(3000).default(300),
-    },
-    annotations: UI_WRITE,
-  },
-  guarded(async ({ x1, y1, x2, y2, durationMs }) => {
-    requireWrite();
-    for (const [name, value] of Object.entries({ x1, y1, x2, y2 })) assertCoordinate(value, name);
-    await runAdb([
-      'shell',
-      'input',
-      'swipe',
-      String(x1),
-      String(y1),
-      String(x2),
-      String(y2),
-      String(durationMs),
-    ]);
-    return textResult({ ok: true, x1, y1, x2, y2, durationMs });
-  }),
-);
-
-server.registerTool(
-  'phone_type_text',
-  {
-    title: 'Type restricted ASCII text on Android',
-    description: 'Type short restricted ASCII into the focused field. Newlines, Unicode and shell metacharacters are denied.',
-    inputSchema: { text: z.string().min(1).max(MAX_TEXT) },
-    annotations: UI_WRITE,
-  },
-  guarded(async ({ text }) => {
-    requireWrite();
-    if (!/^[A-Za-z0-9 .,!?_@:/+\-=()]+$/.test(text)) {
-      throw new Error('Text contains unsupported characters; only restricted ASCII is allowed');
-    }
-    const encoded = text.replaceAll('%', '%25').replaceAll(' ', '%s');
-    await runAdb(['shell', 'input', 'text', encoded]);
-    return textResult({ ok: true, length: text.length });
   }),
 );
 
