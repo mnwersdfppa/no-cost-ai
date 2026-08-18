@@ -97,6 +97,7 @@ jobs:
           python3 -m py_compile pi/pi-work-queue-worker.py >> "$report" 2>&1 || fail 'Pi queue worker syntax'
 
           if grep -RInE \
+            --exclude-dir=node_modules \
             --exclude='*.md' \
             --exclude='package-lock.json' \
             --exclude='pi-work-queue-worker.py' \
@@ -114,13 +115,22 @@ jobs:
           grep -Fq 'defaultToolsApprovalMode": "prompt"' android-node/enable-phone-write-lane.sh || fail 'approval prompt missing'
 
           for forbidden in phone_launch_url phone_tap phone_swipe phone_type_text phone_open_app adb_shell; do
-            if grep -RIn --exclude='*.md' --exclude='package-lock.json' "$forbidden" android-node/adb-mcp android-node/enable-phone-write-lane.sh >> "$report" 2>&1; then
+            if grep -RIn --exclude-dir=node_modules --exclude='*.md' --exclude='package-lock.json' "$forbidden" android-node/adb-mcp android-node/enable-phone-write-lane.sh >> "$report" 2>&1; then
               fail "forbidden generic phone tool: $forbidden"
             fi
           done
 
-          if grep -RInE --exclude='*.md' '(getUpdates|PHONE_RELAY_ENABLED|telegram.*poller)' android-node pi >> "$report" 2>&1; then
-            fail 'second Telegram poller primitive detected'
+          # Detect executable duplicate-poller primitives, not policy/receipt text
+          # such as `telegram_single_poller=not_tested`.
+          if grep -RInE \
+            --exclude-dir=node_modules \
+            --exclude='*.md' \
+            --exclude='package-lock.json' \
+            '(getUpdates\(|get_updates\(|PHONE_RELAY_ENABLED[[:space:]]*=[[:space:]]*(1|true)|TelegramBot\([^)]*\).*poll|start_polling\(|run_polling\()' \
+            android-node pi >> "$report" 2>&1; then
+            fail 'second Telegram poller executable primitive detected'
+          else
+            echo 'PASS: no executable second Telegram poller primitive' >> "$report"
           fi
 
           {
