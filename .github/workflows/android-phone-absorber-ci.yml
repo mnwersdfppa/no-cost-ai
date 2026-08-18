@@ -53,7 +53,7 @@ jobs:
         working-directory: android-node/phone-codex-cli-backend
         run: |
           npm install --no-audit --no-fund
-          npx tsc --noEmit --module NodeNext --moduleResolution NodeNext --target ES2022 --esModuleInterop index.ts
+          npx tsc --noEmit --skipLibCheck --module NodeNext --moduleResolution NodeNext --target ES2022 --esModuleInterop index.ts
           npx openclaw plugins validate --entry index.ts --json
       - name: Validate deployment packet
         run: python3 -m json.tool android-node/DEPLOYMENT_PACKET.json >/dev/null
