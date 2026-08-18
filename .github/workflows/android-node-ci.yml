@@ -1,0 +1,49 @@
+name: Android node safety checks
+
+on:
+  pull_request:
+    paths:
+      - 'android-node/**'
+      - '.github/workflows/android-node-ci.yml'
+  push:
+    branches:
+      - feat/openclaw-android-node-absorber
+    paths:
+      - 'android-node/**'
+      - '.github/workflows/android-node-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install MCP dependencies without lifecycle scripts
+        working-directory: android-node/adb-mcp
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Validate JavaScript syntax
+        run: node --check android-node/adb-mcp/server.mjs
+      - name: Validate shell syntax
+        run: |
+          bash -n android-node/install-pi-android-node.sh
+          bash -n android-node/enable-phone-write-lane.sh
+          bash -n android-node/disable-phone-write-lane.sh
+      - name: Check for committed secret patterns
+        run: |
+          if grep -RInE '(sk-proj-|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-|AKIA[0-9A-Z]{16})' android-node; then
+            echo 'Potential secret detected' >&2
+            exit 1
+          fi
+      - name: Verify write-gate and tool denylist invariants
+        run: |
+          grep -q "PHONE_WRITE_ENABLED === '1'" android-node/adb-mcp/server.mjs
+          grep -q 'Only https:// URLs are allowed' android-node/adb-mcp/server.mjs
+          ! grep -q "registerTool(.*adb_shell" android-node/adb-mcp/server.mjs
+          ! grep -q "child_process.*exec(" android-node/adb-mcp/server.mjs
