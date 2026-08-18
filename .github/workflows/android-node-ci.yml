@@ -4,12 +4,14 @@ on:
   pull_request:
     paths:
       - 'android-node/**'
+      - 'pi/**'
       - '.github/workflows/android-node-ci.yml'
   push:
     branches:
       - feat/openclaw-android-node-absorber
     paths:
       - 'android-node/**'
+      - 'pi/**'
       - '.github/workflows/android-node-ci.yml'
   workflow_dispatch:
 
@@ -28,16 +30,26 @@ jobs:
       - name: Install MCP dependencies without lifecycle scripts
         working-directory: android-node/adb-mcp
         run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Validate JavaScript syntax
-        run: node --check android-node/adb-mcp/server.mjs
-      - name: Validate shell syntax
+      - name: Validate JavaScript and Python syntax
         run: |
-          bash -n android-node/install-pi-android-node.sh
-          bash -n android-node/enable-phone-write-lane.sh
-          bash -n android-node/disable-phone-write-lane.sh
+          node --check android-node/adb-mcp/server.mjs
+          python3 -m py_compile pi/pi-work-queue-worker.py
+      - name: Validate shell syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          for script in \
+            android-node/install-pi-android-node.sh \
+            android-node/enable-phone-write-lane.sh \
+            android-node/disable-phone-write-lane.sh \
+            pi/install-work-queue-timer.sh \
+            pi/install-maton-readonly-oauth.sh \
+            pi/remove-maton-readonly-oauth.sh; do
+            bash -n "$script"
+          done
       - name: Check for committed secret patterns
         run: |
-          if grep -RInE --exclude='package-lock.json' '(sk-proj-|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-|AKIA[0-9A-Z]{16}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' android-node; then
+          if grep -RInE --exclude='package-lock.json' '(sk-proj-|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-|AKIA[0-9A-Z]{16}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' android-node pi; then
             echo 'Potential secret detected' >&2
             exit 1
           fi
@@ -57,3 +69,17 @@ jobs:
             fi
           done
           ! grep -Eq "child_process.*exec\(" android-node/adb-mcp/server.mjs
+      - name: Verify Maton OAuth is discovery-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          file=pi/install-maton-readonly-oauth.sh
+          grep -Fq 'https://mcp.maton.ai' "$file"
+          grep -Fq '"auth": "oauth"' "$file"
+          for tool in whoami list_connections get_connection search_apps search_actions get_action; do
+            grep -Fq "\"$tool\"" "$file"
+          done
+          for denied in create_connection delete_connection run_action api; do
+            grep -Fq "\"$denied\"" "$file"
+          done
+          ! grep -Fq '@maton/mcp --api-key' "$file"
