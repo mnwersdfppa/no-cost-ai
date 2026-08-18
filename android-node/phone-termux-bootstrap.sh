@@ -1,12 +1,23 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -euo pipefail
 
+if [[ "${OPENCLAW_SECURE_WRAPPER:-0}" != "1" ]]; then
+  echo "BLOCKED=LEGACY_PHONE_CORE_INTERNAL_ONLY"
+  echo "NEXT=use /sdcard/Download/openclaw-phone-bootstrap.sh"
+  exit 90
+fi
+
 STATE="$HOME/.openclaw-phone"
 BIN="$HOME/.local/bin"
 PUB_CANDIDATE_1="$HOME/storage/downloads/openclaw_pi.pub"
 PUB_CANDIDATE_2="/sdcard/Download/openclaw_pi.pub"
-INSTALL_CODEX="${INSTALL_CODEX:-1}"
+INSTALL_CODEX="${INSTALL_CODEX:-0}"
 CODEX_VERSION="${PHONE_CODEX_VERSION:-0.146.0}"
+
+if [[ "$INSTALL_CODEX" != "0" ]]; then
+  echo "BLOCKED=VERIFIED_CODEX_INSTALLER_REQUIRED"
+  exit 91
+fi
 
 mkdir -p "$STATE/codex-home" "$STATE/work" "$BIN" "$HOME/.ssh" "$HOME/.termux/boot"
 chmod 700 "$STATE" "$STATE/codex-home" "$STATE/work" "$BIN" "$HOME/.ssh" "$HOME/.termux/boot"
@@ -24,26 +35,13 @@ installed_codex_version() {
   codex --version 2>/dev/null | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true
 }
 
-CURRENT_CODEX_VERSION=""
-if command -v codex >/dev/null 2>&1; then
-  CURRENT_CODEX_VERSION="$(installed_codex_version)"
-fi
+command -v codex >/dev/null 2>&1 || { echo "BLOCKED=VERIFIED_CODEX_CLI_MISSING"; exit 92; }
+CURRENT_CODEX_VERSION="$(installed_codex_version)"
 if [[ "$CURRENT_CODEX_VERSION" != "$CODEX_VERSION" ]]; then
-  if [[ "$INSTALL_CODEX" != "1" ]]; then
-    echo "BLOCKED=OFFICIAL_CODEX_VERSION_MISMATCH"
-    echo "REQUIRED=$CODEX_VERSION"
-    echo "FOUND=${CURRENT_CODEX_VERSION:-missing}"
-    exit 4
-  fi
-  echo "INSTALLING=OFFICIAL_CODEX_CLI@$CODEX_VERSION"
-  npm install -g "@openai/codex@$CODEX_VERSION"
-  CURRENT_CODEX_VERSION="$(installed_codex_version)"
-fi
-if [[ "$CURRENT_CODEX_VERSION" != "$CODEX_VERSION" ]]; then
-  echo "BLOCKED=OFFICIAL_CODEX_VERSION_NOT_VERIFIED"
+  echo "BLOCKED=OFFICIAL_CODEX_VERSION_MISMATCH"
   echo "REQUIRED=$CODEX_VERSION"
   echo "FOUND=${CURRENT_CODEX_VERSION:-missing}"
-  exit 5
+  exit 93
 fi
 
 cat > "$BIN/openclaw-phone-codex-run" <<'PY'
@@ -210,9 +208,6 @@ if stderr:
 if proc.returncode != 0:
     sys.exit(proc.returncode)
 
-# This is a postcondition/telemetry gate, not the primary execution boundary.
-# The primary boundary is the exact CLI allowlist plus strict config, disabled
-# tool surfaces, never approval policy, isolated workdir and read-only sandbox.
 fatal = False
 unknown = []
 for line in stdout.splitlines():
@@ -271,23 +266,20 @@ for candidate in "$PUB_CANDIDATE_1" "$PUB_CANDIDATE_2"; do
     break
   fi
 done
-if [[ -n "$PUB" ]]; then
-  touch "$HOME/.ssh/authorized_keys"
-  chmod 600 "$HOME/.ssh/authorized_keys"
-  key_line="$(tr -d '\r\n' < "$PUB")"
-  if [[ "$key_line" != ssh-ed25519\ * ]]; then
-    echo "BLOCKED=INVALID_PI_PUBLIC_KEY"
-    exit 3
-  fi
-  tmp="$HOME/.ssh/authorized_keys.tmp"
-  grep -v 'openclaw-pi-phone-bridge' "$HOME/.ssh/authorized_keys" > "$tmp" || true
-  printf 'restrict,command="$HOME/.local/bin/openclaw-phone-ssh-dispatch" %s\n' "$key_line" >> "$tmp"
-  mv "$tmp" "$HOME/.ssh/authorized_keys"
-  chmod 600 "$HOME/.ssh/authorized_keys"
-else
-  echo "BLOCKED=PI_PUBLIC_KEY_NOT_FOUND"
-  echo "EXPECTED=$PUB_CANDIDATE_1"
+[[ -n "$PUB" ]] || { echo "BLOCKED=PI_PUBLIC_KEY_NOT_FOUND"; exit 94; }
+
+touch "$HOME/.ssh/authorized_keys"
+chmod 600 "$HOME/.ssh/authorized_keys"
+key_line="$(tr -d '\r\n' < "$PUB")"
+if [[ "$key_line" != ssh-ed25519\ * ]]; then
+  echo "BLOCKED=INVALID_PI_PUBLIC_KEY"
+  exit 95
 fi
+tmp="$HOME/.ssh/authorized_keys.tmp"
+grep -v 'openclaw-pi-phone-bridge' "$HOME/.ssh/authorized_keys" > "$tmp" || true
+printf 'restrict,command="$HOME/.local/bin/openclaw-phone-ssh-dispatch" %s\n' "$key_line" >> "$tmp"
+mv "$tmp" "$HOME/.ssh/authorized_keys"
+chmod 600 "$HOME/.ssh/authorized_keys"
 
 cat > "$HOME/.termux/boot/openclaw-phone-bridge" <<'BOOT'
 #!/data/data/com.termux/files/usr/bin/bash
@@ -311,7 +303,7 @@ if [[ -r "$PREFIX/etc/ssh/ssh_host_ed25519_key.pub" ]]; then
   printf 'PHONE_SSH_HOST_KEY_SHA256=%s\n' "$(ssh-keygen -lf "$PREFIX/etc/ssh/ssh_host_ed25519_key.pub" -E sha256 | awk '{print $2}')"
 else
   echo "BLOCKED=SSH_ED25519_HOST_KEY_MISSING"
-  exit 6
+  exit 96
 fi
 codex login status || true
 if codex exec --help 2>&1 | grep -q -- '--strict-config' \
@@ -323,7 +315,7 @@ if codex exec --help 2>&1 | grep -q -- '--strict-config' \
   echo "CODEX_SAFETY_FLAGS=READY"
 else
   echo "BLOCKED=CODEX_REQUIRED_SAFETY_FLAGS_MISSING"
-  exit 7
+  exit 97
 fi
 echo "NEXT_IF_NOT_LOGGED_IN=codex login --device-auth"
 echo "RESULT=PHONE_BOOTSTRAP_READY"
