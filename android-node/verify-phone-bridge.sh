@@ -16,6 +16,10 @@ restart_gateway() {
   fi
 }
 
+if [[ "$ENABLE_AFTER_VERIFY" == "1" && "$RUN_LLM_TEST" != "1" ]]; then
+  echo "BLOCKED=LIVE_LLM_TEST_REQUIRED_BEFORE_ENABLE"
+  exit 29
+fi
 if [[ ! -r "$ENV_FILE" ]]; then
   echo "BLOCKED=PHONE_BRIDGE_ENV_MISSING"
   exit 30
@@ -83,11 +87,46 @@ if ! grep -Eqi 'Logged in using ChatGPT|chatgpt|authenticated|login.*ok|successf
   exit 37
 fi
 
+parse_phone_final() {
+  python3 -c '
+import json,sys
+raw=sys.stdin.read()
+final=""
+fatal=""
+plain=[]
+for source in raw.splitlines():
+    line=source.strip()
+    if not line:
+        continue
+    try:
+        event=json.loads(line)
+    except Exception:
+        plain.append(line)
+        continue
+    typ=str(event.get("type", ""))
+    if typ in {"error", "turn.failed"}:
+        fatal=event.get("message") or (event.get("error") or {}).get("message") or line
+    item=event.get("item")
+    if not isinstance(item,dict) and isinstance(event.get("data"),dict):
+        item=event["data"].get("item")
+    if isinstance(item,dict) and item.get("type")=="agent_message" and isinstance(item.get("text"),str):
+        final=item["text"]
+    if typ=="turn.completed" and isinstance(event.get("final_output"),str):
+        final=event["final_output"]
+if fatal:
+    raise SystemExit(70)
+if not final and plain:
+    final=plain[-1]
+sys.stdout.write(final.strip())
+'
+}
+
 LLM_RESULT="not_run"
 if [[ "$RUN_LLM_TEST" == "1" ]]; then
   REQUEST='{"version":1,"model":"gpt-5.6-sol","prompt":"Reply exactly PHONE_CODEX_OK and nothing else."}'
   LLM_OUTPUT="$(printf '%s\n' "$REQUEST" | "${SSH[@]}" phone-codex-run 2>&1 || true)"
-  if grep -q 'PHONE_CODEX_OK' <<<"$LLM_OUTPUT"; then
+  LLM_FINAL="$(printf '%s' "$LLM_OUTPUT" | parse_phone_final 2>/dev/null || true)"
+  if [[ "$LLM_FINAL" == "PHONE_CODEX_OK" ]]; then
     LLM_RESULT="pass"
   else
     LLM_RESULT="fail"
@@ -112,6 +151,8 @@ openclaw gateway call node.list --params '{}' || true
 
 PLUGIN_RESULT="not_supported"
 BACKEND_TEST="not_run"
+BACKEND_PROVIDER=""
+BACKEND_MODEL=""
 if openclaw plugins --help >/dev/null 2>&1; then
   if ! openclaw plugins inspect phone-codex-cli --runtime >/dev/null 2>&1; then
     openclaw plugins install -l "$ROOT/phone-codex-cli-backend" || true
@@ -121,10 +162,39 @@ if openclaw plugins --help >/dev/null 2>&1; then
     PLUGIN_RESULT="ready"
     restart_gateway
     set +e
-    BACKEND_OUTPUT="$(openclaw agent --agent main --message 'Reply exactly PHONE_BACKEND_OK and nothing else.' --model phone-codex-cli/gpt-5.6-sol 2>&1)"
+    BACKEND_OUTPUT="$(openclaw agent --agent main --message 'Reply exactly PHONE_BACKEND_OK and nothing else.' --model phone-codex-cli/gpt-5.6-sol --json 2>&1)"
     BACKEND_STATUS=$?
     set -e
-    if [[ $BACKEND_STATUS -eq 0 ]] && grep -q 'PHONE_BACKEND_OK' <<<"$BACKEND_OUTPUT"; then
+    BACKEND_CHECK="$(printf '%s' "$BACKEND_OUTPUT" | python3 -c '
+import json,sys
+raw=sys.stdin.read()
+try:
+    data=json.loads(raw)
+except Exception:
+    raise SystemExit(2)
+status=data.get("status")
+meta=data.get("meta") if isinstance(data.get("meta"),dict) else {}
+agent=meta.get("agentMeta") if isinstance(meta.get("agentMeta"),dict) else {}
+provider=data.get("provider") or agent.get("provider") or ""
+model=data.get("model") or agent.get("model") or ""
+texts=[]
+if isinstance(data.get("final"),str): texts.append(data["final"])
+for payload in data.get("payloads") or []:
+    if isinstance(payload,dict) and isinstance(payload.get("text"),str): texts.append(payload["text"])
+result=data.get("result") if isinstance(data.get("result"),dict) else {}
+for payload in result.get("payloads") or []:
+    if isinstance(payload,dict) and isinstance(payload.get("text"),str): texts.append(payload["text"])
+final=(texts[-1].strip() if texts else "")
+print(json.dumps({"ok":status in (None,"ok") and final=="PHONE_BACKEND_OK", "provider":provider, "model":model}))
+' 2>/dev/null || true)"
+    if [[ $BACKEND_STATUS -eq 0 && -n "$BACKEND_CHECK" ]]; then
+      BACKEND_PROVIDER="$(printf '%s' "$BACKEND_CHECK" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("provider",""))' 2>/dev/null || true)"
+      BACKEND_MODEL="$(printf '%s' "$BACKEND_CHECK" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("model",""))' 2>/dev/null || true)"
+      BACKEND_OK="$(printf '%s' "$BACKEND_CHECK" | python3 -c 'import json,sys; print("1" if json.load(sys.stdin).get("ok") else "0")' 2>/dev/null || echo 0)"
+    else
+      BACKEND_OK=0
+    fi
+    if [[ "$BACKEND_OK" == "1" && "$BACKEND_PROVIDER" == "phone-codex-cli" ]]; then
       BACKEND_TEST="pass"
     else
       BACKEND_TEST="fail"
@@ -163,6 +233,8 @@ cat > "$ROOT/logs/verify-receipt.json" <<JSON
   "direct_llm_test": "$LLM_RESULT",
   "cli_plugin": "$PLUGIN_RESULT",
   "cli_backend_test": "$BACKEND_TEST",
+  "backend_provider": "$BACKEND_PROVIDER",
+  "backend_model": "$BACKEND_MODEL",
   "primary_model": "$PRIMARY_RESULT",
   "phone_codex_enabled": "$ENABLE_AFTER_VERIFY",
   "mcp_actions_enabled": false,
@@ -181,5 +253,7 @@ echo "PHONE_CODEX=$([[ "$ENABLE_AFTER_VERIFY" == "1" ]] && echo ENABLED || echo 
 echo "DIRECT_LLM_TEST=$LLM_RESULT"
 echo "CLI_PLUGIN=$PLUGIN_RESULT"
 echo "CLI_BACKEND_TEST=$BACKEND_TEST"
+echo "BACKEND_PROVIDER=$BACKEND_PROVIDER"
+echo "BACKEND_MODEL=$BACKEND_MODEL"
 echo "PRIMARY_MODEL=$PRIMARY_RESULT"
 echo "TELEGRAM_TEST=send a normal message to the existing OpenClaw bot; do not create another poller"
