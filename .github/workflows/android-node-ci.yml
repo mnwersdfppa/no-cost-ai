@@ -48,7 +48,8 @@ jobs:
             pi/install-maton-readonly-oauth.sh \
             pi/remove-maton-readonly-oauth.sh \
             pi/check-make-readonly.sh \
-            pi/check-n8n-readonly.sh; do
+            pi/check-n8n-readonly.sh \
+            pi/bootstrap-mobile-automation-safe.sh; do
             bash -n "$script"
           done
       - name: Check for committed secret patterns
@@ -133,3 +134,13 @@ jobs:
           grep -Fq 'http://127.0.0.1:5678' "$file"
           ! grep -Eq '(curl[^\n]*-[XP][[:space:]]*(POST|PATCH|PUT|DELETE)|/api/v1/workflows/[^? ]+|/audit)' "$file"
           ! grep -Eq '(echo|printf).*(N8N_API_KEY|N8N_OWNER_API_KEY|N8N_TOKEN)' "$file"
+      - name: Verify master bootstrap keeps high-risk lanes off
+        shell: bash
+        run: |
+          set -euo pipefail
+          file=pi/bootstrap-mobile-automation-safe.sh
+          grep -Fq 'ROOT_JAILBREAK=OFF' "$file"
+          grep -Fq 'PAID_OPENAI_AUTOMATIC_FALLBACK=OFF' "$file"
+          grep -Fq 'SECOND_TELEGRAM_POLLER=OFF' "$file"
+          grep -Fq 'ENABLE_QUEUE_TIMER="${ENABLE_QUEUE_TIMER:-0}"' "$file"
+          ! grep -Eq '(enable-phone-write-lane|openclaw[[:space:]]+gateway[[:space:]]+restart|git[[:space:]]+push|gh[[:space:]]+pr[[:space:]]+merge|sudo[[:space:]])' "$file"
