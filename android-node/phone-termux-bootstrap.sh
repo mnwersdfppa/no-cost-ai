@@ -20,26 +20,6 @@ if [[ ! -e "$HOME/storage/downloads" ]] && command -v termux-setup-storage >/dev
   sleep 2
 fi
 
-PUB=""
-for candidate in "$PUB_CANDIDATE_1" "$PUB_CANDIDATE_2"; do
-  if [[ -r "$candidate" ]]; then
-    PUB="$candidate"
-    break
-  fi
-done
-
-if [[ -n "$PUB" ]]; then
-  touch "$HOME/.ssh/authorized_keys"
-  chmod 600 "$HOME/.ssh/authorized_keys"
-  key_line="$(tr -d '\r\n' < "$PUB")"
-  if [[ "$key_line" == ssh-ed25519\ * ]] && ! grep -Fqx "$key_line" "$HOME/.ssh/authorized_keys"; then
-    printf '%s\n' "$key_line" >> "$HOME/.ssh/authorized_keys"
-  fi
-else
-  echo "BLOCKED=PI_PUBLIC_KEY_NOT_FOUND"
-  echo "EXPECTED=$PUB_CANDIDATE_1"
-fi
-
 cat > "$BIN/openclaw-phone-codex-run" <<'PY'
 #!/data/data/com.termux/files/usr/bin/python
 import json
@@ -124,6 +104,8 @@ instruction = (
     "Return only the useful final answer.\n\nUSER REQUEST:\n" + prompt
 )
 env = os.environ.copy()
+for name in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_ORG_ID", "OPENAI_PROJECT_ID"):
+    env.pop(name, None)
 env["CODEX_HOME"] = str(codex_home)
 
 proc = subprocess.Popen(
@@ -163,6 +145,54 @@ if fatal:
 PY
 chmod 700 "$BIN/openclaw-phone-codex-run"
 
+cat > "$BIN/openclaw-phone-ssh-dispatch" <<'SH'
+#!/data/data/com.termux/files/usr/bin/bash
+set -euo pipefail
+case "${SSH_ORIGINAL_COMMAND:-}" in
+  phone-status)
+    printf 'user=%s\n' "$(id -un)"
+    command -v codex || true
+    codex --version 2>/dev/null || true
+    codex login status 2>/dev/null || true
+    [[ -x "$HOME/.local/bin/openclaw-phone-codex-run" ]] && echo runner=ready || echo runner=missing
+    ;;
+  phone-codex-run)
+    exec "$HOME/.local/bin/openclaw-phone-codex-run"
+    ;;
+  *)
+    echo "DENIED=COMMAND_NOT_ALLOWLISTED" >&2
+    exit 126
+    ;;
+esac
+SH
+chmod 700 "$BIN/openclaw-phone-ssh-dispatch"
+
+PUB=""
+for candidate in "$PUB_CANDIDATE_1" "$PUB_CANDIDATE_2"; do
+  if [[ -r "$candidate" ]]; then
+    PUB="$candidate"
+    break
+  fi
+done
+
+if [[ -n "$PUB" ]]; then
+  touch "$HOME/.ssh/authorized_keys"
+  chmod 600 "$HOME/.ssh/authorized_keys"
+  key_line="$(tr -d '\r\n' < "$PUB")"
+  if [[ "$key_line" != ssh-ed25519\ * ]]; then
+    echo "BLOCKED=INVALID_PI_PUBLIC_KEY"
+    exit 3
+  fi
+  tmp="$HOME/.ssh/authorized_keys.tmp"
+  grep -v 'openclaw-pi-phone-bridge' "$HOME/.ssh/authorized_keys" > "$tmp" || true
+  printf 'restrict,command="$HOME/.local/bin/openclaw-phone-ssh-dispatch" %s\n' "$key_line" >> "$tmp"
+  mv "$tmp" "$HOME/.ssh/authorized_keys"
+  chmod 600 "$HOME/.ssh/authorized_keys"
+else
+  echo "BLOCKED=PI_PUBLIC_KEY_NOT_FOUND"
+  echo "EXPECTED=$PUB_CANDIDATE_1"
+fi
+
 if [[ "$INSTALL_CODEX" == "1" ]] && ! command -v codex >/dev/null 2>&1; then
   echo "INSTALLING=OFFICIAL_CODEX_CLI"
   npm install -g @openai/codex || true
@@ -184,6 +214,7 @@ fi
 
 printf 'TERMUX_USER=%s\n' "$(id -un)"
 printf 'SSHD_PORT=8022\n'
+printf 'SSH_POLICY=FORCED_COMMAND_ALLOWLIST\n'
 if command -v codex >/dev/null 2>&1; then
   codex --version || true
   codex login status || true
