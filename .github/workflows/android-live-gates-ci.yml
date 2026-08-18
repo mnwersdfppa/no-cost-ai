@@ -1,0 +1,115 @@
+name: Android immutable live-gate checks
+
+on:
+  pull_request:
+    paths:
+      - 'android-node/**'
+      - '.github/workflows/android-live-gates-ci.yml'
+  push:
+    branches:
+      - feat/openclaw-android-node-absorber
+    paths:
+      - 'android-node/**'
+      - '.github/workflows/android-live-gates-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Validate secure wrapper syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in \
+            android-node/bootstrap-all.sh \
+            android-node/install-pi-bridge-secure.sh \
+            android-node/install-verified-codex-termux.sh \
+            android-node/phone-termux-bootstrap-secure.sh \
+            android-node/phone-termux-bootstrap.sh \
+            android-node/provision-phone-host-key-secure.sh \
+            android-node/verify-phone-bridge-secure.sh \
+            android-node/verify-phone-bridge.sh \
+            android-node/rollback-pi-phone-absorber-secure.sh \
+            android-node/rollback-pi-phone-absorber.sh; do
+            bash -n "$file"
+          done
+
+      - name: Verify immutable bootstrap and reviewed Codex package
+        shell: bash
+        run: |
+          set -euo pipefail
+          bootstrap=android-node/bootstrap-all.sh
+          readme=android-node/README.md
+          installer=android-node/install-verified-codex-termux.sh
+          grep -Fq 'readonly PRODUCTION_REPO="https://github.com/mnwersdfppa/no-cost-ai.git"' "$bootstrap"
+          grep -Fq 'readonly REVIEWED_PAYLOAD_COMMIT="9ad70a02a2ab2ab0d54cf5ec30396f010f1cbbb6"' "$bootstrap"
+          grep -Fq 'PHONE_ABSORBER_REPOSITORY_OVERRIDE_DENIED' "$bootstrap"
+          grep -Fq 'PHONE_ABSORBER_COMMIT_OVERRIDE_DENIED' "$bootstrap"
+          grep -Fq 'checkout --quiet --detach --force FETCH_HEAD' "$bootstrap"
+          grep -Fq 'install-pi-bridge-secure.sh' "$bootstrap"
+          grep -Fq 'verify-phone-bridge-secure.sh' "$bootstrap"
+          ! grep -Eq '(PHONE_ABSORBER_REF|origin/\$REF|--branch[[:space:]]+\$REF)' "$bootstrap"
+          grep -Fq 'Launcher commit: `79ca156d87bfa1a8702dddc4783fc426c9fa9731`' "$readme"
+          grep -Fq 'Reviewed runtime payload: `9ad70a02a2ab2ab0d54cf5ec30396f010f1cbbb6`' "$readme"
+          grep -Fq '/79ca156d87bfa1a8702dddc4783fc426c9fa9731/android-node/bootstrap-all.sh' "$readme"
+          grep -Fq 'EXPECTED_VERSION="0.146.0"' "$installer"
+          grep -Fq 'sha512-yG3sPWNda/2YAIQIDq9MrrjoCTIQ7rxYM5IasrG3VBcuhCLTkgeg/JzqmJq1V98RE4MJ5jCxDXXQlOjrditFRw==' "$installer"
+          grep -Fq '082252be01f29dff4b7b7b14ceb6e103a7df7777' "$installer"
+          grep -Fq 'npm pack "@openai/codex@$EXPECTED_VERSION"' "$installer"
+          grep -Fq 'npm install -g "$ARCHIVE"' "$installer"
+          ! grep -Eq 'npm install -g "?@openai/codex@\$CODEX_VERSION"?' "$installer"
+
+      - name: Verify secure phone packet and first-pin gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          pi=android-node/install-pi-bridge-secure.sh
+          phone=android-node/phone-termux-bootstrap-secure.sh
+          phone_core=android-node/phone-termux-bootstrap.sh
+          provision=android-node/provision-phone-host-key-secure.sh
+          verify=android-node/verify-phone-bridge-secure.sh
+          verify_core=android-node/verify-phone-bridge.sh
+          rollback=android-node/rollback-pi-phone-absorber-secure.sh
+          rollback_core=android-node/rollback-pi-phone-absorber.sh
+          grep -Fq 'openclaw-phone-bootstrap-core.sh' "$pi"
+          grep -Fq 'openclaw-install-codex-verified.sh' "$pi"
+          grep -Fq 'phone-termux-bootstrap-secure.sh' "$pi"
+          grep -Fq 'len(lines)!=1' "$phone"
+          grep -Fq "parts[0] != 'ssh-ed25519'" "$phone"
+          grep -Fq 'OPENCLAW_SECURE_WRAPPER=1' "$phone"
+          grep -Fq 'LEGACY_PHONE_CORE_INTERNAL_ONLY' "$phone_core"
+          ! grep -Fq 'npm install -g' "$phone_core"
+          grep -Fq 'SCANNED_SSH_HOST_KEY_RECORD_COUNT_INVALID' "$provision"
+          grep -Fq 'SCANNED_SSH_HOST_KEY_FINGERPRINT_MISMATCH' "$provision"
+          grep -Fq 'FIRST_PIN_ATOMICALLY_WRITTEN' "$provision"
+          grep -Fq 'bash "$PROVISION"' "$verify"
+          grep -Fq 'PINNED_SSH_HOST_KEY_RECORD_COUNT_INVALID' "$verify"
+          grep -Fq 'PINNED_SSH_HOST_KEY_NOT_ED25519' "$verify"
+          grep -Fq 'TARGET_ALREADY_PRIMARY_WITHOUT_VALID_ROLLBACK_RECORD' "$verify"
+          grep -Fq 'PRIMARY_MODEL_PROMOTION_NOT_VERIFIED' "$verify"
+          grep -Fq 't4_telegram_round_trip' "$verify"
+          grep -Fq 'LEGACY_VERIFY_CORE_INTERNAL_ONLY' "$verify_core"
+          ! grep -Fq 'install -m 600 "$TMP_KNOWN"' "$verify_core"
+          grep -Fq 'ROLLBACK_PRIMARY_NOT_RESTORED' "$rollback"
+          grep -Fq 'ROLLED_BACK_VERIFIED' "$rollback"
+          grep -Fq 'LEGACY_ROLLBACK_CORE_INTERNAL_ONLY' "$rollback_core"
+
+      - name: Reject mutable or prohibited live-path primitives
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -RInE --exclude='*.md' '(raw.githubusercontent.com/.*/(main|master|feat/)|git[[:space:]]+reset[[:space:]]+--hard.*origin/|PHONE_ABSORBER_REF|curl[^\n]*\|[[:space:]]*(bash|sh))' android-node; then
+            echo 'Mutable live-path primitive detected' >&2
+            exit 1
+          fi
+          if grep -RInE --exclude='*.md' '(Magisk|fastboot[[:space:]]+flashing|bootloader[[:space:]]+unlock|adb[[:space:]]+root|su[[:space:]]+-c)' android-node; then
+            echo 'Root or bootloader primitive detected' >&2
+            exit 1
+          fi

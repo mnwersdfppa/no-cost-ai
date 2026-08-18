@@ -1,0 +1,321 @@
+#!/data/data/com.termux/files/usr/bin/bash
+set -euo pipefail
+
+if [[ "${OPENCLAW_SECURE_WRAPPER:-0}" != "1" ]]; then
+  echo "BLOCKED=LEGACY_PHONE_CORE_INTERNAL_ONLY"
+  echo "NEXT=use /sdcard/Download/openclaw-phone-bootstrap.sh"
+  exit 90
+fi
+
+STATE="$HOME/.openclaw-phone"
+BIN="$HOME/.local/bin"
+PUB_CANDIDATE_1="$HOME/storage/downloads/openclaw_pi.pub"
+PUB_CANDIDATE_2="/sdcard/Download/openclaw_pi.pub"
+INSTALL_CODEX="${INSTALL_CODEX:-0}"
+CODEX_VERSION="${PHONE_CODEX_VERSION:-0.146.0}"
+
+if [[ "$INSTALL_CODEX" != "0" ]]; then
+  echo "BLOCKED=VERIFIED_CODEX_INSTALLER_REQUIRED"
+  exit 91
+fi
+
+mkdir -p "$STATE/codex-home" "$STATE/work" "$BIN" "$HOME/.ssh" "$HOME/.termux/boot"
+chmod 700 "$STATE" "$STATE/codex-home" "$STATE/work" "$BIN" "$HOME/.ssh" "$HOME/.termux/boot"
+
+if command -v pkg >/dev/null 2>&1; then
+  pkg update -y || true
+  pkg install -y openssh python nodejs-lts coreutils || pkg install -y openssh python nodejs coreutils
+fi
+if [[ ! -e "$HOME/storage/downloads" ]] && command -v termux-setup-storage >/dev/null 2>&1; then
+  termux-setup-storage || true
+  sleep 2
+fi
+
+installed_codex_version() {
+  codex --version 2>/dev/null | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true
+}
+
+command -v codex >/dev/null 2>&1 || { echo "BLOCKED=VERIFIED_CODEX_CLI_MISSING"; exit 92; }
+CURRENT_CODEX_VERSION="$(installed_codex_version)"
+if [[ "$CURRENT_CODEX_VERSION" != "$CODEX_VERSION" ]]; then
+  echo "BLOCKED=OFFICIAL_CODEX_VERSION_MISMATCH"
+  echo "REQUIRED=$CODEX_VERSION"
+  echo "FOUND=${CURRENT_CODEX_VERSION:-missing}"
+  exit 93
+fi
+
+cat > "$BIN/openclaw-phone-codex-run" <<'PY'
+#!/data/data/com.termux/files/usr/bin/python
+import json
+import os
+import shutil
+import signal
+import subprocess
+import sys
+from pathlib import Path
+
+MAX_PROMPT = int(os.environ.get("PHONE_CODEX_MAX_PROMPT", "12000"))
+TIMEOUT = int(os.environ.get("PHONE_CODEX_TIMEOUT_SECONDS", "220"))
+REQUIRED_VERSION = os.environ.get("PHONE_CODEX_VERSION", "0.146.0")
+ALLOWED_MODELS = {"gpt-5.6-sol", "gpt-5.6"}
+ALLOWED_EVENT_TYPES = {
+    "thread.started",
+    "turn.started",
+    "turn.completed",
+    "item.started",
+    "item.completed",
+    "error",
+    "turn.failed",
+}
+FORBIDDEN_ITEM_TYPES = {
+    "command_execution",
+    "mcp_tool_call",
+    "web_search",
+    "image_generation",
+    "computer_use",
+}
+
+raw = sys.stdin.readline(MAX_PROMPT * 2 + 4096)
+try:
+    request = json.loads(raw)
+except Exception as exc:
+    print(json.dumps({"type": "error", "message": f"invalid request: {exc}"}))
+    sys.exit(2)
+
+prompt = request.get("prompt")
+model = request.get("model", "gpt-5.6-sol")
+if not isinstance(prompt, str) or not (1 <= len(prompt) <= MAX_PROMPT):
+    print(json.dumps({"type": "error", "message": "prompt length denied"}))
+    sys.exit(2)
+if model not in ALLOWED_MODELS:
+    print(json.dumps({"type": "error", "message": "model denied"}))
+    sys.exit(2)
+
+codex = shutil.which("codex")
+if not codex:
+    print(json.dumps({"type": "error", "message": "official Codex CLI not installed"}))
+    sys.exit(127)
+version = subprocess.run([codex, "--version"], capture_output=True, text=True, timeout=10)
+if REQUIRED_VERSION not in ((version.stdout or "") + (version.stderr or "")):
+    print(json.dumps({"type": "error", "message": "Codex CLI version not allowlisted"}))
+    sys.exit(78)
+
+state = Path.home() / ".openclaw-phone"
+codex_home = state / "codex-home"
+workdir = state / "work"
+codex_home.mkdir(parents=True, exist_ok=True)
+workdir.mkdir(parents=True, exist_ok=True)
+os.chmod(codex_home, 0o700)
+os.chmod(workdir, 0o500)
+source_auth = Path.home() / ".codex" / "auth.json"
+target_auth = codex_home / "auth.json"
+if source_auth.exists() and not target_auth.exists():
+    try:
+        target_auth.symlink_to(source_auth)
+    except FileExistsError:
+        pass
+
+help_proc = subprocess.run([codex, "exec", "--help"], capture_output=True, text=True, timeout=15)
+help_out = (help_proc.stdout or "") + (help_proc.stderr or "")
+required_flags = (
+    "--strict-config",
+    "--ephemeral",
+    "--ignore-user-config",
+    "--ignore-rules",
+    "--json",
+    "--sandbox",
+    "--config",
+)
+missing = [flag for flag in required_flags if flag not in help_out]
+if missing:
+    print(json.dumps({"type": "error", "message": "required safety flags missing", "missing": missing}))
+    sys.exit(78)
+
+safe_overrides = (
+    'approval_policy="never"',
+    'features.shell_tool=false',
+    'features.view_image=false',
+    'features.web_search_request=false',
+    'features.web_search_cached=false',
+    'features.standalone_web_search=false',
+    'features.apps=false',
+    'features.plugins=false',
+    'features.code_mode=false',
+    'features.code_mode_host=false',
+    'features.collab=false',
+    'features.multi_agent_v2=false',
+    'features.image_generation=false',
+    'features.artifact=false',
+)
+args = [
+    codex,
+    "exec",
+    "--strict-config",
+    "--skip-git-repo-check",
+    "--ephemeral",
+    "--ignore-user-config",
+    "--ignore-rules",
+    "--json",
+    "--color",
+    "never",
+    "--sandbox",
+    "read-only",
+]
+for override in safe_overrides:
+    args.extend(["-c", override])
+args.extend(["-C", str(workdir), "-m", model, "-"])
+
+instruction = (
+    "You are answering a general user question through a constrained phone bridge. "
+    "You have no tools. Do not request secrets or claim actions were performed. "
+    "Return only the useful final answer.\n\nUSER REQUEST:\n" + prompt
+)
+env = os.environ.copy()
+for name in (
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "OPENAI_ORG_ID",
+    "OPENAI_PROJECT_ID",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+):
+    env.pop(name, None)
+env["CODEX_HOME"] = str(codex_home)
+env["PHONE_CODEX_VERSION"] = REQUIRED_VERSION
+
+proc = subprocess.Popen(
+    args,
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+    env=env,
+    start_new_session=True,
+)
+try:
+    stdout, stderr = proc.communicate(instruction, timeout=TIMEOUT)
+except subprocess.TimeoutExpired:
+    os.killpg(proc.pid, signal.SIGKILL)
+    stdout, stderr = proc.communicate()
+    print(json.dumps({"type": "error", "message": "codex timeout"}))
+    sys.exit(124)
+
+if stdout:
+    sys.stdout.write(stdout)
+if stderr:
+    sys.stderr.write(stderr)
+if proc.returncode != 0:
+    sys.exit(proc.returncode)
+
+fatal = False
+unknown = []
+for line in stdout.splitlines():
+    try:
+        event = json.loads(line)
+    except Exception:
+        continue
+    typ = str(event.get("type", ""))
+    if typ and typ not in ALLOWED_EVENT_TYPES:
+        unknown.append(typ)
+    if typ in {"error", "turn.failed"}:
+        fatal = True
+    item = event.get("item")
+    if not isinstance(item, dict) and isinstance(event.get("data"), dict):
+        item = event["data"].get("item")
+    if isinstance(item, dict) and item.get("type") in FORBIDDEN_ITEM_TYPES:
+        print(json.dumps({"type": "error", "message": "unexpected tool event denied"}))
+        sys.exit(79)
+if unknown:
+    print(json.dumps({"type": "error", "message": "unknown Codex event schema", "events": sorted(set(unknown))}))
+    sys.exit(80)
+if fatal:
+    sys.exit(70)
+PY
+chmod 700 "$BIN/openclaw-phone-codex-run"
+
+cat > "$BIN/openclaw-phone-ssh-dispatch" <<'SH'
+#!/data/data/com.termux/files/usr/bin/bash
+set -euo pipefail
+case "${SSH_ORIGINAL_COMMAND:-}" in
+  phone-status)
+    printf 'user=%s\n' "$(id -un)"
+    command -v codex || true
+    codex --version 2>/dev/null || true
+    codex login status 2>/dev/null || true
+    if [[ -r "$PREFIX/etc/ssh/ssh_host_ed25519_key.pub" ]]; then
+      printf 'host_key_fingerprint=%s\n' "$(ssh-keygen -lf "$PREFIX/etc/ssh/ssh_host_ed25519_key.pub" -E sha256 | awk '{print $2}')"
+    fi
+    [[ -x "$HOME/.local/bin/openclaw-phone-codex-run" ]] && echo runner=ready || echo runner=missing
+    ;;
+  phone-codex-run)
+    exec "$HOME/.local/bin/openclaw-phone-codex-run"
+    ;;
+  *)
+    echo "DENIED=COMMAND_NOT_ALLOWLISTED" >&2
+    exit 126
+    ;;
+esac
+SH
+chmod 700 "$BIN/openclaw-phone-ssh-dispatch"
+
+PUB=""
+for candidate in "$PUB_CANDIDATE_1" "$PUB_CANDIDATE_2"; do
+  if [[ -r "$candidate" ]]; then
+    PUB="$candidate"
+    break
+  fi
+done
+[[ -n "$PUB" ]] || { echo "BLOCKED=PI_PUBLIC_KEY_NOT_FOUND"; exit 94; }
+
+touch "$HOME/.ssh/authorized_keys"
+chmod 600 "$HOME/.ssh/authorized_keys"
+key_line="$(tr -d '\r\n' < "$PUB")"
+if [[ "$key_line" != ssh-ed25519\ * ]]; then
+  echo "BLOCKED=INVALID_PI_PUBLIC_KEY"
+  exit 95
+fi
+tmp="$HOME/.ssh/authorized_keys.tmp"
+grep -v 'openclaw-pi-phone-bridge' "$HOME/.ssh/authorized_keys" > "$tmp" || true
+printf 'restrict,command="$HOME/.local/bin/openclaw-phone-ssh-dispatch" %s\n' "$key_line" >> "$tmp"
+mv "$tmp" "$HOME/.ssh/authorized_keys"
+chmod 600 "$HOME/.ssh/authorized_keys"
+
+cat > "$HOME/.termux/boot/openclaw-phone-bridge" <<'BOOT'
+#!/data/data/com.termux/files/usr/bin/bash
+termux-wake-lock 2>/dev/null || true
+if ! pgrep -x sshd >/dev/null 2>&1; then
+  sshd -p 8022
+fi
+BOOT
+chmod 700 "$HOME/.termux/boot/openclaw-phone-bridge"
+
+termux-wake-lock 2>/dev/null || true
+if ! pgrep -x sshd >/dev/null 2>&1; then
+  sshd -p 8022
+fi
+
+printf 'TERMUX_USER=%s\n' "$(id -un)"
+printf 'SSHD_PORT=8022\n'
+printf 'SSH_POLICY=FORCED_COMMAND_ALLOWLIST\n'
+printf 'CODEX_VERSION=%s\n' "$CURRENT_CODEX_VERSION"
+if [[ -r "$PREFIX/etc/ssh/ssh_host_ed25519_key.pub" ]]; then
+  printf 'PHONE_SSH_HOST_KEY_SHA256=%s\n' "$(ssh-keygen -lf "$PREFIX/etc/ssh/ssh_host_ed25519_key.pub" -E sha256 | awk '{print $2}')"
+else
+  echo "BLOCKED=SSH_ED25519_HOST_KEY_MISSING"
+  exit 96
+fi
+codex login status || true
+if codex exec --help 2>&1 | grep -q -- '--strict-config' \
+  && codex exec --help 2>&1 | grep -q -- '--ephemeral' \
+  && codex exec --help 2>&1 | grep -q -- '--ignore-user-config' \
+  && codex exec --help 2>&1 | grep -q -- '--ignore-rules' \
+  && codex exec --help 2>&1 | grep -q -- '--sandbox' \
+  && codex exec --help 2>&1 | grep -q -- '--config'; then
+  echo "CODEX_SAFETY_FLAGS=READY"
+else
+  echo "BLOCKED=CODEX_REQUIRED_SAFETY_FLAGS_MISSING"
+  exit 97
+fi
+echo "NEXT_IF_NOT_LOGGED_IN=codex login --device-auth"
+echo "RESULT=PHONE_BOOTSTRAP_READY"

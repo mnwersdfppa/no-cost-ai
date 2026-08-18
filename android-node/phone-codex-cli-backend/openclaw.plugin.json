@@ -1,0 +1,17 @@
+{
+  "id": "phone-codex-cli",
+  "name": "Phone Codex CLI",
+  "description": "Use an already-authenticated Codex CLI on a USB-connected Android phone as an OpenClaw text backend",
+  "cliBackends": ["phone-codex-cli"],
+  "setup": {
+    "cliBackends": ["phone-codex-cli"],
+    "requiresRuntime": false
+  },
+  "activation": {
+    "onStartup": false
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false
+  }
+}

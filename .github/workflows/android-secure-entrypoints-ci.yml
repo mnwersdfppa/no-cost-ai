@@ -1,0 +1,103 @@
+name: Android secure entrypoint checks
+
+on:
+  pull_request:
+    paths:
+      - 'android-node/**'
+      - '.github/workflows/android-secure-entrypoints-ci.yml'
+  push:
+    branches:
+      - feat/openclaw-android-node-absorber
+    paths:
+      - 'android-node/**'
+      - '.github/workflows/android-secure-entrypoints-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Validate shell and JSON syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in \
+            android-node/bootstrap-all.sh \
+            android-node/install-pi-bridge-secure.sh \
+            android-node/phone-termux-bootstrap-secure.sh \
+            android-node/phone-termux-bootstrap.sh \
+            android-node/provision-phone-host-key-secure.sh \
+            android-node/verify-phone-bridge-secure.sh \
+            android-node/verify-phone-bridge.sh \
+            android-node/rollback-pi-phone-absorber-secure.sh \
+            android-node/rollback-pi-phone-absorber.sh; do
+            bash -n "$file"
+          done
+          python3 -m json.tool android-node/DEPLOYMENT_PACKET.json >/dev/null
+
+      - name: Enforce immutable production launcher
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F 'readonly PRODUCTION_REPO="https://github.com/mnwersdfppa/no-cost-ai.git"' android-node/bootstrap-all.sh
+          grep -F 'readonly REVIEWED_PAYLOAD_COMMIT="9ad70a02a2ab2ab0d54cf5ec30396f010f1cbbb6"' android-node/bootstrap-all.sh
+          grep -F 'PHONE_ABSORBER_REPOSITORY_OVERRIDE_DENIED' android-node/bootstrap-all.sh
+          grep -F 'PHONE_ABSORBER_COMMIT_OVERRIDE_DENIED' android-node/bootstrap-all.sh
+          ! grep -Fq 'REPO="${PHONE_ABSORBER_REPO:-' android-node/bootstrap-all.sh
+          ! grep -Fq 'COMMIT="${PHONE_ABSORBER_COMMIT:-' android-node/bootstrap-all.sh
+
+      - name: Enforce first host-key pinning boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F 'SCANNED_SSH_HOST_KEY_RECORD_COUNT_INVALID' android-node/provision-phone-host-key-secure.sh
+          grep -F 'SCANNED_SSH_HOST_KEY_FINGERPRINT_MISMATCH' android-node/provision-phone-host-key-secure.sh
+          grep -F 'FIRST_PIN_ATOMICALLY_WRITTEN' android-node/provision-phone-host-key-secure.sh
+          grep -F 'bash "$PROVISION"' android-node/verify-phone-bridge-secure.sh
+          grep -F 'OPENCLAW_SECURE_WRAPPER=1' android-node/verify-phone-bridge-secure.sh
+          grep -F 'LEGACY_VERIFY_CORE_INTERNAL_ONLY' android-node/verify-phone-bridge.sh
+          ! grep -Fq 'install -m 600 "$TMP_KNOWN"' android-node/verify-phone-bridge.sh
+
+      - name: Enforce verified Codex and internal cores
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F 'LEGACY_PHONE_CORE_INTERNAL_ONLY' android-node/phone-termux-bootstrap.sh
+          grep -F 'VERIFIED_CODEX_INSTALLER_REQUIRED' android-node/phone-termux-bootstrap.sh
+          ! grep -Fq 'npm install -g' android-node/phone-termux-bootstrap.sh
+          grep -F 'OPENCLAW_SECURE_WRAPPER=1' android-node/phone-termux-bootstrap-secure.sh
+          grep -F 'LEGACY_ROLLBACK_CORE_INTERNAL_ONLY' android-node/rollback-pi-phone-absorber.sh
+          grep -F 'OPENCLAW_SECURE_WRAPPER=1' android-node/rollback-pi-phone-absorber-secure.sh
+
+      - name: Enforce supported deployment surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          packet=json.loads(Path('android-node/DEPLOYMENT_PACKET.json').read_text())
+          supported=set(packet.get('supported_entrypoints', []))
+          required={
+              'android-node/bootstrap-all.sh',
+              'android-node/install-pi-bridge-secure.sh',
+              'android-node/phone-termux-bootstrap-secure.sh',
+              'android-node/provision-phone-host-key-secure.sh',
+              'android-node/verify-phone-bridge-secure.sh',
+              'android-node/rollback-pi-phone-absorber-secure.sh',
+          }
+          if not required.issubset(supported):
+              raise SystemExit('secure supported entrypoints missing')
+          internal=set(packet.get('internal_core_files', []))
+          for name in (
+              'android-node/phone-termux-bootstrap.sh',
+              'android-node/verify-phone-bridge.sh',
+              'android-node/rollback-pi-phone-absorber.sh',
+          ):
+              if name not in internal:
+                  raise SystemExit(f'internal core not declared: {name}')
+          PY
