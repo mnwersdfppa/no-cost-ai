@@ -39,20 +39,32 @@ jobs:
             android-node/phone-codex-cli-backend/phone-codex-cli-backend.sh; do
             bash -n "$file"
           done
+      - name: Assert phone runtime safety contract
+        run: |
+          set -euo pipefail
+          grep -Fq 'restrict,command="$HOME/.local/bin/openclaw-phone-ssh-dispatch"' android-node/phone-termux-bootstrap.sh
+          grep -Fq 'features.shell_tool=false' android-node/phone-termux-bootstrap.sh
+          grep -Fq 'features.web_search_request=false' android-node/phone-termux-bootstrap.sh
+          grep -Fq 'features.apps=false' android-node/phone-termux-bootstrap.sh
+          grep -Fq 'features.plugins=false' android-node/phone-termux-bootstrap.sh
+          grep -Fq 'approval_policy=\"never\"' android-node/phone-termux-bootstrap.sh
+          grep -Fq 'BLOCKED=LIVE_LLM_TEST_REQUIRED_BEFORE_ENABLE' android-node/verify-phone-bridge.sh
+          grep -Fq 'DENIED=COMMAND_NOT_ALLOWLISTED' android-node/phone-termux-bootstrap.sh
+          ! grep -RInE --exclude='*.md' --exclude='package-lock.json' '(sk-proj-|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' android-node
       - name: Validate ADB MCP server
         working-directory: android-node/adb-mcp
         run: |
-          npm install --no-audit --no-fund
+          npm install --ignore-scripts --no-audit --no-fund
           npm run check
       - name: Validate phone Codex MCP server
         working-directory: android-node/codex-phone-mcp
         run: |
-          npm install --no-audit --no-fund
+          npm install --ignore-scripts --no-audit --no-fund
           npm run check
       - name: Validate phone Codex CLI backend plugin
         working-directory: android-node/phone-codex-cli-backend
         run: |
-          npm install --no-audit --no-fund
+          npm install --ignore-scripts --no-audit --no-fund
           npx tsc --noEmit --skipLibCheck --module NodeNext --moduleResolution NodeNext --target ES2022 --esModuleInterop index.ts
           export HOME="$RUNNER_TEMP/openclaw-home"
           mkdir -p "$HOME"
