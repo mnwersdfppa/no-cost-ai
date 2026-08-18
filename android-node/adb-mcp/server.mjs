@@ -12,9 +12,34 @@ const MAX_TEXT = 500;
 const allowedPackages = new Set(
   (process.env.PHONE_ALLOWED_PACKAGES || 'ai.openclaw.app,com.termux,org.telegram.messenger,com.android.chrome')
     .split(',')
-    .map((v) => v.trim())
+    .map((value) => value.trim())
     .filter(Boolean),
 );
+
+const READ_ONLY = Object.freeze({
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+});
+const BOUNDED_WRITE = Object.freeze({
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: false,
+});
+const UI_WRITE = Object.freeze({
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: false,
+  openWorldHint: false,
+});
+const URL_WRITE = Object.freeze({
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: true,
+});
 
 function adbArgs(args) {
   return SERIAL ? ['-s', SERIAL, ...args] : args;
@@ -81,7 +106,7 @@ function guarded(handler) {
 
 function requireWrite() {
   if (!WRITE_ENABLED) {
-    throw new Error('Write actions are disabled. Set PHONE_WRITE_ENABLED=1 only after operator approval.');
+    throw new Error('Write actions are disabled for this MCP registration.');
   }
 }
 
@@ -93,7 +118,7 @@ function assertCoordinate(value, name) {
 
 const server = new McpServer({
   name: 'openclaw-android-adb-safe',
-  version: '1.0.0',
+  version: '1.1.0',
 });
 
 server.registerTool(
@@ -102,6 +127,7 @@ server.registerTool(
     title: 'Android phone status',
     description: 'Read connection, model, Android version, battery, display and current activity. No side effects.',
     inputSchema: {},
+    annotations: READ_ONLY,
   },
   guarded(async () => {
     const [model, version, battery, size, activity] = await Promise.all([
@@ -132,17 +158,16 @@ server.registerTool(
   'phone_screenshot',
   {
     title: 'Android screenshot',
-    description: 'Capture the current Android screen as PNG. No side effects.',
+    description: 'Capture the current Android screen as PNG. Read-only but may contain private on-screen information.',
     inputSchema: {},
+    annotations: READ_ONLY,
   },
   guarded(async () => {
     const png = await runAdbBuffer(['exec-out', 'screencap', '-p'], { timeout: 20000 });
     if (png.length < 100 || png.length > 8 * 1024 * 1024) {
       throw new Error(`Unexpected screenshot size: ${png.length}`);
     }
-    return {
-      content: [{ type: 'image', data: png.toString('base64'), mimeType: 'image/png' }],
-    };
+    return { content: [{ type: 'image', data: png.toString('base64'), mimeType: 'image/png' }] };
   }),
 );
 
@@ -150,8 +175,9 @@ server.registerTool(
   'phone_ui_dump',
   {
     title: 'Android UI hierarchy',
-    description: 'Read the current UIAutomator XML hierarchy. No side effects.',
+    description: 'Read the current UIAutomator XML hierarchy. Read-only but may contain private on-screen text.',
     inputSchema: {},
+    annotations: READ_ONLY,
   },
   guarded(async () => {
     await runAdb(['shell', 'uiautomator', 'dump', '/sdcard/window.xml'], { timeout: 20000 });
@@ -159,6 +185,7 @@ server.registerTool(
       timeout: 10000,
       maxBuffer: 2 * 1024 * 1024,
     });
+    await runAdb(['shell', 'rm', '-f', '/sdcard/window.xml']).catch(() => {});
     return textResult(stdout.slice(0, 200000));
   }),
 );
@@ -167,8 +194,9 @@ server.registerTool(
   'phone_open_app',
   {
     title: 'Open allowlisted Android app',
-    description: 'Launch an allowlisted package. Does not install, uninstall, send, purchase or change settings.',
+    description: 'Launch an allowlisted package. Cannot install, uninstall, send, purchase or change settings.',
     inputSchema: { packageName: z.string().min(3).max(200) },
+    annotations: BOUNDED_WRITE,
   },
   guarded(async ({ packageName }) => {
     requireWrite();
@@ -192,15 +220,14 @@ server.registerTool(
   'phone_launch_url',
   {
     title: 'Open HTTPS URL on Android',
-    description: 'Open an HTTPS URL in the phone browser. Non-HTTPS schemes are denied.',
+    description: 'Open an HTTPS URL in the phone browser. Other URI schemes are denied.',
     inputSchema: { url: z.string().url().max(2000) },
+    annotations: URL_WRITE,
   },
   guarded(async ({ url }) => {
     requireWrite();
     const parsed = new URL(url);
-    if (parsed.protocol !== 'https:') {
-      throw new Error('Only https:// URLs are allowed');
-    }
+    if (parsed.protocol !== 'https:') throw new Error('Only https:// URLs are allowed');
     const { stdout } = await runAdb([
       'shell',
       'am',
@@ -219,8 +246,9 @@ server.registerTool(
   'phone_key',
   {
     title: 'Send safe Android key',
-    description: 'Send HOME, BACK, WAKEUP or SLEEP. Other keys are denied.',
+    description: 'Send HOME, BACK, WAKEUP or SLEEP. All other key events are denied.',
     inputSchema: { key: z.enum(['HOME', 'BACK', 'WAKEUP', 'SLEEP']) },
+    annotations: BOUNDED_WRITE,
   },
   guarded(async ({ key }) => {
     requireWrite();
@@ -233,8 +261,9 @@ server.registerTool(
   'phone_tap',
   {
     title: 'Tap Android screen',
-    description: 'Tap one coordinate. Disabled unless PHONE_WRITE_ENABLED=1.',
+    description: 'Tap one bounded coordinate. This can activate UI controls and requires approval.',
     inputSchema: { x: z.number().int(), y: z.number().int() },
+    annotations: UI_WRITE,
   },
   guarded(async ({ x, y }) => {
     requireWrite();
@@ -249,7 +278,7 @@ server.registerTool(
   'phone_swipe',
   {
     title: 'Swipe Android screen',
-    description: 'Swipe between two coordinates. Disabled unless PHONE_WRITE_ENABLED=1.',
+    description: 'Swipe between bounded coordinates. This changes UI state and requires approval.',
     inputSchema: {
       x1: z.number().int(),
       y1: z.number().int(),
@@ -257,6 +286,7 @@ server.registerTool(
       y2: z.number().int(),
       durationMs: z.number().int().min(50).max(3000).default(300),
     },
+    annotations: UI_WRITE,
   },
   guarded(async ({ x1, y1, x2, y2, durationMs }) => {
     requireWrite();
@@ -279,8 +309,9 @@ server.registerTool(
   'phone_type_text',
   {
     title: 'Type restricted ASCII text on Android',
-    description: 'Type short ASCII text into the focused field. Newlines, shell metacharacters and Unicode are denied.',
+    description: 'Type short restricted ASCII into the focused field. Newlines, Unicode and shell metacharacters are denied.',
     inputSchema: { text: z.string().min(1).max(MAX_TEXT) },
+    annotations: UI_WRITE,
   },
   guarded(async ({ text }) => {
     requireWrite();
@@ -293,12 +324,5 @@ server.registerTool(
   }),
 );
 
-async function main() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-}
-
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+const transport = new StdioServerTransport();
+await server.connect(transport);
