@@ -1,0 +1,77 @@
+{
+  "version": 3,
+  "updated": "2026-08-19",
+  "goal": "Telegram -> Raspberry Pi OpenClaw Gateway -> subscription/free model route -> paired Android companion -> Telegram response",
+  "root_or_jailbreak": {
+    "required": false,
+    "status": "rejected_default",
+    "reason": "Official OpenClaw Android node, USB ADB, scrcpy and bounded Termux forced-command SSH cover the target with less attack surface and simpler rollback."
+  },
+  "s_rank": [
+    {
+      "component": "openclaw/openclaw official Android node",
+      "role": "primary mobile companion and capability surface",
+      "status": "prepared_physical_pairing_pending"
+    },
+    {
+      "component": "Genymobile/scrcpy + Android platform-tools",
+      "role": "no-root USB diagnostics and operator fallback",
+      "status": "prepared_adb_authorization_pending"
+    },
+    {
+      "component": "termux/termux-app + termux-api + termux-boot",
+      "role": "optional forced-command phone runtime",
+      "status": "prepared_phone_bootstrap_pending"
+    },
+    {
+      "component": "tailscale/tailscale",
+      "role": "private remote transport",
+      "status": "optional_not_publicly_exposed"
+    },
+    {
+      "component": "Supabase authenticated work queue",
+      "role": "bounded durable task ledger",
+      "status": "deployed_pi_worker_install_pending"
+    },
+    {
+      "component": "n8n + authenticated Make webhook",
+      "role": "inactive automation packet and queue pulse",
+      "status": "prepared_credentials_binding_pending"
+    }
+  ],
+  "conditional": [
+    {
+      "component": "RikkaApps/Shizuku",
+      "rank": "A",
+      "status": "not_installed",
+      "condition": "Only when an exact Android system API cannot be provided by official node, ADB or Termux."
+    },
+    {
+      "component": "Maton read-only MCP",
+      "rank": "A",
+      "status": "installer_prepared_endpoint_and_runtime_secret_pending",
+      "condition": "MATON_MCP_URL and a valid read-scoped key must pass an authenticated probe."
+    }
+  ],
+  "cost_policy": {
+    "default": "local_ollama",
+    "fallback": ["openrouter_free", "stop"],
+    "chatgpt_codex_oauth": "optional_subscription_lane",
+    "paid_openai_api_automatic": false
+  },
+  "completion_gates": {
+    "T1_source_review": "pass",
+    "T2_ci_security": "pass_or_continuously_revalidated",
+    "T3_real_pi_phone_bridge": "pending",
+    "T4_existing_telegram_roundtrip": "pending"
+  },
+  "forbidden": [
+    "credential bypass",
+    "secret output",
+    "unrestricted adb shell",
+    "public ADB or Gateway exposure",
+    "second Telegram poller",
+    "automatic payment or paid API fallback",
+    "root, jailbreak, Magisk or custom ROM without a separately justified device-specific plan"
+  ]
+}
