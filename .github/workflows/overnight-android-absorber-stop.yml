@@ -1,0 +1,35 @@
+name: Stop bounded overnight absorber
+
+on:
+  schedule:
+    - cron: '27 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: read
+  actions: write
+
+jobs:
+  stop-when-complete:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      CONTROL_ISSUE: '3'
+    steps:
+      - name: Disable both overnight workflows when the run counter reaches zero
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="$(gh issue view "$CONTROL_ISSUE" --repo "$REPO" --json body --jq .body)"
+          runs="$(printf '%s\n' "$body" | sed -nE 's/^RUNS_LEFT:[[:space:]]*([0-9]+).*$/\1/p' | head -n1)"
+          [[ "$runs" =~ ^[0-9]+$ ]] || { echo 'Invalid RUNS_LEFT control' >&2; exit 1; }
+          if (( runs == 0 )); then
+            gh api -X PUT "repos/$REPO/actions/workflows/overnight-android-absorber.yml/disable"
+            gh api -X PUT "repos/$REPO/actions/workflows/overnight-android-absorber-stop.yml/disable"
+            echo 'OVERNIGHT_WORKFLOWS_DISABLED=1'
+          else
+            echo "RUNS_LEFT=$runs"
+          fi
