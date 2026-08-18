@@ -99,9 +99,27 @@ if missing:
     }))
     sys.exit(78)
 
-# Every run is one-shot and fail-closed. The empty read-only work directory and
-# ignored user config/rules prevent project instructions, hooks, MCP servers or
-# writable workspace state from entering this text-only relay.
+# Disable local execution, file/image inspection, web search, apps, plugins,
+# code-mode and multi-agent surfaces. This turns the Codex session into a
+# text-only subscription-backed inference lane. --strict-config makes unknown
+# or obsolete safety keys fail closed instead of being silently ignored.
+safe_overrides = (
+    'approval_policy="never"',
+    'features.shell_tool=false',
+    'features.view_image=false',
+    'features.web_search_request=false',
+    'features.web_search_cached=false',
+    'features.standalone_web_search=false',
+    'features.apps=false',
+    'features.plugins=false',
+    'features.code_mode=false',
+    'features.code_mode_host=false',
+    'features.collab=false',
+    'features.multi_agent_v2=false',
+    'features.image_generation=false',
+    'features.artifact=false',
+)
+
 args = [
     codex,
     "exec",
@@ -115,22 +133,26 @@ args = [
     "never",
     "--sandbox",
     "read-only",
-    "-c",
-    'approval_policy="never"',
-    "-C",
-    str(workdir),
-    "-m",
-    model,
-    "-",
 ]
+for override in safe_overrides:
+    args.extend(["-c", override])
+args.extend(["-C", str(workdir), "-m", model, "-"])
 
 instruction = (
     "You are answering a general user question through a constrained phone bridge. "
-    "Do not run shell commands, do not modify files, do not use MCP tools, and do not request secrets. "
+    "You have no tools. Do not request secrets or claim actions were performed. "
     "Return only the useful final answer.\n\nUSER REQUEST:\n" + prompt
 )
 env = os.environ.copy()
-for name in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_ORG_ID", "OPENAI_PROJECT_ID"):
+for name in (
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "OPENAI_ORG_ID",
+    "OPENAI_PROJECT_ID",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+):
     env.pop(name, None)
 env["CODEX_HOME"] = str(codex_home)
 
@@ -166,6 +188,16 @@ for line in stdout.splitlines():
         continue
     if event.get("type") in {"error", "turn.failed"}:
         fatal = True
+    item = event.get("item") or ((event.get("data") or {}).get("item") if isinstance(event.get("data"), dict) else None)
+    if isinstance(item, dict) and item.get("type") in {
+        "command_execution",
+        "mcp_tool_call",
+        "web_search",
+        "image_generation",
+        "computer_use",
+    }:
+        print(json.dumps({"type": "error", "message": "unexpected tool event denied"}))
+        sys.exit(79)
 if fatal:
     sys.exit(70)
 PY
@@ -248,7 +280,8 @@ if command -v codex >/dev/null 2>&1; then
     && codex exec --help 2>&1 | grep -q -- '--ephemeral' \
     && codex exec --help 2>&1 | grep -q -- '--ignore-user-config' \
     && codex exec --help 2>&1 | grep -q -- '--ignore-rules' \
-    && codex exec --help 2>&1 | grep -q -- '--sandbox'; then
+    && codex exec --help 2>&1 | grep -q -- '--sandbox' \
+    && codex exec --help 2>&1 | grep -q -- '--config'; then
     echo "CODEX_SAFETY_FLAGS=READY"
   else
     echo "BLOCKED=CODEX_REQUIRED_SAFETY_FLAGS_MISSING"
