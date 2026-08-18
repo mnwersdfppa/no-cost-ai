@@ -18,7 +18,7 @@ chmod 700 "$INSTALLER" "$CORE" 2>/dev/null || true
 PHONE_CODEX_VERSION="${PHONE_CODEX_VERSION:-0.146.0}" INSTALL_CODEX="${INSTALL_CODEX:-1}" bash "$INSTALLER"
 
 python - "$PUB" <<'PY'
-import base64,re,sys
+import base64,sys
 path=sys.argv[1]
 lines=[line.strip() for line in open(path,encoding='utf-8',errors='strict') if line.strip()]
 if len(lines)!=1:
@@ -37,6 +37,7 @@ if len(decoded) < 40:
 print('PI_PUBLIC_KEY=ONE_ED25519_RECORD_VERIFIED')
 PY
 
+export OPENCLAW_SECURE_WRAPPER=1
 export INSTALL_CODEX=0
 export PHONE_CODEX_VERSION="${PHONE_CODEX_VERSION:-0.146.0}"
 exec bash "$CORE"
