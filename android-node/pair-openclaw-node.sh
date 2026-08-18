@@ -22,6 +22,6 @@ esac
 echo "SETUP_CODE_BEGIN"
 openclaw "${args[@]}"
 echo "SETUP_CODE_END"
-echo "PHONE_ACTION=Open the official OpenClaw Android app, choose Connect, and paste the setup code."
+echo "PHONE_ACTION=Open the official OpenClaw Android or iOS app, open Settings/Gateway or Connect, and paste the setup code."
 echo "VERIFY_AFTER_PAIRING=openclaw devices list && openclaw nodes status"
 openclaw devices list || true
