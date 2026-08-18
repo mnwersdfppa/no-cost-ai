@@ -71,9 +71,6 @@ if source_auth.exists() and not target_auth.exists():
     except FileExistsError:
         pass
 
-safe_config = codex_home / "config.toml"
-safe_config.write_text('model = "gpt-5.6-sol"\n', encoding="utf-8")
-os.chmod(safe_config, 0o600)
 
 def help_text(args):
     try:
@@ -82,21 +79,50 @@ def help_text(args):
     except Exception:
         return ""
 
+
 help_out = help_text([codex, "exec", "--help"])
-args = [codex, "exec", "--skip-git-repo-check", "--color", "never", "-C", str(workdir), "-m", model]
-if "--ephemeral" in help_out:
-    args.append("--ephemeral")
-if "--json" in help_out:
-    args.append("--json")
-if "--sandbox" in help_out:
-    args += ["--sandbox", "read-only"]
-if "--ask-for-approval" in help_out:
-    args += ["--ask-for-approval", "never"]
-if "--ignore-rules" in help_out:
-    args.append("--ignore-rules")
-if "--ignore-user-config" in help_out:
-    args.append("--ignore-user-config")
-args.append("-")
+required_flags = (
+    "--strict-config",
+    "--ephemeral",
+    "--ignore-user-config",
+    "--ignore-rules",
+    "--json",
+    "--sandbox",
+    "--config",
+)
+missing = [flag for flag in required_flags if flag not in help_out]
+if missing:
+    print(json.dumps({
+        "type": "error",
+        "message": "incompatible Codex CLI; required safety flags missing",
+        "missing": missing,
+    }))
+    sys.exit(78)
+
+# Every run is one-shot and fail-closed. The empty read-only work directory and
+# ignored user config/rules prevent project instructions, hooks, MCP servers or
+# writable workspace state from entering this text-only relay.
+args = [
+    codex,
+    "exec",
+    "--strict-config",
+    "--skip-git-repo-check",
+    "--ephemeral",
+    "--ignore-user-config",
+    "--ignore-rules",
+    "--json",
+    "--color",
+    "never",
+    "--sandbox",
+    "read-only",
+    "-c",
+    'approval_policy="never"',
+    "-C",
+    str(workdir),
+    "-m",
+    model,
+    "-",
+]
 
 instruction = (
     "You are answering a general user question through a constrained phone bridge. "
@@ -218,6 +244,15 @@ printf 'SSH_POLICY=FORCED_COMMAND_ALLOWLIST\n'
 if command -v codex >/dev/null 2>&1; then
   codex --version || true
   codex login status || true
+  if codex exec --help 2>&1 | grep -q -- '--strict-config' \
+    && codex exec --help 2>&1 | grep -q -- '--ephemeral' \
+    && codex exec --help 2>&1 | grep -q -- '--ignore-user-config' \
+    && codex exec --help 2>&1 | grep -q -- '--ignore-rules' \
+    && codex exec --help 2>&1 | grep -q -- '--sandbox'; then
+    echo "CODEX_SAFETY_FLAGS=READY"
+  else
+    echo "BLOCKED=CODEX_REQUIRED_SAFETY_FLAGS_MISSING"
+  fi
   echo "NEXT_IF_NOT_LOGGED_IN=codex login --device-auth"
 else
   echo "BLOCKED=OFFICIAL_CODEX_CLI_NOT_EXECUTABLE_ON_THIS_ANDROID"
