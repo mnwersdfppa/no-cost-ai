@@ -1,0 +1,106 @@
+name: Supabase emergency bridge safety checks
+
+on:
+  pull_request:
+    paths:
+      - 'supabase/**'
+      - 'scripts/test-supabase-emergency-bridge.sh'
+      - 'docs/SUPABASE_EMERGENCY_BRIDGE.md'
+      - '.github/workflows/supabase-emergency-bridge-ci.yml'
+  push:
+    branches:
+      - feat/supabase-emergency-bridge-20260819
+    paths:
+      - 'supabase/**'
+      - 'scripts/test-supabase-emergency-bridge.sh'
+      - 'docs/SUPABASE_EMERGENCY_BRIDGE.md'
+      - '.github/workflows/supabase-emergency-bridge-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Validate JSON and shell syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m json.tool supabase/functions/manifest.json >/dev/null
+          bash -n scripts/test-supabase-emergency-bridge.sh
+
+      - name: Validate migration security contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          migration=supabase/migrations/20260819080000_emergency_bridge_control_plane.sql
+          test -s "$migration"
+          grep -F 'alter table public.bridge_credentials enable row level security' "$migration"
+          grep -F 'revoke all on table' "$migration"
+          grep -F 'from public,anon,authenticated' "$migration"
+          grep -F "('paid_api_fallback',false" "$migration"
+          grep -F "('public_shell_execution',false" "$migration"
+          grep -F "('telegram_single_poller_enforced',true" "$migration"
+          grep -F "'policy_missing_fail_closed'" "$migration"
+          grep -F "unique (user_id, execution_key)" "$migration"
+          grep -F "cron.schedule('maintain-emergency-bridge'" "$migration"
+
+      - name: Validate Edge Function boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest=json.loads(Path('supabase/functions/manifest.json').read_text())
+          for name in ('emergency-bridge','credential-readiness'):
+              assert manifest['functions'][name]['verify_jwt'] is True
+
+          emergency=Path('supabase/functions/emergency-bridge/index.ts').read_text()
+          readiness=Path('supabase/functions/credential-readiness/index.ts').read_text()
+          required=[
+              'pi-gateway-client',
+              'bridge_admit_request',
+              'bridge_policy_decision',
+              'values_exposed: false',
+              'paid_api_fallback',
+          ]
+          missing=[item for item in required if item not in emergency]
+          if missing:
+              raise SystemExit(f'emergency bridge invariants missing: {missing}')
+          for forbidden in ('Deno.Command(', 'child_process', 'exec(', '/bin/sh', 'eval('):
+              if forbidden in emergency or forbidden in readiness:
+                  raise SystemExit(f'public execution primitive detected: {forbidden}')
+          for forbidden in ('secret_value', 'secret_prefix', 'key_prefix', 'token_hash'):
+              if forbidden in emergency.lower() or forbidden in readiness.lower():
+                  raise SystemExit(f'secret derivative field detected: {forbidden}')
+          assert 'values_returned: false' in readiness
+          assert 'prefixes_returned: false' in readiness
+          assert 'hashes_returned: false' in readiness
+          assert 'lengths_returned: false' in readiness
+          PY
+
+      - name: Reject embedded secret literals
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -RInE \
+            --exclude='*.md' \
+            --exclude='package-lock.json' \
+            '(sk-proj-|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|Bearer[[:space:]]+[A-Za-z0-9._-]{20,})' \
+            supabase scripts
+
+      - name: Validate non-destructive rollback
+        shell: bash
+        run: |
+          set -euo pipefail
+          rollback=supabase/rollback/20260819080000_emergency_bridge_disable.sql
+          grep -F "set enabled=false" "$rollback"
+          grep -F "mode='disabled'" "$rollback"
+          grep -F "destructive_drop',false" "$rollback"
+          ! grep -Eiq '\bdrop[[:space:]]+(table|schema|function)\b' "$rollback"
