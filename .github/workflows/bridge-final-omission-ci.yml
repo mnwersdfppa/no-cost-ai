@@ -1,0 +1,133 @@
+name: Final bridge omission checks
+
+on:
+  pull_request:
+    paths:
+      - 'pi/openclaw-bridge-agent.py'
+      - 'pi/install-openclaw-bridge-agent.sh'
+      - 'pi/uninstall-openclaw-bridge-agent.sh'
+      - 'supabase/functions/**'
+      - 'supabase/migrations/**'
+      - 'docs/FINAL_BRIDGE_ACTIVATION_V2.md'
+      - '.github/workflows/bridge-final-omission-ci.yml'
+  push:
+    branches:
+      - feat/supabase-emergency-bridge-20260819
+    paths:
+      - 'pi/openclaw-bridge-agent.py'
+      - 'pi/install-openclaw-bridge-agent.sh'
+      - 'pi/uninstall-openclaw-bridge-agent.sh'
+      - 'supabase/functions/**'
+      - 'supabase/migrations/**'
+      - 'docs/FINAL_BRIDGE_ACTIVATION_V2.md'
+      - '.github/workflows/bridge-final-omission-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Compile Pi agent and validate shell
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile pi/openclaw-bridge-agent.py
+          bash -n pi/install-openclaw-bridge-agent.sh
+          bash -n pi/uninstall-openclaw-bridge-agent.sh
+
+      - name: Validate migration version uniqueness
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from collections import Counter
+          from pathlib import Path
+          import re
+
+          versions=[]
+          for path in Path('supabase/migrations').glob('*.sql'):
+              match=re.match(r'^(\d+)_',path.name)
+              if match:
+                  versions.append(match.group(1))
+          duplicates=sorted(version for version,count in Counter(versions).items() if count>1)
+          if duplicates:
+              raise SystemExit(f'duplicate migration version prefixes: {duplicates}')
+          PY
+
+      - name: Validate canonical sources match deployed snapshots
+        shell: bash
+        run: |
+          set -euo pipefail
+          for function_name in \
+            canonical-client-config \
+            credential-readiness \
+            emergency-bridge \
+            command-center
+          do
+            cmp \
+              "supabase/functions/deployed/final-v1/${function_name}/index.ts" \
+              "supabase/functions/${function_name}/index.ts"
+          done
+
+      - name: Validate fail-closed contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          agent=Path('pi/openclaw-bridge-agent.py').read_text()
+          installer=Path('pi/install-openclaw-bridge-agent.sh').read_text()
+          migration=Path('supabase/migrations/20260819090000_finalize_bridge_admission_canonical_ssot_runtime_receipts.sql').read_text()
+
+          for needle in (
+              'CURRENT_SHORT_LIVED_PI_JWT_REQUIRED',
+              'modern_server_key_unification_verified',
+              'PAID_OPENAI_POLICY_NOT_DENIED',
+              'telegram_single_poller_enforced',
+              'values_returned',
+              'server_secret_returned',
+          ):
+              assert needle in agent, needle
+
+          for needle in (
+              'NoNewPrivileges=true',
+              'ProtectSystem=strict',
+              'MemoryDenyWriteExecute=true',
+              'pi-work-queue.env',
+          ):
+              assert needle in installer, needle
+
+          for needle in (
+              'bridge_canonical_credentials',
+              'bridge_runtime_key_selection',
+              'bridge_record_runtime_key_selection',
+              'bridge_reconcile_runtime_key_unification',
+              'bridge_request_ledger_user_action_execution_key_uidx',
+              "when 'canonical_config' then 'canonical_config'",
+              "when 'command_status' then 'command_status'",
+              "when 'command_ingest' then 'command_ingest'",
+              "when 'decision_record' then 'decision_record'",
+              "when 'feedback_record' then 'feedback_record'",
+              "when 'object_link' then 'object_link'",
+          ):
+              assert needle in migration, needle
+          PY
+
+      - name: Reject secret literals and forbidden execution primitives
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -RInE \
+            --exclude='*.md' \
+            --exclude='package-lock.json' \
+            '(sk-proj-|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|Bearer[[:space:]]+[A-Za-z0-9._-]{20,})' \
+            pi supabase
+          ! grep -RInE '(Deno\.Command|child_process|/bin/sh|shell_exec|execSync)' supabase/functions/deployed/final-v1
+          ! grep -RInE '(SUPABASE_SERVICE_ROLE_KEY|OPENAI_API_KEY|VERCEL_TOKEN)' pi
+          ! grep -RInE '(getUpdates\(|start_polling\(|run_polling\()' pi supabase/functions/deployed/final-v1
