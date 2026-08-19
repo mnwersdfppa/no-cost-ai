@@ -4,7 +4,7 @@ on:
   pull_request:
     paths:
       - 'supabase/migrations/20260819081000_authority_ownership_completion_gates.sql'
-      - 'supabase/migrations/20260819081100_authority_completion_selftest.sql'
+      - 'supabase/migrations/20260819081102_authority_completion_selftest.sql'
       - 'docs/SUPABASE_EMERGENCY_BRIDGE_COMPLETION.md'
       - '.github/workflows/supabase-emergency-completion-ci.yml'
   push:
@@ -12,7 +12,7 @@ on:
       - feat/supabase-emergency-bridge-20260819
     paths:
       - 'supabase/migrations/20260819081000_authority_ownership_completion_gates.sql'
-      - 'supabase/migrations/20260819081100_authority_completion_selftest.sql'
+      - 'supabase/migrations/20260819081102_authority_completion_selftest.sql'
       - 'docs/SUPABASE_EMERGENCY_BRIDGE_COMPLETION.md'
       - '.github/workflows/supabase-emergency-completion-ci.yml'
 
@@ -34,7 +34,7 @@ jobs:
           from pathlib import Path
 
           owners_path=Path('supabase/migrations/20260819081000_authority_ownership_completion_gates.sql')
-          selftest_path=Path('supabase/migrations/20260819081100_authority_completion_selftest.sql')
+          selftest_path=Path('supabase/migrations/20260819081102_authority_completion_selftest.sql')
           assert owners_path.is_file() and owners_path.stat().st_size > 0
           assert selftest_path.is_file() and selftest_path.stat().st_size > 0
 
@@ -90,7 +90,7 @@ jobs:
         run: |
           set -euo pipefail
           owner=supabase/migrations/20260819081000_authority_ownership_completion_gates.sql
-          selftest=supabase/migrations/20260819081100_authority_completion_selftest.sql
+          selftest=supabase/migrations/20260819081102_authority_completion_selftest.sql
           grep -F 'alter table public.bridge_owner_registry enable row level security' "$owner"
           grep -F 'alter table public.bridge_completion_gates enable row level security' "$owner"
           grep -F 'from anon, authenticated' "$owner"
@@ -102,6 +102,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          files='supabase/migrations/20260819081000_authority_ownership_completion_gates.sql supabase/migrations/20260819081100_authority_completion_selftest.sql docs/SUPABASE_EMERGENCY_BRIDGE_COMPLETION.md'
+          files='supabase/migrations/20260819081000_authority_ownership_completion_gates.sql supabase/migrations/20260819081102_authority_completion_selftest.sql docs/SUPABASE_EMERGENCY_BRIDGE_COMPLETION.md'
           ! grep -E '(sk-proj-|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|sb_secret_[A-Za-z0-9_-]{20,}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' $files
           ! grep -E 'PHYSICAL_(PI|PHONE|TELEGRAM)_COMPLETE=YES|OVERALL=COMPLETE' $files
