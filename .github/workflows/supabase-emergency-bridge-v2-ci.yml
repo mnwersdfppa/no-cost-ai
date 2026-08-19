@@ -39,49 +39,78 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
+          from collections import Counter
           from pathlib import Path
 
           migrations = sorted(Path('supabase/migrations').glob('*.sql'))
+          versions = [path.name.split('_', 1)[0] for path in migrations]
+          duplicates = sorted(
+              version for version, count in Counter(versions).items() if count > 1
+          )
+          if duplicates:
+              raise SystemExit(f'duplicate migration versions: {duplicates}')
+
           required = {
               '20260819080000_emergency_bridge_control_plane.sql',
               '20260819080100_emergency_bridge_triggers_selftest.sql',
-              '20260819080300_canonical_credential_configuration.sql',
-              '20260819080400_explicit_deny_policies.sql',
-              '20260819080500_emergency_bridge_self_test_v2.sql',
+              '20260819080310_canonical_credential_configuration.sql',
+              '20260819080375_explicit_deny_policies.sql',
+              '20260819080525_emergency_bridge_self_test_v2.sql',
+              '20260819080900_zero_cost_first_route_resolver.sql',
+              '20260819081110_runtime_key_boundary_selftest.sql',
           }
-          present = {p.name for p in migrations}
+          present = {path.name for path in migrations}
           missing = sorted(required - present)
           if missing:
               raise SystemExit(f'missing required migrations: {missing}')
 
-          trigger = Path('supabase/migrations/20260819080100_emergency_bridge_triggers_selftest.sql').read_text()
+          trigger = Path(
+              'supabase/migrations/20260819080100_emergency_bridge_triggers_selftest.sql'
+          ).read_text()
           if 'do $$' not in trigger.lower() or 'for table_name in' not in trigger.lower():
               raise SystemExit('trigger loop must be inside a DO block')
           first_statement = trigger.lower().split('create or replace function', 1)[0]
           if 'for table_name in' in first_statement and 'do $$' not in first_statement:
               raise SystemExit('top-level PL/pgSQL loop detected')
 
-          canonical = Path('supabase/migrations/20260819080300_canonical_credential_configuration.sql').read_text()
-          required_canonical = [
+          canonical = Path(
+              'supabase/migrations/20260819080310_canonical_credential_configuration.sql'
+          ).read_text()
+          for value in (
               'SUPABASE_PUBLISHABLE_KEYS',
               'SUPABASE_SECRET_KEYS',
               'supabase_legacy_anon_fallback',
               'vercel_connector_management',
               'vercel_raw_token_fallback',
               'paid_api_fallback',
-          ]
-          for value in required_canonical:
+          ):
               if value not in canonical:
                   raise SystemExit(f'canonical invariant missing: {value}')
 
-          deny = Path('supabase/migrations/20260819080400_explicit_deny_policies.sql').read_text()
+          deny = Path(
+              'supabase/migrations/20260819080375_explicit_deny_policies.sql'
+          ).read_text()
           for table in (
-              'bridge_credentials','bridge_credential_aliases','bridge_canonical_config',
-              'bridge_controls','bridge_permission_policies','bridge_route_registry',
-              'bridge_nodes','bridge_events','bridge_request_ledger','bridge_deployment_receipts'
+              'bridge_credentials',
+              'bridge_credential_aliases',
+              'bridge_canonical_config',
+              'bridge_controls',
+              'bridge_permission_policies',
+              'bridge_route_registry',
+              'bridge_nodes',
+              'bridge_events',
+              'bridge_request_ledger',
+              'bridge_deployment_receipts',
           ):
               if table not in deny:
                   raise SystemExit(f'explicit deny table missing: {table}')
+
+          resolver = Path(
+              'supabase/migrations/20260819080900_zero_cost_first_route_resolver.sql'
+          ).read_text()
+          for value in ('bridge_resolve_route', 'stop_no_eligible_route', 'paid_api_fallback'):
+              if value not in resolver:
+                  raise SystemExit(f'route resolver invariant missing: {value}')
           PY
 
       - name: Validate Edge Function security boundaries
@@ -98,6 +127,8 @@ jobs:
           grep -F 'legacy_anon_fallback: false' supabase/functions/canonical-client-config/index.v2.ts
           grep -F 'server_secret_returned: false' supabase/functions/canonical-client-config/index.v2.ts
           grep -F 'raw_vercel_token_returned: false' supabase/functions/canonical-client-config/index.v2.ts
+          grep -F 'bridge_admit_request' supabase/functions/credential-readiness/index.ts
+          grep -F 'credential_readiness' supabase/functions/credential-readiness/index.ts
           ! grep -RInE --exclude='*.md' --exclude='*.sql' --exclude='package-lock.json' \
             '(sb_secret_[A-Za-z0-9_-]+|sk-proj-[A-Za-z0-9_-]+|ghp_[A-Za-z0-9]{20,}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' \
             supabase pi/fetch-canonical-client-config.sh pi/install-canonical-config-refresh.sh
