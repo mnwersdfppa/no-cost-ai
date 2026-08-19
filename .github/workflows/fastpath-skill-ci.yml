@@ -1,0 +1,62 @@
+name: FastPath skill checks
+
+on:
+  pull_request:
+    paths:
+      - 'skills/fastpath/**'
+      - '.github/workflows/fastpath-skill-ci.yml'
+  push:
+    branches:
+      - feat/fastpath-skill-v1
+    paths:
+      - 'skills/fastpath/**'
+      - '.github/workflows/fastpath-skill-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Validate skill and policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F 'name: fastpath' skills/fastpath/SKILL.md
+          grep -F 'description:' skills/fastpath/SKILL.md
+          grep -F 'chain_of_thought_storage' skills/fastpath/policy.json
+          grep -F 'paid_api_automatic_fallback' skills/fastpath/policy.json
+          python3 -m json.tool skills/fastpath/policy.json >/dev/null
+          python3 -m py_compile skills/fastpath/router.py
+          bash -n skills/fastpath/install.sh
+      - name: Test routing invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import importlib.util
+          spec=importlib.util.spec_from_file_location('fastpath','skills/fastpath/router.py')
+          m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+          cases=[
+            ('check gateway status','L1'),
+            ('latest weather in Seoul','L2'),
+            ('delete production credentials','L4'),
+          ]
+          for text,expected in cases:
+            result=m.classify(text)
+            if result['lane'] != expected:
+              raise SystemExit(f'{text}: expected {expected}, got {result}')
+            if result['chain_of_thought_stored'] is not False:
+              raise SystemExit('chain-of-thought storage must remain disabled')
+            if result['paid_api_automatic_fallback'] is not False:
+              raise SystemExit('paid fallback must remain disabled')
+          PY
+      - name: Reject embedded secret-like literals
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -RInE --exclude='*.md' '(sk-proj-|ghp_[A-Za-z0-9]{20,}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' skills/fastpath
