@@ -1,0 +1,117 @@
+name: Normalize final Supabase bridge branch
+
+on:
+  push:
+    branches:
+      - feat/supabase-emergency-bridge-20260819
+    paths:
+      - 'supabase/functions/deployed/final-v1/**'
+      - 'supabase/migrations/**'
+      - '.github/workflows/normalize-final-bridge-branch.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: normalize-final-supabase-bridge
+  cancel-in-progress: false
+
+jobs:
+  normalize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feat/supabase-emergency-bridge-20260819
+          fetch-depth: 1
+          persist-credentials: true
+
+      - name: Synchronize canonical Edge Function sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          for function_name in \
+            canonical-client-config \
+            credential-readiness \
+            emergency-bridge \
+            command-center
+          do
+            source_file="supabase/functions/deployed/final-v1/${function_name}/index.ts"
+            target_file="supabase/functions/${function_name}/index.ts"
+            test -s "$source_file"
+            mkdir -p "$(dirname "$target_file")"
+            cp "$source_file" "$target_file"
+          done
+
+      - name: Normalize duplicate migration version prefixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          move_if_needed() {
+            source_path="$1"
+            target_path="$2"
+            if [[ -e "$source_path" && ! -e "$target_path" ]]; then
+              git mv "$source_path" "$target_path"
+            fi
+          }
+
+          move_if_needed \
+            supabase/migrations/20260819080800_bridge_rollout_gate_ssot.sql \
+            supabase/migrations/20260819080810_bridge_rollout_gate_ssot.sql
+          move_if_needed \
+            supabase/migrations/20260819080900_zero_cost_first_route_resolver.sql \
+            supabase/migrations/20260819080910_zero_cost_first_route_resolver.sql
+          move_if_needed \
+            supabase/migrations/20260819081000_single_selected_canonical_credential.sql \
+            supabase/migrations/20260819081010_single_selected_canonical_credential.sql
+
+      - name: Assert unique migration versions and safety invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from collections import Counter
+          from pathlib import Path
+          import re
+
+          files=sorted(Path('supabase/migrations').glob('*.sql'))
+          versions=[]
+          for path in files:
+              match=re.match(r'^(\d+)_',path.name)
+              if match:
+                  versions.append(match.group(1))
+          duplicates=sorted(version for version,count in Counter(versions).items() if count>1)
+          if duplicates:
+              raise SystemExit(f'duplicate migration version prefixes: {duplicates}')
+
+          required={
+              'canonical-client-config': ('bridge_credential_alias_ssot','bridge_record_runtime_key_selection','values_exposed: false'),
+              'credential-readiness': ('bridge_admit_request','execution_key_required','values_returned: false'),
+              'emergency-bridge': ('resolve_route','bridge_record_runtime_key_selection','paid_api_fallback: false'),
+              'command-center': ('secret_like_payload_rejected','bridge_record_runtime_key_selection','production_auto_route: false'),
+          }
+          for name,needles in required.items():
+              text=Path(f'supabase/functions/{name}/index.ts').read_text()
+              for needle in needles:
+                  if needle not in text:
+                      raise SystemExit(f'{name}: missing {needle}')
+              for forbidden in ('Deno.Command(', 'child_process', '/bin/sh', 'eval('):
+                  if forbidden in text:
+                      raise SystemExit(f'{name}: forbidden execution primitive {forbidden}')
+          PY
+
+      - name: Commit normalized branch state
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add supabase/functions supabase/migrations
+          if git diff --cached --quiet; then
+            echo 'NORMALIZATION=NO_CHANGES'
+          else
+            git commit -m 'fix: normalize final Edge sources and migration versions'
+            git push origin HEAD:feat/supabase-emergency-bridge-20260819
+          fi
