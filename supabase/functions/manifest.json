@@ -1,0 +1,16 @@
+{
+  "project_id": "dpllasnpfskyyyzebyal",
+  "functions": {
+    "emergency-bridge": {
+      "verify_jwt": true,
+      "entrypoint": "supabase/functions/emergency-bridge/index.ts"
+    },
+    "credential-readiness": {
+      "verify_jwt": true,
+      "entrypoint": "supabase/functions/credential-readiness/index.ts"
+    }
+  },
+  "secret_values_embedded": false,
+  "paid_provider_calls": false,
+  "public_shell_execution": false
+}
