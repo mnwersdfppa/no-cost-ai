@@ -1,0 +1,61 @@
+name: Supabase model gateway ownership gate
+
+on:
+  pull_request:
+    paths:
+      - 'supabase/migrations/20260819080900_zero_cost_first_route_resolver.sql'
+      - 'supabase/migrations/20260819081000_canonicalize_bridge_runtime_components.sql'
+      - 'supabase/migrations/20260819081200_select_policy_resolver_model_gateway.sql'
+      - 'supabase/functions/emergency-bridge/index.ts'
+      - '.github/workflows/supabase-model-gateway-selection-ci.yml'
+  push:
+    branches:
+      - feat/supabase-emergency-bridge-20260819
+    paths:
+      - 'supabase/migrations/20260819080900_zero_cost_first_route_resolver.sql'
+      - 'supabase/migrations/20260819081000_canonicalize_bridge_runtime_components.sql'
+      - 'supabase/migrations/20260819081200_select_policy_resolver_model_gateway.sql'
+      - 'supabase/functions/emergency-bridge/index.ts'
+      - '.github/workflows/supabase-model-gateway-selection-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Verify deterministic selected owner
+        shell: bash
+        run: |
+          set -euo pipefail
+          resolver=supabase/migrations/20260819080900_zero_cost_first_route_resolver.sql
+          owner=supabase/migrations/20260819081200_select_policy_resolver_model_gateway.sql
+          edge=supabase/functions/emergency-bridge/index.ts
+          test -s "$resolver"
+          test -s "$owner"
+          grep -F "'db.bridge_resolve_route'" "$owner"
+          grep -F "'model_gateway'" "$owner"
+          grep -F "component_key='edge.token-gateway'" "$owner"
+          grep -F "selected=false" "$owner"
+          grep -F "lifecycle_status='pending_audit'" "$owner"
+          grep -F "v_model_owner='db.bridge_resolve_route'" "$owner"
+          grep -F "v_unaudited_token_gateway_selected=0" "$owner"
+          grep -F 'bridge_resolve_route' "$resolver"
+          grep -F 'stop_no_eligible_route' "$resolver"
+          grep -F "r.integration='openai'" "$resolver"
+          grep -F "control_key='paid_api_fallback'" "$resolver"
+          grep -F 'bridge_resolve_route' "$edge"
+          grep -F 'provider_called: false' "$edge"
+          grep -F 'credential_returned: false' "$edge"
+
+      - name: Reject direct provider execution in selected resolver sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -RInE '(api\.openai\.com|openrouter\.ai/api|fetch\([^\n]*provider|Authorization:[[:space:]]*Bearer)' \
+            supabase/migrations/20260819080900_zero_cost_first_route_resolver.sql \
+            supabase/migrations/20260819081200_select_policy_resolver_model_gateway.sql
