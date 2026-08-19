@@ -56,6 +56,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ! grep -RInE '(api\.openai\.com|openrouter\.ai/api|fetch\([^\n]*provider|Authorization:[[:space:]]*Bearer)' \
-            supabase/migrations/20260819080900_zero_cost_first_route_resolver.sql \
-            supabase/migrations/20260819081200_select_policy_resolver_model_gateway.sql
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          sources = [
+              Path('supabase/migrations/20260819080900_zero_cost_first_route_resolver.sql'),
+              Path('supabase/migrations/20260819081200_select_policy_resolver_model_gateway.sql'),
+          ]
+          text = '\n'.join(path.read_text(encoding='utf-8') for path in sources)
+
+          # Route-registry endpoint metadata is allowed. The selected SQL resolver
+          # must not contain an HTTP execution primitive or an authorization header.
+          forbidden = {
+              'fetch execution': r'\bfetch\s*\(',
+              'pg_net execution': r'\bnet\.http_(?:get|post|delete)\s*\(',
+              'http extension execution': r'\bhttp_(?:get|post|put|delete|patch)\s*\(',
+              'authorization header': r'Authorization\s*[:=].*Bearer',
+              'Deno provider execution': r'\bDeno\.Command\b',
+          }
+          for label, pattern in forbidden.items():
+              assert re.search(pattern, text, re.IGNORECASE) is None, label
+          PY
