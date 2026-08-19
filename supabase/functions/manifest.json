@@ -3,14 +3,27 @@
   "functions": {
     "emergency-bridge": {
       "verify_jwt": true,
-      "entrypoint": "supabase/functions/emergency-bridge/index.ts"
+      "entrypoint": "supabase/functions/emergency-bridge/index.ts",
+      "purpose": "JWT-protected status, policy, heartbeat and queue inspection"
     },
     "credential-readiness": {
       "verify_jwt": true,
-      "entrypoint": "supabase/functions/credential-readiness/index.ts"
+      "entrypoint": "supabase/functions/credential-readiness/index.ts",
+      "purpose": "Boolean-only credential presence refresh"
+    },
+    "canonical-client-config": {
+      "verify_jwt": true,
+      "entrypoint": "supabase/functions/canonical-client-config/index.ts",
+      "purpose": "Single modern Supabase client configuration and canonical Vercel management metadata"
     }
   },
+  "canonical_supabase_client_key": "SUPABASE_PUBLISHABLE_KEYS.default",
+  "canonical_supabase_server_key": "SUPABASE_SECRET_KEYS.default",
+  "legacy_anon_fallback": false,
+  "vercel_canonical_auth": "connected_connector",
+  "vercel_raw_token_fallback": false,
   "secret_values_embedded": false,
   "paid_provider_calls": false,
-  "public_shell_execution": false
+  "public_shell_execution": false,
+  "telegram_single_poller_enforced": true
 }
