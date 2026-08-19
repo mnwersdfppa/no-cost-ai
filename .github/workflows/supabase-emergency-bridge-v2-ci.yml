@@ -1,0 +1,124 @@
+name: Supabase emergency bridge v2 checks
+
+on:
+  pull_request:
+    paths:
+      - 'supabase/**'
+      - 'pi/fetch-canonical-client-config.sh'
+      - 'pi/install-canonical-config-refresh.sh'
+      - '.github/workflows/supabase-emergency-bridge-v2-ci.yml'
+  push:
+    branches:
+      - feat/supabase-emergency-bridge-20260819
+    paths:
+      - 'supabase/**'
+      - 'pi/fetch-canonical-client-config.sh'
+      - 'pi/install-canonical-config-refresh.sh'
+      - '.github/workflows/supabase-emergency-bridge-v2-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Validate shell entrypoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n pi/fetch-canonical-client-config.sh
+          bash -n pi/install-canonical-config-refresh.sh
+
+      - name: Validate migration invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          migrations = sorted(Path('supabase/migrations').glob('*.sql'))
+          required = {
+              '20260819080000_emergency_bridge_control_plane.sql',
+              '20260819080100_emergency_bridge_triggers_selftest.sql',
+              '20260819080300_canonical_credential_configuration.sql',
+              '20260819080400_explicit_deny_policies.sql',
+              '20260819080500_emergency_bridge_self_test_v2.sql',
+          }
+          present = {p.name for p in migrations}
+          missing = sorted(required - present)
+          if missing:
+              raise SystemExit(f'missing required migrations: {missing}')
+
+          trigger = Path('supabase/migrations/20260819080100_emergency_bridge_triggers_selftest.sql').read_text()
+          if 'do $$' not in trigger.lower() or 'for table_name in' not in trigger.lower():
+              raise SystemExit('trigger loop must be inside a DO block')
+          first_statement = trigger.lower().split('create or replace function', 1)[0]
+          if 'for table_name in' in first_statement and 'do $$' not in first_statement:
+              raise SystemExit('top-level PL/pgSQL loop detected')
+
+          canonical = Path('supabase/migrations/20260819080300_canonical_credential_configuration.sql').read_text()
+          required_canonical = [
+              'SUPABASE_PUBLISHABLE_KEYS',
+              'SUPABASE_SECRET_KEYS',
+              'supabase_legacy_anon_fallback',
+              'vercel_connector_management',
+              'vercel_raw_token_fallback',
+              'paid_api_fallback',
+          ]
+          for value in required_canonical:
+              if value not in canonical:
+                  raise SystemExit(f'canonical invariant missing: {value}')
+
+          deny = Path('supabase/migrations/20260819080400_explicit_deny_policies.sql').read_text()
+          for table in (
+              'bridge_credentials','bridge_credential_aliases','bridge_canonical_config',
+              'bridge_controls','bridge_permission_policies','bridge_route_registry',
+              'bridge_nodes','bridge_events','bridge_request_ledger','bridge_deployment_receipts'
+          ):
+              if table not in deny:
+                  raise SystemExit(f'explicit deny table missing: {table}')
+          PY
+
+      - name: Validate Edge Function security boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          for fn in emergency-bridge credential-readiness canonical-client-config; do
+            test -s "supabase/functions/$fn/config.toml"
+            grep -Eq '^verify_jwt[[:space:]]*=[[:space:]]*true' "supabase/functions/$fn/config.toml"
+          done
+
+          grep -F 'SUPABASE_PUBLISHABLE_KEYS' supabase/functions/canonical-client-config/index.v2.ts
+          grep -F 'SUPABASE_SECRET_KEYS' supabase/functions/canonical-client-config/index.v2.ts
+          grep -F 'legacy_anon_fallback: false' supabase/functions/canonical-client-config/index.v2.ts
+          grep -F 'server_secret_returned: false' supabase/functions/canonical-client-config/index.v2.ts
+          grep -F 'raw_vercel_token_returned: false' supabase/functions/canonical-client-config/index.v2.ts
+          ! grep -RInE --exclude='*.md' --exclude='*.sql' --exclude='package-lock.json' \
+            '(sb_secret_[A-Za-z0-9_-]+|sk-proj-[A-Za-z0-9_-]+|ghp_[A-Za-z0-9]{20,}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' \
+            supabase pi/fetch-canonical-client-config.sh pi/install-canonical-config-refresh.sh
+
+      - name: Validate Pi canonical config boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F 'sb_publishable_' pi/fetch-canonical-client-config.sh
+          grep -F 'server_secret_returned' pi/fetch-canonical-client-config.sh
+          grep -F 'raw_vercel_token_returned' pi/fetch-canonical-client-config.sh
+          grep -F 'chmod 600' pi/fetch-canonical-client-config.sh
+          grep -F 'mv -f "$TMP_ENV" "$OUTPUT_ENV"' pi/fetch-canonical-client-config.sh
+          ! grep -E 'echo.*(TOKEN|PUBLISHABLE_KEY=\$|SERVICE_ROLE|SECRET_KEY)' pi/fetch-canonical-client-config.sh
+
+      - name: Validate fail-closed policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F "'paid_api_fallback',false" supabase/migrations/20260819080000_emergency_bridge_control_plane.sql
+          grep -F "'external_write_actions',false" supabase/migrations/20260819080000_emergency_bridge_control_plane.sql
+          grep -F "'phone_write_actions',false" supabase/migrations/20260819080000_emergency_bridge_control_plane.sql
+          grep -F "'public_shell_execution',false" supabase/migrations/20260819080000_emergency_bridge_control_plane.sql
+          grep -F "'telegram_single_poller_enforced',true" supabase/migrations/20260819080000_emergency_bridge_control_plane.sql
