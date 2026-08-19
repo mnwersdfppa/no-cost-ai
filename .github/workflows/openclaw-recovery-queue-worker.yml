@@ -1,0 +1,73 @@
+name: OpenClaw recovery queue worker validation
+
+on:
+  pull_request:
+    paths:
+      - "pi/openclaw-recovery-queue-worker.py"
+      - "pi/install-openclaw-recovery-queue-worker.sh"
+      - ".github/workflows/openclaw-recovery-queue-worker.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Syntax validation
+        run: |
+          python -m py_compile pi/openclaw-recovery-queue-worker.py
+          bash -n pi/install-openclaw-recovery-queue-worker.sh
+
+      - name: Deterministic safety contract
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          worker = Path("pi/openclaw-recovery-queue-worker.py").read_text(encoding="utf-8")
+          installer = Path("pi/install-openclaw-recovery-queue-worker.sh").read_text(encoding="utf-8")
+          tree = ast.parse(worker)
+
+          forbidden_calls = {"eval", "exec", "compile"}
+          for node in ast.walk(tree):
+              if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                  assert node.func.id not in forbidden_calls, node.func.id
+
+          assert "shell=True" not in worker
+          assert '"action": "pull_recovery"' in worker
+          assert "pi_supabase_auth_model_recovery" in worker
+          assert "telegram_model_failover_repair" in worker
+          assert "worker_liveness_guardian" in worker
+          assert "task_type_not_allowlisted" in worker
+          assert "download_sha256_mismatch" in worker
+          assert "SECOND_TELEGRAM_POLLER=OFF" in installer
+          assert "ARBITRARY_QUEUE_COMMAND_EXECUTION=OFF" in installer
+          assert "OnUnitActiveSec=2min" in installer
+
+          forbidden_literals = (
+              "OPENAI_API_KEY=",
+              "OPENROUTER_API_KEY=",
+              "Opencode-api-key=",
+              "Tailscale-fff-api-key=",
+              "SUPABASE_SERVICE_ROLE_KEY=",
+              "TELEGRAM_BOT_TOKEN=",
+          )
+          combined = worker + installer
+          for literal in forbidden_literals:
+              assert literal not in combined, literal
+          PY
+
+      - name: Immutable source receipts
+        run: |
+          sha256sum \
+            pi/openclaw-recovery-queue-worker.py \
+            pi/install-openclaw-recovery-queue-worker.sh
