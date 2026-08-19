@@ -1,0 +1,198 @@
+name: Overnight Android absorber v3 (8h bounded)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/overnight-android-absorber-v3.yml'
+  schedule:
+    - cron: '13 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: overnight-android-absorber-v3
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      STATE_FILE: .github/android-absorber-v3-state.json
+      TARGET_BRANCH: feat/openclaw-android-node-absorber
+      TARGET_PR: '2'
+    steps:
+      - name: Checkout control state
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: main
+          path: control
+          persist-credentials: true
+          fetch-depth: 1
+
+      - name: Read bounded state and deadline
+        id: state
+        shell: bash
+        run: |
+          set -euo pipefail
+          file="control/$STATE_FILE"
+          test -s "$file"
+          readarray -t values < <(node - "$file" <<'NODE'
+          const s=require(process.argv[2]);
+          console.log(Number(s.runs_left));
+          console.log(Number(s.runs_completed));
+          console.log(String(s.stop_at_utc));
+          NODE
+          )
+          runs_left="${values[0]}"
+          completed="${values[1]}"
+          stop_at="${values[2]}"
+          now_epoch="$(date -u +%s)"
+          stop_epoch="$(date -u -d "$stop_at" +%s)"
+          active=true
+          reason=active
+          if (( runs_left <= 0 )); then active=false; reason=budget_exhausted; fi
+          if (( now_epoch >= stop_epoch )); then active=false; reason=deadline_reached; fi
+          echo "active=$active" >> "$GITHUB_OUTPUT"
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+          echo "runs_left=$runs_left" >> "$GITHUB_OUTPUT"
+          echo "completed=$completed" >> "$GITHUB_OUTPUT"
+          echo "stop_at=$stop_at" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout current absorber branch
+        if: steps.state.outputs.active == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          path: target
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up Node.js
+        if: steps.state.outputs.active == 'true'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22.23.2'
+
+      - name: Run free deterministic validation
+        if: steps.state.outputs.active == 'true'
+        id: checks
+        shell: bash
+        run: |
+          set +e
+          report="$RUNNER_TEMP/android-absorber-v3-report.txt"
+          status=PASS
+          fail() { status=FAIL; printf 'FAIL: %s\n' "$1" | tee -a "$report"; }
+          {
+            echo "run_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "run_index=$(( ${{ steps.state.outputs.completed }} + 1 ))"
+            echo "runs_left_before=${{ steps.state.outputs.runs_left }}"
+            echo "stop_at_utc=${{ steps.state.outputs.stop_at }}"
+            echo "target_commit=$(git -C target rev-parse HEAD)"
+            echo 'paid_ai_calls=false'
+            echo 'credential_mutation=false'
+            echo 'physical_device_mutation=false'
+          } > "$report"
+
+          for dir in target/android-node/adb-mcp target/android-node/codex-phone-mcp target/android-node/phone-codex-cli-backend; do
+            test -s "$dir/package-lock.json" || { fail "missing lockfile $dir"; continue; }
+            (cd "$dir" && npm ci --ignore-scripts --no-audit --no-fund) >> "$report" 2>&1 || fail "npm ci $dir"
+          done
+
+          node --check target/android-node/adb-mcp/server.mjs >> "$report" 2>&1 || fail 'ADB MCP syntax'
+          node --check target/android-node/codex-phone-mcp/server.mjs >> "$report" 2>&1 || fail 'phone Codex MCP syntax'
+          find target/android-node target/pi -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n >> "$report" 2>&1 || fail 'shell syntax'
+          python3 -m py_compile target/pi/pi-work-queue-worker.py >> "$report" 2>&1 || fail 'Pi queue worker syntax'
+
+          grep -F 'phone_open_bridge_app' target/android-node/adb-mcp/server.mjs >> "$report" || fail 'task-scoped app tool missing'
+          grep -F "z.enum(['openclaw', 'termux'])" target/android-node/adb-mcp/server.mjs >> "$report" || fail 'app enum missing'
+          grep -F 'phone_key' target/android-node/adb-mcp/server.mjs >> "$report" || fail 'bounded key tool missing'
+          grep -F 'SCANNED_SSH_HOST_KEY_RECORD_COUNT_INVALID' target/android-node/provision-phone-host-key-secure.sh >> "$report" || fail 'single-key gate missing'
+          grep -F 'LEGACY_PHONE_CORE_INTERNAL_ONLY' target/android-node/phone-termux-bootstrap.sh >> "$report" || fail 'phone core guard missing'
+          grep -F 'LEGACY_VERIFY_CORE_INTERNAL_ONLY' target/android-node/verify-phone-bridge.sh >> "$report" || fail 'verify core guard missing'
+          grep -F 'LEGACY_ROLLBACK_CORE_INTERNAL_ONLY' target/android-node/rollback-pi-phone-absorber.sh >> "$report" || fail 'rollback core guard missing'
+          grep -F '"telegram_single_poller": "not_tested"' target/android-node/verify-phone-bridge.sh >> "$report" || fail 'T4 not-tested gate missing'
+
+          if grep -E 'phone_(launch_url|tap|swipe|type_text)' target/android-node/adb-mcp/server.mjs >> "$report" 2>&1; then
+            fail 'generic phone control returned'
+          fi
+          if grep -RInE --exclude='*.md' --exclude='package-lock.json' '(getUpdates\(|start_polling\(|run_polling\(|PHONE_RELAY_ENABLED[[:space:]]*=[[:space:]]*(1|true))' target/android-node target/pi >> "$report" 2>&1; then
+            fail 'second Telegram poller primitive detected'
+          fi
+          if grep -RInE --exclude='*.md' --exclude='package-lock.json' --exclude='pi-work-queue-worker.py' '(sk-proj-|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' target/android-node target/pi >> "$report" 2>&1; then
+            fail 'credential-like literal detected'
+          fi
+
+          {
+            echo '--- upstream availability ---'
+            for repo in openclaw/openclaw openai/codex Genymobile/scrcpy termux/termux-app termux/termux-api termux/termux-boot tailscale/tailscale RikkaApps/Shizuku maton-ai/agent-toolkit modelcontextprotocol/typescript-sdk n8n-io/n8n supabase/supabase vercel/vercel; do
+              branch="$(gh api "repos/$repo" --jq .default_branch 2>/dev/null)" || { echo "$repo=UNREACHABLE"; status=FAIL; continue; }
+              head="$(gh api "repos/$repo/commits/$branch" --jq .sha 2>/dev/null | cut -c1-12)" || { echo "$repo=HEAD_UNAVAILABLE"; status=FAIL; continue; }
+              echo "$repo branch=$branch head=$head"
+            done
+          } >> "$report" 2>&1
+
+          echo "STATUS=$status" | tee -a "$report"
+          cat "$report" >> "$GITHUB_STEP_SUMMARY"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "report=$report" >> "$GITHUB_OUTPUT"
+
+      - name: Upload redacted evidence
+        if: steps.state.outputs.active == 'true' && always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: android-absorber-v3-${{ github.run_number }}
+          path: ${{ steps.checks.outputs.report }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Record run and decrement budget
+        if: steps.state.outputs.active == 'true' && always()
+        shell: bash
+        env:
+          CHECK_STATUS: ${{ steps.checks.outputs.status }}
+        run: |
+          set -euo pipefail
+          status="${CHECK_STATUS:-FAIL}"
+          file="control/$STATE_FILE"
+          node - "$file" "$status" <<'NODE'
+          const fs=require('fs');
+          const [file,status]=process.argv.slice(2);
+          const s=JSON.parse(fs.readFileSync(file,'utf8'));
+          s.runs_left=Math.max(0,Number(s.runs_left)-1);
+          s.runs_completed=Number(s.runs_completed)+1;
+          s.last_status=status;
+          s.last_run_utc=new Date().toISOString();
+          s.paid_ai_calls=false;
+          s.credential_mutation=false;
+          s.physical_device_mutation=false;
+          fs.writeFileSync(file,JSON.stringify(s,null,2)+'\n');
+          NODE
+          cd control
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add "$STATE_FILE"
+          git commit -m "ci: record bounded Android absorber v3 run $(( ${{ steps.state.outputs.completed }} + 1 )) [$status]"
+          git push origin HEAD:main
+
+          remaining="$(node -e 'const s=require(process.argv[1]); console.log(Number(s.runs_left))' "$STATE_FILE")"
+          if [[ "$status" != PASS ]]; then
+            gh pr comment "$TARGET_PR" --repo "$GITHUB_REPOSITORY" --body "Bounded Android absorber v3 run $(( ${{ steps.state.outputs.completed }} + 1 )) failed. No paid AI, credential mutation, or physical-device action occurred. Evidence: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          fi
+          if (( remaining == 0 )); then
+            gh pr comment "$TARGET_PR" --repo "$GITHUB_REPOSITORY" --body "Bounded Android absorber v3 completed its run budget. Final status: $status. T3/T4 remain physical verification gates."
+            gh api -X PUT "repos/$GITHUB_REPOSITORY/actions/workflows/overnight-android-absorber-v3.yml/disable" || true
+          fi
+
+      - name: Disable at deadline or exhausted budget
+        if: steps.state.outputs.active != 'true'
+        shell: bash
+        run: |
+          echo "STOP_REASON=${{ steps.state.outputs.reason }}"
+          gh api -X PUT "repos/$GITHUB_REPOSITORY/actions/workflows/overnight-android-absorber-v3.yml/disable" || true
