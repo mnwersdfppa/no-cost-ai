@@ -3,13 +3,17 @@ name: Supabase emergency Pi client checks
 on:
   pull_request:
     paths:
+      - 'pi/openclaw-emergency-bridge.py'
       - 'scripts/install-supabase-emergency-bridge-on-pi.sh'
+      - 'docs/SUPABASE_EMERGENCY_BRIDGE_PI.md'
       - '.github/workflows/supabase-emergency-pi-client-ci.yml'
   push:
     branches:
       - feat/supabase-emergency-bridge-20260819
     paths:
+      - 'pi/openclaw-emergency-bridge.py'
       - 'scripts/install-supabase-emergency-bridge-on-pi.sh'
+      - 'docs/SUPABASE_EMERGENCY_BRIDGE_PI.md'
       - '.github/workflows/supabase-emergency-pi-client-ci.yml'
 
 permissions:
@@ -22,38 +26,74 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
-      - name: Validate shell syntax
-        run: bash -n scripts/install-supabase-emergency-bridge-on-pi.sh
-
-      - name: Validate fail-closed invariants
+      - name: Validate Python and shell syntax
         shell: bash
         run: |
           set -euo pipefail
-          file=scripts/install-supabase-emergency-bridge-on-pi.sh
-          grep -F 'CURRENT_SHORT_LIVED_PI_JWT_REQUIRED' "$file"
-          grep -F 'paid_api_fallback' "$file"
-          grep -F 'public_shell_execution' "$file"
-          grep -F 'telegram_single_poller_enforced' "$file"
-          grep -F 'NoNewPrivileges=true' "$file"
-          grep -F 'ProtectSystem=strict' "$file"
-          grep -F 'MemoryDenyWriteExecute=true' "$file"
-          grep -F 'values_exposed' "$file"
-          grep -F 'values_returned' "$file"
-          ! grep -F 'set -x' "$file"
-          ! grep -F 'SUPABASE_SERVICE_ROLE_KEY' "$file"
-          ! grep -E '(getUpdates\(|start_polling\(|run_polling\(|PHONE_RELAY_ENABLED)' "$file"
-          ! grep -E 'echo[^\n]*PI_ACCESS_TOKEN|print\([^\n]*TOKEN' "$file"
+          python3 -m py_compile pi/openclaw-emergency-bridge.py
+          bash -n scripts/install-supabase-emergency-bridge-on-pi.sh
 
-      - name: Extract and compile embedded Python client
+      - name: Validate complete fail-closed smoke-test surface
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          source=Path('scripts/install-supabase-emergency-bridge-on-pi.sh').read_text()
-          start=source.index("cat > \"$CLIENT\" <<'PY'\n") + len("cat > \"$CLIENT\" <<'PY'\n")
-          end=source.index("\nPY\n\nchmod 700 \"$CLIENT\"", start)
-          client=source[start:end]
-          compile(client, 'openclaw-emergency-bridge', 'exec')
-          print('EMBEDDED_PYTHON=PASS')
-          PY
+          client=pi/openclaw-emergency-bridge.py
+          installer=scripts/install-supabase-emergency-bridge-on-pi.sh
+
+          for invariant in \
+            CURRENT_SHORT_LIVED_PI_JWT_REQUIRED \
+            'NoNewPrivileges=true' \
+            'ProtectSystem=strict' \
+            'MemoryDenyWriteExecute=true' \
+            'UMask=0077'; do
+            grep -F "$invariant" "$installer"
+          done
+
+          for action in \
+            '"$CLIENT" status' \
+            '"$CLIENT" policy openai chat' \
+            '"$CLIENT" route model_chat 0' \
+            '"$CLIENT" queue' \
+            '"$CLIENT" config' \
+            '"$CLIENT" command-status' \
+            '"$CLIENT" credentials'; do
+            grep -F "$action" "$installer"
+          done
+
+          for invariant in \
+            'paid_api_fallback' \
+            'public_shell_execution' \
+            'external_write_actions' \
+            'phone_write_actions' \
+            'telegram_single_poller_enforced' \
+            'canonical-client-config' \
+            'command-center' \
+            'credential-readiness' \
+            'resolve_route' \
+            'PAID_OPENAI_ROUTE_SELECTED' \
+            'server_secret_returned' \
+            'oauth_token_returned' \
+            'vercel_raw_token_returned' \
+            'values_returned' \
+            'prefixes_returned' \
+            'hashes_returned' \
+            'lengths_returned'; do
+            grep -F "$invariant" "$client"
+          done
+
+          ! grep -F 'SUPABASE_SERVICE_ROLE_KEY' "$client" "$installer"
+          ! grep -F 'set -x' "$installer"
+          ! grep -E '(getUpdates\(|start_polling\(|run_polling\(|PHONE_RELAY_ENABLED)' "$client" "$installer"
+          ! grep -E 'echo[^\n]*PI_ACCESS_TOKEN|print\([^\n]*TOKEN' "$client" "$installer"
+
+      - name: Validate no secret or execution primitive is embedded
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -RInE \
+            --exclude='*.md' \
+            '(sk-proj-|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|Bearer[[:space:]]+[A-Za-z0-9._-]{20,})' \
+            pi/openclaw-emergency-bridge.py \
+            scripts/install-supabase-emergency-bridge-on-pi.sh
+          ! grep -E '(os\.system|subprocess\.(Popen|call)|shell=True|eval\(|exec\()' \
+            pi/openclaw-emergency-bridge.py
