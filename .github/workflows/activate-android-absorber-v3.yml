@@ -1,0 +1,50 @@
+name: Activate repaired Android absorber v3
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/activate-android-absorber-v3.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  activate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Disable obsolete bounded schedules
+        shell: bash
+        run: |
+          set -euo pipefail
+          for workflow in \
+            overnight-android-absorber.yml \
+            overnight-android-absorber-stop.yml \
+            overnight-android-absorber-v2.yml; do
+            gh api -X PUT "repos/$REPO/actions/workflows/$workflow/disable" || true
+          done
+
+      - name: Enable current repair and bounded workflows
+        shell: bash
+        run: |
+          set -euo pipefail
+          for workflow in \
+            repair-android-absorber-ci-v2.yml \
+            overnight-android-absorber-v3.yml; do
+            gh api -X PUT "repos/$REPO/actions/workflows/$workflow/enable" || true
+          done
+
+      - name: Dispatch repair then first bounded run
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api -X POST "repos/$REPO/actions/workflows/repair-android-absorber-ci-v2.yml/dispatches" -f ref=main
+          sleep 10
+          gh api -X POST "repos/$REPO/actions/workflows/overnight-android-absorber-v3.yml/dispatches" -f ref=main
+          echo 'REPAIR_AND_V3_DISPATCHED=1'
