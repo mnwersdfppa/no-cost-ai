@@ -6,8 +6,10 @@ on:
       - 'supabase/**'
       - 'pi/canonical-config-agent.py'
       - 'pi/install-canonical-config-agent.sh'
+      - 'scripts/install-supabase-emergency-bridge-on-pi.sh'
       - 'scripts/test-supabase-emergency-bridge.sh'
       - 'docs/SUPABASE_EMERGENCY_BRIDGE.md'
+      - 'docs/SUPABASE_EMERGENCY_BRIDGE_PI.md'
       - '.github/workflows/supabase-emergency-bridge-ci.yml'
   push:
     branches:
@@ -16,8 +18,10 @@ on:
       - 'supabase/**'
       - 'pi/canonical-config-agent.py'
       - 'pi/install-canonical-config-agent.sh'
+      - 'scripts/install-supabase-emergency-bridge-on-pi.sh'
       - 'scripts/test-supabase-emergency-bridge.sh'
       - 'docs/SUPABASE_EMERGENCY_BRIDGE.md'
+      - 'docs/SUPABASE_EMERGENCY_BRIDGE_PI.md'
       - '.github/workflows/supabase-emergency-bridge-ci.yml'
 
 permissions:
@@ -37,18 +41,44 @@ jobs:
           python3 -m json.tool supabase/functions/manifest.json >/dev/null
           python3 -m py_compile pi/canonical-config-agent.py
           bash -n pi/install-canonical-config-agent.sh
+          bash -n scripts/install-supabase-emergency-bridge-on-pi.sh
           bash -n scripts/test-supabase-emergency-bridge.sh
 
-      - name: Validate migration security contract
+      - name: Validate migration ordering and security contract
         shell: bash
         run: |
           set -euo pipefail
+          python3 - <<'PY'
+          from collections import Counter
+          from pathlib import Path
+
+          files = sorted(Path('supabase/migrations').glob('*.sql'))
+          versions = [path.name.split('_', 1)[0] for path in files]
+          duplicates = sorted(version for version, count in Counter(versions).items() if count > 1)
+          if duplicates:
+              raise SystemExit(f'duplicate migration versions: {duplicates}')
+          if versions != sorted(versions):
+              raise SystemExit('migration versions are not lexically ordered')
+          print(f'MIGRATION_VERSION_UNIQUENESS=PASS count={len(files)}')
+          PY
+
           control=supabase/migrations/20260819080000_emergency_bridge_control_plane.sql
           triggers=supabase/migrations/20260819080100_emergency_bridge_triggers_selftest.sql
           canonical=supabase/migrations/20260819080200_canonical_credential_routing.sql
           deny=supabase/migrations/20260819080300_bridge_explicit_deny_policies.sql
+          connectors=supabase/migrations/20260819080350_external_connector_capability_boundaries.sql
           ledger=supabase/migrations/20260819080400_token_gateway_ledger_hardening.sql
-          for migration in "$control" "$triggers" "$canonical" "$deny" "$ledger"; do
+          backlog=supabase/migrations/20260819080500_capability_registry_security_backlog.sql
+          coverage=supabase/migrations/20260819080600_complete_route_and_selftest_coverage.sql
+          readiness=supabase/migrations/20260819080700_admit_credential_readiness.sql
+          fk_indexes=supabase/migrations/20260819080750_foreign_key_indexes_and_duplicate_cleanup.sql
+          performance=supabase/migrations/20260819080800_bridge_performance_indexes.sql
+          service_deny=supabase/migrations/20260819080850_internal_service_tables_explicit_deny.sql
+          resolver=supabase/migrations/20260819080900_zero_cost_first_route_resolver.sql
+          for migration in \
+            "$control" "$triggers" "$canonical" "$deny" "$connectors" \
+            "$ledger" "$backlog" "$coverage" "$readiness" "$fk_indexes" \
+            "$performance" "$service_deny" "$resolver"; do
             test -s "$migration"
           done
 
@@ -71,8 +101,14 @@ jobs:
           grep -F "('vercel_raw_token_fallback',false" "$canonical"
           grep -F 'bridge_explicit_deny' "$deny"
           grep -F 'to anon, authenticated' "$deny"
+          grep -F 'credential_export_allowed' "$connectors"
           grep -F 'token_gateway_policy_gate' "$ledger"
           grep -F "'paid_api_fallback_disabled'" "$ledger"
+          grep -F 'bridge_security_backlog' "$backlog"
+          grep -F 'legacy_permissions_changed' "$coverage"
+          grep -F "when 'credential_readiness'" "$readiness"
+          grep -F 'explicit_service_only_deny' "$service_deny"
+          grep -F 'zero_cost_first' "$resolver"
 
       - name: Validate Edge Function boundaries
         shell: bash
@@ -80,60 +116,67 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           import json
+          import re
           from pathlib import Path
 
-          manifest=json.loads(Path('supabase/functions/manifest.json').read_text())
-          expected=('emergency-bridge','credential-readiness','canonical-client-config')
+          manifest = json.loads(Path('supabase/functions/manifest.json').read_text())
+          expected = ('emergency-bridge', 'credential-readiness', 'canonical-client-config')
           for name in expected:
               assert manifest['functions'][name]['verify_jwt'] is True
-          assert manifest['canonical_supabase_client_key']=='SUPABASE_PUBLISHABLE_KEYS.default'
-          assert manifest['canonical_supabase_server_key']=='SUPABASE_SECRET_KEYS.default'
+          assert manifest['canonical_supabase_client_key'] == 'SUPABASE_PUBLISHABLE_KEYS.default'
+          assert manifest['canonical_supabase_server_key'] == 'SUPABASE_SECRET_KEYS.default'
           assert manifest['legacy_anon_fallback'] is False
           assert manifest['vercel_raw_token_fallback'] is False
 
-          emergency=Path('supabase/functions/emergency-bridge/index.ts').read_text()
-          readiness=Path('supabase/functions/credential-readiness/index.ts').read_text()
-          canonical=Path('supabase/functions/canonical-client-config/index.ts').read_text()
+          emergency = Path('supabase/functions/emergency-bridge/index.ts').read_text()
+          readiness = Path('supabase/functions/credential-readiness/index.ts').read_text()
+          canonical = Path('supabase/functions/canonical-client-config/index.ts').read_text()
 
           for item in (
-              'pi-gateway-client','bridge_admit_request','bridge_policy_decision',
-              'values_exposed: false','PAID_API_FALLBACK = false','SUPABASE_SECRET_KEYS',
+              'pi-gateway-client', 'bridge_admit_request', 'bridge_policy_decision',
+              'values_exposed: false', 'PAID_API_FALLBACK = false', 'SUPABASE_SECRET_KEYS',
           ):
               if item not in emergency:
                   raise SystemExit(f'emergency bridge invariant missing: {item}')
 
           for item in (
-              'pi-gateway-client','SUPABASE_SECRET_KEYS','values_returned: false',
-              'prefixes_returned: false','hashes_returned: false','lengths_returned: false',
+              'pi-gateway-client', 'SUPABASE_SECRET_KEYS', 'values_returned: false',
+              'prefixes_returned: false', 'hashes_returned: false', 'lengths_returned: false',
           ):
               if item not in readiness:
                   raise SystemExit(f'credential readiness invariant missing: {item}')
 
           for item in (
-              'pi-gateway-client','SUPABASE_PUBLISHABLE_KEYS',
-              'modern_publishable_key_required','legacy_anon_fallback_enabled: false',
-              'server_secret_returned: false','raw_token_fallback_enabled: false',
-              'deploy_enabled: false','paid_api_fallback: false',
+              'pi-gateway-client', 'SUPABASE_PUBLISHABLE_KEYS',
+              'modern_publishable_key_required', 'legacy_anon_fallback_enabled: false',
+              'server_secret_returned: false', 'raw_token_fallback_enabled: false',
+              'deploy_enabled: false', 'paid_api_fallback: false',
               'telegram_single_poller_enforced: true',
           ):
               if item not in canonical:
                   raise SystemExit(f'canonical config invariant missing: {item}')
 
+          exact_secret_derivative_patterns = tuple(
+              re.compile(rf'(?<![a-z0-9_]){name}(?![a-z0-9_])', re.IGNORECASE)
+              for name in ('secret_value', 'secret_prefix', 'key_prefix', 'token_hash')
+          )
           for source in (emergency, readiness, canonical):
               for forbidden in ('Deno.Command(', 'child_process', '/bin/sh', 'eval('):
                   if forbidden in source:
                       raise SystemExit(f'public execution primitive detected: {forbidden}')
-              for forbidden in ('secret_value', 'secret_prefix', 'key_prefix', 'token_hash'):
-                  if forbidden in source.lower():
-                      raise SystemExit(f'secret derivative field detected: {forbidden}')
+              for pattern in exact_secret_derivative_patterns:
+                  if pattern.search(source):
+                      raise SystemExit(f'secret derivative field detected: {pattern.pattern}')
+          print('EDGE_FUNCTION_BOUNDARIES=PASS')
           PY
 
-      - name: Validate Pi canonical configuration agent
+      - name: Validate Pi canonical and emergency clients
         shell: bash
         run: |
           set -euo pipefail
           agent=pi/canonical-config-agent.py
-          installer=pi/install-canonical-config-agent.sh
+          canonical_installer=pi/install-canonical-config-agent.sh
+          emergency_installer=scripts/install-supabase-emergency-bridge-on-pi.sh
           grep -F 'dpllasnpfskyyyzebyal' "$agent"
           grep -F 'team_sa2sEffAlVXK6b9lsweDm6QL' "$agent"
           grep -F 'legacy_anon_fallback_enabled' "$agent"
@@ -143,9 +186,13 @@ jobs:
           grep -F 'os.replace' "$agent"
           grep -F 'PI_REFRESH_TOKEN' "$agent"
           grep -F 'KEY_VALUES_PRINTED=NO' "$agent"
-          grep -F 'ProtectSystem=strict' "$installer"
-          grep -F 'OnUnitActiveSec=6h' "$installer"
-          grep -F 'UMask=0077' "$installer"
+          grep -F 'ProtectSystem=strict' "$canonical_installer"
+          grep -F 'OnUnitActiveSec=6h' "$canonical_installer"
+          grep -F 'UMask=0077' "$canonical_installer"
+          grep -F 'CURRENT_SHORT_LIVED_PI_JWT_REQUIRED' "$emergency_installer"
+          grep -F 'ProtectSystem=strict' "$emergency_installer"
+          grep -F 'telegram_single_poller_enforced' "$emergency_installer"
+          grep -F 'values_exposed' "$emergency_installer"
 
       - name: Reject embedded secret literals
         shell: bash
