@@ -10,6 +10,7 @@ begin
   foreach v_table in array array[
     'bridge_credentials',
     'bridge_credential_aliases',
+    'bridge_canonical_config',
     'bridge_controls',
     'bridge_permission_policies',
     'bridge_route_registry',
