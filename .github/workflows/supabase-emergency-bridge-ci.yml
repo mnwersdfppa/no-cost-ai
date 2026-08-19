@@ -108,7 +108,8 @@ jobs:
           grep -F 'legacy_permissions_changed' "$coverage"
           grep -F "when 'credential_readiness'" "$readiness"
           grep -F 'explicit_service_only_deny' "$service_deny"
-          grep -F 'zero_cost_first' "$resolver"
+          grep -F 'bridge_resolve_route' "$resolver"
+          grep -F "'stop_no_eligible_route'" "$resolver"
 
       - name: Validate Edge Function boundaries
         shell: bash
