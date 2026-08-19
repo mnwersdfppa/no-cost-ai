@@ -4,12 +4,16 @@ on:
   pull_request:
     paths:
       - 'pi/activate-opencode-tailscale.sh'
+      - 'supabase/functions/pi-infra-bootstrap/**'
+      - 'supabase/migrations/20260819210608_activate_opencode_tailscale_and_harden_model_routes.sql'
       - '.github/workflows/opencode-tailscale-pi-recovery-ci.yml'
   push:
     branches:
       - feat/supabase-emergency-bridge-20260819
     paths:
       - 'pi/activate-opencode-tailscale.sh'
+      - 'supabase/functions/pi-infra-bootstrap/**'
+      - 'supabase/migrations/20260819210608_activate_opencode_tailscale_and_harden_model_routes.sql'
       - '.github/workflows/opencode-tailscale-pi-recovery-ci.yml'
   workflow_dispatch:
 
@@ -27,15 +31,19 @@ jobs:
         shell: bash
         run: bash -n pi/activate-opencode-tailscale.sh
 
-      - name: Validate recovery contract
+      - name: Validate recovery and cloud contracts
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
 
-          text = Path('pi/activate-opencode-tailscale.sh').read_text(encoding='utf-8')
-          required = (
+          script = Path('pi/activate-opencode-tailscale.sh').read_text(encoding='utf-8')
+          edge = Path('supabase/functions/pi-infra-bootstrap/index.ts').read_text(encoding='utf-8')
+          config = Path('supabase/functions/pi-infra-bootstrap/config.toml').read_text(encoding='utf-8')
+          migration = Path('supabase/migrations/20260819210608_activate_opencode_tailscale_and_harden_model_routes.sql').read_text(encoding='utf-8')
+
+          script_required = (
               'pi-auth-refresh',
               'pi-infra-bootstrap',
               'opencode/nemotron-3-ultra-free',
@@ -54,10 +62,40 @@ jobs:
               'second_telegram_poller_created',
               'paid_api_fallback_enabled',
           )
-          for needle in required:
-              assert needle in text, needle
-          assert text.count('opencode/nemotron-3-ultra-free') >= 1
-          assert 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free' not in text
+          for needle in script_required:
+              assert needle in script, needle
+          assert 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free' not in script
+
+          edge_required = (
+              'Opencode-api-key',
+              'Tailscale-fff-api-key',
+              'pi-gateway-client',
+              'MAX_BOOTSTRAPS_PER_HOUR',
+              'bridge_request_ledger',
+              'authenticated_pi_only',
+              'https://opencode.ai/zen/v1/models',
+              'node_auth_key',
+              'cacheable: false',
+              'values_logged: false',
+          )
+          for needle in edge_required:
+              assert needle in edge, needle
+          assert 'verify_jwt = true' in config
+
+          migration_required = (
+              'opencode_zen_free_route',
+              'tailscale_node_enrollment',
+              "'openrouter_free_route', false",
+              "'local_ollama_route', false",
+              'opencode/nemotron-3-ultra-free',
+              'opencode/deepseek-v4-flash-free',
+              'telegram-model-session-unpin-v1',
+              "r.health_status in ('healthy', 'degraded')",
+              'revoke all on function public.bridge_resolve_route',
+          )
+          for needle in migration_required:
+              assert needle in migration, needle
+          assert "local_http' and r.health_status='unknown" not in migration
           PY
 
       - name: Reject embedded secrets and unsafe execution
@@ -68,8 +106,12 @@ jobs:
           from pathlib import Path
           import re
 
-          path = Path('pi/activate-opencode-tailscale.sh')
-          text = path.read_text(encoding='utf-8')
+          paths = [
+              Path('pi/activate-opencode-tailscale.sh'),
+              Path('supabase/functions/pi-infra-bootstrap/index.ts'),
+              Path('supabase/migrations/20260819210608_activate_opencode_tailscale_and_harden_model_routes.sql'),
+          ]
+          text = '\n'.join(path.read_text(encoding='utf-8') for path in paths)
 
           forbidden_patterns = {
               'OpenRouter literal': r'sk-or-v1-[A-Za-z0-9_-]{8,}',
@@ -82,7 +124,8 @@ jobs:
           for label, pattern in forbidden_patterns.items():
               assert re.search(pattern, text) is None, label
 
-          compact = re.sub(r'\s+', '', text).lower()
+          script = paths[0].read_text(encoding='utf-8')
+          compact = re.sub(r'\s+', '', script).lower()
           assert '"paid_api_fallback_enabled":true' not in compact
           assert '"paid_api_fallback_requested":true' not in compact
           PY
