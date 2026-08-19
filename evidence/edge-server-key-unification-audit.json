@@ -1,6 +1,6 @@
 {
   "branch": "feat/supabase-emergency-bridge-20260819",
-  "commit_sha": "2fd55181b5d95cc13f0184293c8cf6beb02d9f37",
+  "commit_sha": "3e35b08489faf2df29de3cd7eccbb030e3e29ded",
   "functions": [
     {
       "classification": "mixed_or_unclassified",
@@ -55,9 +55,18 @@
       "modern_secret_keys_reference": true,
       "runtime_key_receipt": false,
       "secret_value_included": false
+    },
+    {
+      "classification": "modern_secret_default_first",
+      "function_name": "pi-model-gateway-guardian",
+      "legacy_service_role_reference": true,
+      "modern_default_pattern": true,
+      "modern_secret_keys_reference": true,
+      "runtime_key_receipt": false,
+      "secret_value_included": false
     }
   ],
-  "generated_at": "2026-08-19T23:54:56.275627+00:00",
+  "generated_at": "2026-08-19T23:55:54.135667+00:00",
   "legacy_service_role_only_functions": [
     "credential-readiness-admission-gated",
     "emergency-bridge",
@@ -76,6 +85,6 @@
   "summary": {
     "legacy_service_role_only": 3,
     "mixed_or_unclassified": 1,
-    "modern_secret_default_first": 2
+    "modern_secret_default_first": 3
   }
 }
