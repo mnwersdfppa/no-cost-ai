@@ -1,0 +1,72 @@
+{
+  "branch": "feat/supabase-emergency-bridge-20260819",
+  "commit_sha": "cce9600b1f8c8b3577acbc1d3b1b4fb503ffcc10",
+  "functions": [
+    {
+      "classification": "mixed_or_unclassified",
+      "function_name": "canonical-client-config",
+      "legacy_service_role_reference": true,
+      "modern_default_pattern": true,
+      "modern_secret_keys_reference": true,
+      "runtime_key_receipt": false,
+      "secret_value_included": false
+    },
+    {
+      "classification": "modern_secret_default_first",
+      "function_name": "credential-readiness",
+      "legacy_service_role_reference": true,
+      "modern_default_pattern": true,
+      "modern_secret_keys_reference": true,
+      "runtime_key_receipt": true,
+      "secret_value_included": false
+    },
+    {
+      "classification": "legacy_service_role_only",
+      "function_name": "credential-readiness-admission-gated",
+      "legacy_service_role_reference": true,
+      "modern_default_pattern": false,
+      "modern_secret_keys_reference": false,
+      "runtime_key_receipt": false,
+      "secret_value_included": false
+    },
+    {
+      "classification": "legacy_service_role_only",
+      "function_name": "emergency-bridge",
+      "legacy_service_role_reference": true,
+      "modern_default_pattern": false,
+      "modern_secret_keys_reference": false,
+      "runtime_key_receipt": false,
+      "secret_value_included": false
+    },
+    {
+      "classification": "legacy_service_role_only",
+      "function_name": "emergency-bridge-rollout-ssot",
+      "legacy_service_role_reference": true,
+      "modern_default_pattern": false,
+      "modern_secret_keys_reference": false,
+      "runtime_key_receipt": false,
+      "secret_value_included": false
+    }
+  ],
+  "generated_at": "2026-08-19T07:15:16.856712+00:00",
+  "legacy_service_role_only_functions": [
+    "credential-readiness-admission-gated",
+    "emergency-bridge",
+    "emergency-bridge-rollout-ssot"
+  ],
+  "repository": "mnwersdfppa/no-cost-ai",
+  "required_functions_missing_from_source": [
+    "command-center",
+    "pi-work-queue",
+    "token-gateway"
+  ],
+  "result": "partial",
+  "schema_version": 1,
+  "secret_values_included": false,
+  "secret_values_read": false,
+  "summary": {
+    "legacy_service_role_only": 3,
+    "mixed_or_unclassified": 1,
+    "modern_secret_default_first": 1
+  }
+}
