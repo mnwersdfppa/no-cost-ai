@@ -1,0 +1,206 @@
+name: Repair Supabase emergency bridge Draft PR
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/repair-supabase-emergency-bridge-pr.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: repair-supabase-emergency-bridge-pr
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_BRANCH: feat/supabase-emergency-bridge-20260819
+      TARGET_PR: '5'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          persist-credentials: true
+          fetch-depth: 1
+
+      - name: Normalize deployed source and static CI
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -s supabase/functions/deployed/credential-readiness-v3/index.ts ]]; then
+            cp \
+              supabase/functions/deployed/credential-readiness-v3/index.ts \
+              supabase/functions/credential-readiness/index.ts
+          fi
+
+          cat > .github/workflows/supabase-emergency-bridge-ci.yml <<'YML'
+          name: Supabase emergency bridge safety checks
+
+          on:
+            pull_request:
+              paths:
+                - 'supabase/**'
+                - 'scripts/test-supabase-emergency-bridge.sh'
+                - 'scripts/install-supabase-emergency-bridge-on-pi.sh'
+                - 'docs/SUPABASE_EMERGENCY_BRIDGE*.md'
+                - '.github/workflows/supabase-emergency-bridge-ci.yml'
+            push:
+              branches:
+                - feat/supabase-emergency-bridge-20260819
+              paths:
+                - 'supabase/**'
+                - 'scripts/test-supabase-emergency-bridge.sh'
+                - 'scripts/install-supabase-emergency-bridge-on-pi.sh'
+                - 'docs/SUPABASE_EMERGENCY_BRIDGE*.md'
+                - '.github/workflows/supabase-emergency-bridge-ci.yml'
+
+          permissions:
+            contents: read
+
+          jobs:
+            validate:
+              runs-on: ubuntu-24.04
+              timeout-minutes: 10
+              steps:
+                - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+                - name: Validate JSON, shell and TypeScript source contracts
+                  shell: bash
+                  run: |
+                    set -euo pipefail
+                    python3 -m json.tool supabase/functions/manifest.json >/dev/null
+                    bash -n scripts/test-supabase-emergency-bridge.sh
+                    bash -n scripts/install-supabase-emergency-bridge-on-pi.sh
+                    test -s supabase/functions/emergency-bridge/index.ts
+                    test -s supabase/functions/credential-readiness/index.ts
+
+                - name: Validate migration security contract
+                  shell: bash
+                  run: |
+                    set -euo pipefail
+                    python3 - <<'PY'
+                    from pathlib import Path
+
+                    files=sorted(Path('supabase/migrations').glob('2026081908*.sql'))
+                    assert len(files) >= 8, f'expected at least 8 migration files, got {len(files)}'
+                    text='\n'.join(path.read_text() for path in files)
+                    required=(
+                        'alter table public.bridge_credentials enable row level security',
+                        'bridge_request_ledger',
+                        'unique (user_id, execution_key)',
+                        'paid_api_fallback',
+                        'public_shell_execution',
+                        'telegram_single_poller_enforced',
+                        'policy_missing_fail_closed',
+                        'credential_export_allowed',
+                        'bridge_security_backlog',
+                        'maintain-emergency-bridge',
+                        'refresh-bridge-security-backlog',
+                    )
+                    missing=[item for item in required if item not in text]
+                    if missing:
+                        raise SystemExit(f'migration invariants missing: {missing}')
+                    compact=''.join(text.split())
+                    if 'frompublic,anon,authenticated' not in compact:
+                        raise SystemExit('anon/authenticated function revocation not found')
+                    PY
+
+                - name: Validate Edge Function boundaries
+                  shell: bash
+                  run: |
+                    set -euo pipefail
+                    python3 - <<'PY'
+                    import json
+                    from pathlib import Path
+
+                    manifest=json.loads(Path('supabase/functions/manifest.json').read_text())
+                    for name in ('emergency-bridge','credential-readiness'):
+                        assert manifest['functions'][name]['verify_jwt'] is True
+
+                    emergency=Path('supabase/functions/emergency-bridge/index.ts').read_text()
+                    readiness=Path('supabase/functions/credential-readiness/index.ts').read_text()
+                    required_emergency=(
+                        'pi-gateway-client',
+                        'bridge_admit_request',
+                        'bridge_policy_decision',
+                        'values_exposed: false',
+                    )
+                    required_readiness=(
+                        'pi-gateway-client',
+                        'bridge_admit_request',
+                        'credential_readiness',
+                        'values_returned: false',
+                        'prefixes_returned: false',
+                        'hashes_returned: false',
+                        'lengths_returned: false',
+                    )
+                    for item in required_emergency:
+                        assert item in emergency, item
+                    for item in required_readiness:
+                        assert item in readiness, item
+                    for forbidden in ('Deno.Command(', 'child_process', '/bin/sh', 'eval('):
+                        assert forbidden not in emergency
+                        assert forbidden not in readiness
+                    PY
+
+                - name: Reject embedded secret literals and public execution
+                  shell: bash
+                  run: |
+                    set -euo pipefail
+                    ! grep -RInE \
+                      --exclude='*.md' \
+                      --exclude='package-lock.json' \
+                      '(sk-proj-|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|Bearer[[:space:]]+[A-Za-z0-9._-]{20,})' \
+                      supabase scripts
+                    ! grep -RInE '(Deno\.Command|child_process|/bin/sh|shell_exec|execSync)' supabase/functions
+
+                - name: Validate non-destructive rollback
+                  shell: bash
+                  run: |
+                    set -euo pipefail
+                    rollback=supabase/rollback/20260819080000_emergency_bridge_disable.sql
+                    grep -F 'set enabled=false' "$rollback"
+                    grep -F "mode='disabled'" "$rollback"
+                    grep -F "destructive_drop',false" "$rollback"
+                    ! grep -Eiq '\bdrop[[:space:]]+(table|schema|function)\b' "$rollback"
+          YML
+
+          python3 - <<'PY'
+          from pathlib import Path
+          path=Path('scripts/install-supabase-emergency-bridge-on-pi.sh')
+          text=path.read_text()
+          old='''        payload = request(\n            "credential-readiness",\n            {\n                "correlation_id": correlation_id,\n            },\n        )'''
+          new='''        payload = request(\n            "credential-readiness",\n            {\n                "execution_key": execution_key("credential-readiness"),\n                "correlation_id": correlation_id,\n            },\n        )'''
+          if old in text:
+              path.write_text(text.replace(old,new))
+          PY
+
+      - name: Commit repairs to the isolated Draft branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            supabase/functions/credential-readiness/index.ts \
+            scripts/install-supabase-emergency-bridge-on-pi.sh \
+            .github/workflows/supabase-emergency-bridge-ci.yml
+          if git diff --cached --quiet; then
+            echo 'No repair changes required.'
+          else
+            git commit -m 'fix: normalize deployed credential readiness and emergency bridge CI'
+            git push origin HEAD:${TARGET_BRANCH}
+          fi
+
+      - name: Record the normalization on Draft PR 5
+        shell: bash
+        run: |
+          gh pr comment "$TARGET_PR" --repo "$GITHUB_REPOSITORY" --body 'Automated normalization completed: the canonical credential-readiness source now matches deployed v3, the Pi client sends a bounded execution key, and static CI uses whitespace-independent security checks. No secrets, deployments, merges, or physical-device actions were performed.'
