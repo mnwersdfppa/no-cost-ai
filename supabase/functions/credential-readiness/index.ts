@@ -2,27 +2,8 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.56.0";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
-const LEGACY_SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-
-function parseDictionary(name: string): Record<string, string> {
-  const raw = Deno.env.get(name);
-  if (!raw) return {};
-  try {
-    const value = JSON.parse(raw);
-    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-    return Object.fromEntries(
-      Object.entries(value).filter((entry): entry is [string, string] =>
-        typeof entry[1] === "string" && entry[1].length > 0
-      ),
-    );
-  } catch {
-    return {};
-  }
-}
-
-const secretKeys = parseDictionary("SUPABASE_SECRET_KEYS");
-const adminKey = secretKeys.default ?? LEGACY_SERVICE_ROLE;
-const admin = createClient(SUPABASE_URL, adminKey, {
+const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
 });
 
@@ -53,27 +34,30 @@ function reply(body: unknown, status = 200) {
   });
 }
 
+function boundedString(value: unknown, min: number, max: number): string | null {
+  if (typeof value !== "string") return null;
+  const result = value.trim();
+  return result.length >= min && result.length <= max ? result : null;
+}
+
 async function requirePi(req: Request) {
   const authorization = req.headers.get("authorization");
   if (!authorization?.startsWith("Bearer ")) {
-    throw reply({ ok: false, error: "unauthorized", values_exposed: false }, 401);
+    throw reply({ ok: false, error: "unauthorized" }, 401);
   }
   const { data, error } = await admin.auth.getUser(authorization.slice(7));
   if (error || !data.user) {
-    throw reply({ ok: false, error: "unauthorized", values_exposed: false }, 401);
+    throw reply({ ok: false, error: "unauthorized" }, 401);
   }
   if (data.user.app_metadata?.role !== "pi-gateway-client") {
-    throw reply({ ok: false, error: "pi_identity_required", values_exposed: false }, 403);
+    throw reply({ ok: false, error: "pi_identity_required" }, 403);
   }
   return data.user;
 }
 
 Deno.serve(async (req: Request) => {
   if (req.method !== "POST") {
-    return reply({ ok: false, error: "method_not_allowed", values_exposed: false }, 405);
-  }
-  if (!SUPABASE_URL || !adminKey) {
-    return reply({ ok: false, error: "server_not_configured", values_exposed: false }, 503);
+    return reply({ ok: false, error: "method_not_allowed" }, 405);
   }
 
   let user;
@@ -81,11 +65,72 @@ Deno.serve(async (req: Request) => {
     user = await requirePi(req);
   } catch (response) {
     if (response instanceof Response) return response;
-    return reply({ ok: false, error: "authentication_failed", values_exposed: false }, 401);
+    return reply({ ok: false, error: "authentication_failed" }, 401);
+  }
+
+  let body: Record<string, unknown> = {};
+  try {
+    const parsed = await req.json();
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      body = parsed as Record<string, unknown>;
+    }
+  } catch {
+    body = {};
+  }
+
+  const executionKey = boundedString(
+    body.execution_key ?? req.headers.get("x-execution-key"),
+    1,
+    128,
+  );
+
+  const { data: admissions, error: admissionError } = await admin.rpc(
+    "bridge_admit_request",
+    {
+      p_user_id: user.id,
+      p_action: "credential_readiness",
+      p_execution_key: executionKey,
+    },
+  );
+
+  if (admissionError || !admissions?.[0]) {
+    return reply({
+      ok: false,
+      error: "admission_check_failed",
+      values_returned: false,
+    }, 503);
+  }
+
+  const admission = admissions[0];
+  if (!admission.allowed) {
+    return reply({
+      ok: false,
+      error: admission.reason,
+      admission,
+      values_returned: false,
+      prefixes_returned: false,
+      hashes_returned: false,
+      lengths_returned: false,
+    }, admission.reason === "rate_limit_exceeded" ? 429 : 403);
+  }
+
+  if (admission.duplicate) {
+    return reply({
+      ok: true,
+      duplicate: true,
+      admission,
+      values_returned: false,
+      prefixes_returned: false,
+      hashes_returned: false,
+      lengths_returned: false,
+    });
   }
 
   const now = new Date().toISOString();
-  const results: Array<{ integration: string; present_in_edge_runtime: boolean }> = [];
+  const results: Array<{
+    integration: string;
+    present_in_edge_runtime: boolean;
+  }> = [];
 
   for (const [integration, aliases] of Object.entries(CREDENTIAL_GROUPS)) {
     const present = aliases.some((name) => Boolean(Deno.env.get(name)?.trim()));
@@ -97,31 +142,38 @@ Deno.serve(async (req: Request) => {
       .eq("integration", integration)
       .maybeSingle();
 
-    const existingPresence = current?.runtime_presence && typeof current.runtime_presence === "object"
+    const existingPresence = current?.runtime_presence &&
+        typeof current.runtime_presence === "object"
       ? current.runtime_presence
       : {};
     const runtimePresence = { ...existingPresence, supabase_edge_env: present };
-    const protectedStatus = ["valid", "invalid", "blocked", "external_only"].includes(
-      current?.validation_status ?? "",
-    );
+    const protectedStatus = [
+      "valid",
+      "invalid",
+      "blocked",
+      "external_only",
+    ].includes(current?.validation_status ?? "");
     const validationStatus = protectedStatus
       ? current!.validation_status
       : present
-        ? "unverified"
-        : current?.validation_status ?? "not_present";
+      ? "unverified"
+      : current?.validation_status ?? "not_present";
 
     await admin.from("bridge_credentials").upsert({
       integration,
       canonical_secret_name: current?.canonical_secret_name ?? aliases[0],
       detected_aliases: current?.detected_aliases ?? [],
-      storage_scope: present ? "supabase_edge_env" : current?.storage_scope ?? "unknown",
+      storage_scope: present
+        ? "supabase_edge_env"
+        : current?.storage_scope ?? "unknown",
       configured: Boolean(current?.configured || present),
       validation_status: validationStatus,
       validation_detail: protectedStatus
         ? current?.validation_detail
         : present
-          ? "Credential presence detected in Edge runtime; value not read or returned. Provider validation remains separate."
-          : current?.validation_detail ?? "Credential not present in this Edge runtime. It may exist in Pi local secrets, OAuth device storage, n8n credentials or a connected external connector.",
+        ? "Credential presence detected in Edge runtime; value not read or returned. Provider validation remains separate."
+        : current?.validation_detail ??
+          "Credential not present in this Edge runtime. It may exist in Pi local secrets, OAuth device storage, n8n credentials or a connected external connector.",
       required_scopes: current?.required_scopes ?? [],
       read_only_default: current?.read_only_default ?? true,
       runtime_presence: runtimePresence,
@@ -133,7 +185,7 @@ Deno.serve(async (req: Request) => {
   await admin.rpc("bridge_record_event", {
     p_event_type: "credential_readiness_refresh",
     p_node_name: null,
-    p_correlation_id: req.headers.get("x-correlation-id"),
+    p_correlation_id: boundedString(body.correlation_id, 1, 128),
     p_severity: "info",
     p_outcome: "succeeded",
     p_detail: {
@@ -145,9 +197,11 @@ Deno.serve(async (req: Request) => {
 
   return reply({
     ok: true,
+    admission,
     results,
-    platform_managed_supabase_runtime: Boolean(SUPABASE_URL && adminKey),
-    selected_server_key_type: secretKeys.default ? "secret" : "legacy_service_role_compatibility",
+    platform_managed_supabase_runtime: Boolean(
+      SUPABASE_URL && SERVICE_ROLE_KEY,
+    ),
     values_returned: false,
     prefixes_returned: false,
     hashes_returned: false,
