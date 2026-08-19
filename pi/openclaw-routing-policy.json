@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "default_route": "local_ollama",
+  "operations": ["chat", "summarize", "extract", "classify", "plan", "code_light"],
+  "routes": [
+    {"id":"local_ollama","model":"qwen2.5:3b","cost_policy":"no_external_token_fee","next":"openrouter_free"},
+    {"id":"openrouter_free","model":"openrouter/free","cost_policy":"free_only","next":"stop"}
+  ],
+  "paid_openai": {
+    "automatic": false,
+    "requires_explicit_manual_approval": true,
+    "monthly_budget_usd_default": 0
+  },
+  "telegram": {
+    "default_handler": "~/.openclaw/bin/ai-zero-cost",
+    "reply_mode": "text"
+  }
+}
