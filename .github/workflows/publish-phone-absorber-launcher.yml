@@ -1,0 +1,154 @@
+name: Publish immutable phone absorber launcher
+
+on:
+  schedule:
+    - cron: '33 * * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/publish-phone-absorber-launcher.yml'
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: publish-phone-absorber-launcher
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      TARGET_PR: '2'
+      STOP_AT_UTC: '2026-08-19T07:05:00Z'
+    steps:
+      - name: Enforce bounded publication window
+        id: window
+        shell: bash
+        run: |
+          set -euo pipefail
+          now="$(date -u +%s)"
+          stop="$(date -u -d "$STOP_AT_UTC" +%s)"
+          if (( now >= stop )); then
+            echo 'active=false' >> "$GITHUB_OUTPUT"
+            gh api -X PUT "repos/$REPO/actions/workflows/publish-phone-absorber-launcher.yml/disable" || true
+          else
+            echo 'active=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Resolve PR head and required checks
+        if: steps.window.outputs.active == 'true'
+        id: gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          head="$(gh api "repos/$REPO/pulls/$TARGET_PR" --jq .head.sha)"
+          draft="$(gh api "repos/$REPO/pulls/$TARGET_PR" --jq .draft)"
+          runs="$(gh api "repos/$REPO/actions/runs?head_sha=$head&per_page=100")"
+          required=(
+            'Android Node Absorber CI'
+            'android-phone-absorber-ci'
+            'Android node safety checks'
+            'Android immutable live-gate checks'
+            'Android secure entrypoint checks'
+          )
+          ready=true
+          for name in "${required[@]}"; do
+            conclusion="$(printf '%s' "$runs" | jq -r --arg n "$name" '[.workflow_runs[] | select(.name==$n)] | sort_by(.created_at) | last | .conclusion // "missing"')"
+            echo "$name=$conclusion"
+            [[ "$conclusion" == success ]] || ready=false
+          done
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+          echo "draft=$draft" >> "$GITHUB_OUTPUT"
+          echo "ready=$ready" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout main
+        if: steps.window.outputs.active == 'true' && steps.gate.outputs.ready == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: main
+          persist-credentials: true
+          fetch-depth: 1
+
+      - name: Generate immutable staged launcher
+        if: steps.window.outputs.active == 'true' && steps.gate.outputs.ready == 'true'
+        shell: bash
+        env:
+          PAYLOAD_COMMIT: ${{ steps.gate.outputs.head }}
+        run: |
+          set -euo pipefail
+          mkdir -p bootstrap
+          cat > bootstrap/phone-absorber-launcher.sh <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          readonly REPO='https://github.com/mnwersdfppa/no-cost-ai.git'
+          readonly COMMIT='$PAYLOAD_COMMIT'
+          SRC="\${PHONE_ABSORBER_SOURCE:-\$HOME/.openclaw/source/phone-absorber}"
+
+          for command in git bash; do
+            command -v "\$command" >/dev/null 2>&1 || { echo "BLOCKED=MISSING_COMMAND:\$command"; exit 20; }
+          done
+          mkdir -p "\$(dirname "\$SRC")"
+          if [[ -d "\$SRC/.git" ]]; then
+            [[ -z "\$(git -C "\$SRC" status --porcelain --untracked-files=no)" ]] || { echo 'BLOCKED=LOCAL_SOURCE_CHANGES'; exit 21; }
+            git -C "\$SRC" remote set-url origin "\$REPO"
+          else
+            rm -rf "\$SRC"
+            git init --quiet "\$SRC"
+            git -C "\$SRC" remote add origin "\$REPO"
+          fi
+          git -C "\$SRC" fetch --quiet --depth 1 origin "\$COMMIT"
+          git -C "\$SRC" checkout --quiet --detach --force FETCH_HEAD
+          [[ "\$(git -C "\$SRC" rev-parse HEAD)" == "\$COMMIT" ]] || { echo 'BLOCKED=PAYLOAD_COMMIT_MISMATCH'; exit 22; }
+
+          cd "\$SRC/android-node"
+          chmod 700 ./*.sh phone-codex-cli-backend/phone-codex-cli-backend.sh
+          INSTALL_PACKAGES="\${INSTALL_PACKAGES:-1}" AUTO_TYPE_TERMUX=0 ./install-pi-bridge-secure.sh
+          ./pair-openclaw-node.sh || true
+
+          mkdir -p "\$HOME/.openclaw/bin"
+          install -m 700 \
+            "\$SRC/pi/install-maton-readonly-mcp.sh" \
+            "\$SRC/pi/import-n8n-openclaw-workflows-inactive.sh" \
+            "\$SRC/pi/send-make-queue-pulse.sh" \
+            "\$HOME/.openclaw/bin/"
+
+          printf '%s\n' \
+            'RESULT=STAGE_1_PREPARED' \
+            "SOURCE_COMMIT=\$COMMIT" \
+            'ROOT_JAILBREAK=OFF' \
+            'PAID_OPENAI_AUTOMATIC_FALLBACK=OFF' \
+            'SECOND_TELEGRAM_POLLER=OFF' \
+            'NEXT_PHONE=bash /sdcard/Download/openclaw-phone-bootstrap.sh' \
+            'NEXT_PI=RUN_LLM_TEST=1 ~/.openclaw/source/phone-absorber/android-node/verify-phone-bridge-secure.sh'
+          EOF
+          chmod 755 bootstrap/phone-absorber-launcher.sh
+          printf '%s\n' "$PAYLOAD_COMMIT" > bootstrap/PHONE_ABSORBER_PAYLOAD.txt
+
+      - name: Commit launcher only when payload changes
+        if: steps.window.outputs.active == 'true' && steps.gate.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add bootstrap/phone-absorber-launcher.sh bootstrap/PHONE_ABSORBER_PAYLOAD.txt
+          if git diff --cached --quiet; then
+            echo 'Immutable launcher already points at the current green payload.'
+          else
+            git commit -m 'build: publish green immutable phone absorber launcher'
+            git push origin HEAD:main
+          fi
+
+      - name: Report blocked publication without weakening gates
+        if: steps.window.outputs.active == 'true' && steps.gate.outputs.ready != 'true'
+        shell: bash
+        run: |
+          echo 'LAUNCHER_PUBLICATION=WAITING_FOR_ALL_REQUIRED_CHECKS'
+          echo "PR_HEAD=${{ steps.gate.outputs.head }}"
