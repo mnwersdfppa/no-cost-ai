@@ -1,17 +1,23 @@
 -- Triggers and deployment self-test for the Supabase emergency bridge.
 
-for table_name in
-  select unnest(array[
-    'bridge_credentials','bridge_controls','bridge_permission_policies',
-    'bridge_route_registry','bridge_nodes'
-  ])
-loop
-  execute format('drop trigger if exists %I_updated_at on public.%I', table_name, table_name);
-  execute format(
-    'create trigger %I_updated_at before update on public.%I for each row execute function private.set_updated_at()',
-    table_name, table_name
-  );
-end loop;
+do $$
+declare
+  table_name text;
+begin
+  for table_name in
+    select unnest(array[
+      'bridge_credentials','bridge_controls','bridge_permission_policies',
+      'bridge_route_registry','bridge_nodes'
+    ])
+  loop
+    execute format('drop trigger if exists %I_updated_at on public.%I', table_name, table_name);
+    execute format(
+      'create trigger %I_updated_at before update on public.%I for each row execute function private.set_updated_at()',
+      table_name, table_name
+    );
+  end loop;
+end;
+$$;
 
 create or replace function public.bridge_self_test()
 returns jsonb
