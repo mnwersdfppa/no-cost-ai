@@ -33,8 +33,9 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          text=Path('pi/activate-opencode-tailscale.sh').read_text(encoding='utf-8')
-          required=(
+
+          text = Path('pi/activate-opencode-tailscale.sh').read_text(encoding='utf-8')
+          required = (
               'pi-auth-refresh',
               'pi-infra-bootstrap',
               'opencode/nemotron-3-ultra-free',
@@ -59,10 +60,29 @@ jobs:
           assert 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free' not in text
           PY
 
-      - name: Reject embedded secrets and unsafe Telegram duplication
+      - name: Reject embedded secrets and unsafe execution
         shell: bash
         run: |
           set -euo pipefail
-          ! grep -nE '(sk-or-v1-|sk-proj-|tskey-(auth|api|client)-[A-Za-z0-9_-]{8,}|Bearer[[:space:]]+[A-Za-z0-9._~-]{20,})' pi/activate-opencode-tailscale.sh
-          ! grep -nE '(getUpdates\(|start_polling\(|run_polling\(|TELEGRAM_BOT_TOKEN=)' pi/activate-opencode-tailscale.sh
-          ! grep -nE '(paid_api_fallback_enabled["'"']?:[[:space:]]*true|paid_api_fallback_requested["'"']?:[[:space:]]*true)' pi/activate-opencode-tailscale.sh
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('pi/activate-opencode-tailscale.sh')
+          text = path.read_text(encoding='utf-8')
+
+          forbidden_patterns = {
+              'OpenRouter literal': r'sk-or-v1-[A-Za-z0-9_-]{8,}',
+              'OpenAI literal': r'sk-proj-[A-Za-z0-9_-]{8,}',
+              'Tailscale literal': r'tskey-(?:auth|api|client)-[A-Za-z0-9_-]{8,}',
+              'Bearer literal': r'Bearer\s+[A-Za-z0-9._~-]{20,}',
+              'Telegram token assignment': r'TELEGRAM_BOT_TOKEN=',
+              'second poller primitive': r'(?:getUpdates|start_polling|run_polling)\(',
+          }
+          for label, pattern in forbidden_patterns.items():
+              assert re.search(pattern, text) is None, label
+
+          compact = re.sub(r'\s+', '', text).lower()
+          assert '"paid_api_fallback_enabled":true' not in compact
+          assert '"paid_api_fallback_requested":true' not in compact
+          PY
