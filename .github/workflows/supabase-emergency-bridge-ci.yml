@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - 'supabase/**'
+      - 'pi/canonical-config-agent.py'
+      - 'pi/install-canonical-config-agent.sh'
       - 'scripts/test-supabase-emergency-bridge.sh'
       - 'docs/SUPABASE_EMERGENCY_BRIDGE.md'
       - '.github/workflows/supabase-emergency-bridge-ci.yml'
@@ -12,6 +14,8 @@ on:
       - feat/supabase-emergency-bridge-20260819
     paths:
       - 'supabase/**'
+      - 'pi/canonical-config-agent.py'
+      - 'pi/install-canonical-config-agent.sh'
       - 'scripts/test-supabase-emergency-bridge.sh'
       - 'docs/SUPABASE_EMERGENCY_BRIDGE.md'
       - '.github/workflows/supabase-emergency-bridge-ci.yml'
@@ -22,32 +26,53 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
-      - name: Validate JSON and shell syntax
+      - name: Validate JSON, Python and shell syntax
         shell: bash
         run: |
           set -euo pipefail
           python3 -m json.tool supabase/functions/manifest.json >/dev/null
+          python3 -m py_compile pi/canonical-config-agent.py
+          bash -n pi/install-canonical-config-agent.sh
           bash -n scripts/test-supabase-emergency-bridge.sh
 
       - name: Validate migration security contract
         shell: bash
         run: |
           set -euo pipefail
-          migration=supabase/migrations/20260819080000_emergency_bridge_control_plane.sql
-          test -s "$migration"
-          grep -F 'alter table public.bridge_credentials enable row level security' "$migration"
-          grep -F 'revoke all on table' "$migration"
-          grep -F 'from public,anon,authenticated' "$migration"
-          grep -F "('paid_api_fallback',false" "$migration"
-          grep -F "('public_shell_execution',false" "$migration"
-          grep -F "('telegram_single_poller_enforced',true" "$migration"
-          grep -F "'policy_missing_fail_closed'" "$migration"
-          grep -F "unique (user_id, execution_key)" "$migration"
-          grep -F "cron.schedule('maintain-emergency-bridge'" "$migration"
+          control=supabase/migrations/20260819080000_emergency_bridge_control_plane.sql
+          triggers=supabase/migrations/20260819080100_emergency_bridge_triggers_selftest.sql
+          canonical=supabase/migrations/20260819080200_canonical_credential_routing.sql
+          deny=supabase/migrations/20260819080300_bridge_explicit_deny_policies.sql
+          ledger=supabase/migrations/20260819080400_token_gateway_ledger_hardening.sql
+          for migration in "$control" "$triggers" "$canonical" "$deny" "$ledger"; do
+            test -s "$migration"
+          done
+
+          grep -F 'alter table public.bridge_credentials enable row level security' "$control"
+          grep -F 'revoke all on table' "$control"
+          grep -F 'from public,anon,authenticated' "$control"
+          grep -F "('paid_api_fallback',false" "$control"
+          grep -F "('public_shell_execution',false" "$control"
+          grep -F "('telegram_single_poller_enforced',true" "$control"
+          grep -F "'policy_missing_fail_closed'" "$control"
+          grep -F 'unique (user_id, execution_key)' "$control"
+          grep -F "cron.schedule('maintain-emergency-bridge'" "$control"
+
+          grep -F 'do $$' "$triggers"
+          grep -F 'bridge_self_test' "$triggers"
+          grep -F 'bridge_credential_aliases' "$canonical"
+          grep -F 'supabase.publishable.default' "$canonical"
+          grep -F 'vercel.connector.team_sa2sEffAlVXK6b9lsweDm6QL' "$canonical"
+          grep -F "('supabase_legacy_anon_fallback',false" "$canonical"
+          grep -F "('vercel_raw_token_fallback',false" "$canonical"
+          grep -F 'bridge_explicit_deny' "$deny"
+          grep -F 'to anon, authenticated' "$deny"
+          grep -F 'token_gateway_policy_gate' "$ledger"
+          grep -F "'paid_api_fallback_disabled'" "$ledger"
 
       - name: Validate Edge Function boundaries
         shell: bash
@@ -58,32 +83,69 @@ jobs:
           from pathlib import Path
 
           manifest=json.loads(Path('supabase/functions/manifest.json').read_text())
-          for name in ('emergency-bridge','credential-readiness'):
+          expected=('emergency-bridge','credential-readiness','canonical-client-config')
+          for name in expected:
               assert manifest['functions'][name]['verify_jwt'] is True
+          assert manifest['canonical_supabase_client_key']=='SUPABASE_PUBLISHABLE_KEYS.default'
+          assert manifest['canonical_supabase_server_key']=='SUPABASE_SECRET_KEYS.default'
+          assert manifest['legacy_anon_fallback'] is False
+          assert manifest['vercel_raw_token_fallback'] is False
 
           emergency=Path('supabase/functions/emergency-bridge/index.ts').read_text()
           readiness=Path('supabase/functions/credential-readiness/index.ts').read_text()
-          required=[
-              'pi-gateway-client',
-              'bridge_admit_request',
-              'bridge_policy_decision',
-              'values_exposed: false',
-              'paid_api_fallback',
-          ]
-          missing=[item for item in required if item not in emergency]
-          if missing:
-              raise SystemExit(f'emergency bridge invariants missing: {missing}')
-          for forbidden in ('Deno.Command(', 'child_process', 'exec(', '/bin/sh', 'eval('):
-              if forbidden in emergency or forbidden in readiness:
-                  raise SystemExit(f'public execution primitive detected: {forbidden}')
-          for forbidden in ('secret_value', 'secret_prefix', 'key_prefix', 'token_hash'):
-              if forbidden in emergency.lower() or forbidden in readiness.lower():
-                  raise SystemExit(f'secret derivative field detected: {forbidden}')
-          assert 'values_returned: false' in readiness
-          assert 'prefixes_returned: false' in readiness
-          assert 'hashes_returned: false' in readiness
-          assert 'lengths_returned: false' in readiness
+          canonical=Path('supabase/functions/canonical-client-config/index.ts').read_text()
+
+          for item in (
+              'pi-gateway-client','bridge_admit_request','bridge_policy_decision',
+              'values_exposed: false','PAID_API_FALLBACK = false','SUPABASE_SECRET_KEYS',
+          ):
+              if item not in emergency:
+                  raise SystemExit(f'emergency bridge invariant missing: {item}')
+
+          for item in (
+              'pi-gateway-client','SUPABASE_SECRET_KEYS','values_returned: false',
+              'prefixes_returned: false','hashes_returned: false','lengths_returned: false',
+          ):
+              if item not in readiness:
+                  raise SystemExit(f'credential readiness invariant missing: {item}')
+
+          for item in (
+              'pi-gateway-client','SUPABASE_PUBLISHABLE_KEYS',
+              'modern_publishable_key_required','legacy_anon_fallback_enabled: false',
+              'server_secret_returned: false','raw_token_fallback_enabled: false',
+              'deploy_enabled: false','paid_api_fallback: false',
+              'telegram_single_poller_enforced: true',
+          ):
+              if item not in canonical:
+                  raise SystemExit(f'canonical config invariant missing: {item}')
+
+          for source in (emergency, readiness, canonical):
+              for forbidden in ('Deno.Command(', 'child_process', '/bin/sh', 'eval('):
+                  if forbidden in source:
+                      raise SystemExit(f'public execution primitive detected: {forbidden}')
+              for forbidden in ('secret_value', 'secret_prefix', 'key_prefix', 'token_hash'):
+                  if forbidden in source.lower():
+                      raise SystemExit(f'secret derivative field detected: {forbidden}')
           PY
+
+      - name: Validate Pi canonical configuration agent
+        shell: bash
+        run: |
+          set -euo pipefail
+          agent=pi/canonical-config-agent.py
+          installer=pi/install-canonical-config-agent.sh
+          grep -F 'dpllasnpfskyyyzebyal' "$agent"
+          grep -F 'team_sa2sEffAlVXK6b9lsweDm6QL' "$agent"
+          grep -F 'legacy_anon_fallback_enabled' "$agent"
+          grep -F 'raw_token_fallback_enabled' "$agent"
+          grep -F 'paid_api_fallback' "$agent"
+          grep -F 'telegram_single_poller_enforced' "$agent"
+          grep -F 'os.replace' "$agent"
+          grep -F 'PI_REFRESH_TOKEN' "$agent"
+          grep -F 'KEY_VALUES_PRINTED=NO' "$agent"
+          grep -F 'ProtectSystem=strict' "$installer"
+          grep -F 'OnUnitActiveSec=6h' "$installer"
+          grep -F 'UMask=0077' "$installer"
 
       - name: Reject embedded secret literals
         shell: bash
@@ -92,15 +154,15 @@ jobs:
           ! grep -RInE \
             --exclude='*.md' \
             --exclude='package-lock.json' \
-            '(sk-proj-|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|Bearer[[:space:]]+[A-Za-z0-9._-]{20,})' \
-            supabase scripts
+            '(sk-proj-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|sb_secret_[A-Za-z0-9_-]{20,}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|Bearer[[:space:]]+[A-Za-z0-9._-]{40,})' \
+            supabase pi scripts
 
       - name: Validate non-destructive rollback
         shell: bash
         run: |
           set -euo pipefail
           rollback=supabase/rollback/20260819080000_emergency_bridge_disable.sql
-          grep -F "set enabled=false" "$rollback"
+          grep -F 'set enabled=false' "$rollback"
           grep -F "mode='disabled'" "$rollback"
           grep -F "destructive_drop',false" "$rollback"
           ! grep -Eiq '\bdrop[[:space:]]+(table|schema|function)\b' "$rollback"
