@@ -1,0 +1,68 @@
+name: OpenCode and Tailscale Pi recovery checks
+
+on:
+  pull_request:
+    paths:
+      - 'pi/activate-opencode-tailscale.sh'
+      - '.github/workflows/opencode-tailscale-pi-recovery-ci.yml'
+  push:
+    branches:
+      - feat/supabase-emergency-bridge-20260819
+    paths:
+      - 'pi/activate-opencode-tailscale.sh'
+      - '.github/workflows/opencode-tailscale-pi-recovery-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Validate shell syntax
+        shell: bash
+        run: bash -n pi/activate-opencode-tailscale.sh
+
+      - name: Validate recovery contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          text=Path('pi/activate-opencode-tailscale.sh').read_text(encoding='utf-8')
+          required=(
+              'pi-auth-refresh',
+              'pi-infra-bootstrap',
+              'opencode/nemotron-3-ultra-free',
+              'opencode/deepseek-v4-flash-free',
+              'opencode/mimo-v2.5-free',
+              'agents.defaults.model',
+              'agents.entries.$AGENT_ID.model',
+              'gateway.tailscale.mode',
+              'tailscale up',
+              '--auth-key="$TAILSCALE_AUTHKEY"',
+              '--ssh',
+              'openclaw config validate',
+              'openclaw gateway restart',
+              'providerOverride',
+              'modelOverrideSource',
+              'second_telegram_poller_created',
+              'paid_api_fallback_enabled',
+          )
+          for needle in required:
+              assert needle in text, needle
+          assert text.count('opencode/nemotron-3-ultra-free') >= 1
+          assert 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free' not in text
+          PY
+
+      - name: Reject embedded secrets and unsafe Telegram duplication
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -nE '(sk-or-v1-|sk-proj-|tskey-(auth|api|client)-[A-Za-z0-9_-]{8,}|Bearer[[:space:]]+[A-Za-z0-9._~-]{20,})' pi/activate-opencode-tailscale.sh
+          ! grep -nE '(getUpdates\(|start_polling\(|run_polling\(|TELEGRAM_BOT_TOKEN=)' pi/activate-opencode-tailscale.sh
+          ! grep -nE '(paid_api_fallback_enabled["'"']?:[[:space:]]*true|paid_api_fallback_requested["'"']?:[[:space:]]*true)' pi/activate-opencode-tailscale.sh
