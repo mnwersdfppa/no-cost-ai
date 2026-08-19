@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'pi/activate-opencode-tailscale.sh'
+      - 'pi/recover-opencode-first-tailscale-second.sh'
       - 'supabase/functions/pi-infra-bootstrap/**'
       - 'supabase/migrations/20260819210608_activate_opencode_tailscale_and_harden_model_routes.sql'
       - 'supabase/migrations/20260819212129_mark_tailscale_node_key_pending_pi_verification.sql'
@@ -13,6 +14,7 @@ on:
       - feat/supabase-emergency-bridge-20260819
     paths:
       - 'pi/activate-opencode-tailscale.sh'
+      - 'pi/recover-opencode-first-tailscale-second.sh'
       - 'supabase/functions/pi-infra-bootstrap/**'
       - 'supabase/migrations/20260819210608_activate_opencode_tailscale_and_harden_model_routes.sql'
       - 'supabase/migrations/20260819212129_mark_tailscale_node_key_pending_pi_verification.sql'
@@ -31,7 +33,9 @@ jobs:
 
       - name: Validate shell syntax
         shell: bash
-        run: bash -n pi/activate-opencode-tailscale.sh
+        run: |
+          bash -n pi/activate-opencode-tailscale.sh
+          bash -n pi/recover-opencode-first-tailscale-second.sh
 
       - name: Validate recovery and cloud contracts
         shell: bash
@@ -40,13 +44,14 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          script = Path('pi/activate-opencode-tailscale.sh').read_text(encoding='utf-8')
+          legacy = Path('pi/activate-opencode-tailscale.sh').read_text(encoding='utf-8')
+          model_first = Path('pi/recover-opencode-first-tailscale-second.sh').read_text(encoding='utf-8')
           edge = Path('supabase/functions/pi-infra-bootstrap/index.ts').read_text(encoding='utf-8')
           config = Path('supabase/functions/pi-infra-bootstrap/config.toml').read_text(encoding='utf-8')
           migration = Path('supabase/migrations/20260819210608_activate_opencode_tailscale_and_harden_model_routes.sql').read_text(encoding='utf-8')
           correction = Path('supabase/migrations/20260819212129_mark_tailscale_node_key_pending_pi_verification.sql').read_text(encoding='utf-8')
 
-          script_required = (
+          common_required = (
               'pi-auth-refresh',
               'pi-infra-bootstrap',
               'opencode/nemotron-3-ultra-free',
@@ -54,7 +59,6 @@ jobs:
               'opencode/mimo-v2.5-free',
               'agents.defaults.model',
               'agents.entries.$AGENT_ID.model',
-              'gateway.tailscale.mode',
               'tailscale up',
               '--auth-key="$TAILSCALE_AUTHKEY"',
               '--ssh',
@@ -65,9 +69,25 @@ jobs:
               'second_telegram_poller_created',
               'paid_api_fallback_enabled',
           )
-          for needle in script_required:
-              assert needle in script, needle
-          assert 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free' not in script
+          for script in (legacy, model_first):
+              for needle in common_required:
+                  assert needle in script, needle
+              assert 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free' not in script
+
+          for needle in (
+              'Model recovery is now committed. Tailscale is independent and best-effort.',
+              'CONFIG_BACKUP=""',
+              'SESSION_BACKUP=""',
+              'TAILSCALE_STATUS="auth_key_rejected_or_expired"',
+              'RESULT=MODEL_VERIFIED',
+              'model_verified_tailscale_pending',
+              'rm -f "$SECRETS_TEMP"',
+          ):
+              assert needle in model_first, needle
+
+          model_commit = model_first.index('MODEL_VERIFIED=true')
+          tailscale_attempt = model_first.index('try_tailscale()')
+          assert model_commit < tailscale_attempt
 
           edge_required = (
               'Opencode-api-key',
@@ -119,6 +139,7 @@ jobs:
 
           paths = [
               Path('pi/activate-opencode-tailscale.sh'),
+              Path('pi/recover-opencode-first-tailscale-second.sh'),
               Path('supabase/functions/pi-infra-bootstrap/index.ts'),
               Path('supabase/migrations/20260819210608_activate_opencode_tailscale_and_harden_model_routes.sql'),
               Path('supabase/migrations/20260819212129_mark_tailscale_node_key_pending_pi_verification.sql'),
@@ -136,8 +157,8 @@ jobs:
           for label, pattern in forbidden_patterns.items():
               assert re.search(pattern, text) is None, label
 
-          script = paths[0].read_text(encoding='utf-8')
-          compact = re.sub(r'\s+', '', script).lower()
-          assert '"paid_api_fallback_enabled":true' not in compact
-          assert '"paid_api_fallback_requested":true' not in compact
+          for path in paths[:2]:
+              compact = re.sub(r'\s+', '', path.read_text(encoding='utf-8')).lower()
+              assert '"paid_api_fallback_enabled":true' not in compact
+              assert '"paid_api_fallback_requested":true' not in compact
           PY
