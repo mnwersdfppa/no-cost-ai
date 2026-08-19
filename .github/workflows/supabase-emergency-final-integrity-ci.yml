@@ -1,0 +1,128 @@
+name: Supabase emergency final integrity gate
+
+on:
+  pull_request:
+    paths:
+      - 'supabase/**'
+      - 'scripts/install-supabase-emergency-bridge-on-pi.sh'
+      - 'docs/SUPABASE_EMERGENCY_BRIDGE_PI.md'
+      - '.github/workflows/supabase-emergency-final-integrity-ci.yml'
+  push:
+    branches:
+      - feat/supabase-emergency-bridge-20260819
+    paths:
+      - 'supabase/**'
+      - 'scripts/install-supabase-emergency-bridge-on-pi.sh'
+      - 'docs/SUPABASE_EMERGENCY_BRIDGE_PI.md'
+      - '.github/workflows/supabase-emergency-final-integrity-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Validate canonical sources match deployed v3 records
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmp -s \
+            supabase/functions/emergency-bridge/index.ts \
+            supabase/functions/deployed/emergency-bridge-v3/index.ts
+          cmp -s \
+            supabase/functions/credential-readiness/index.ts \
+            supabase/functions/deployed/credential-readiness-v3/index.ts
+          cmp -s \
+            supabase/functions/canonical-client-config/index.ts \
+            supabase/functions/deployed/canonical-client-config-v3/index.ts
+
+      - name: Validate JWT and fail-closed Edge Function contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest=json.loads(Path('supabase/functions/manifest.json').read_text())
+          sources={
+              'emergency-bridge':Path('supabase/functions/emergency-bridge/index.ts').read_text(),
+              'credential-readiness':Path('supabase/functions/credential-readiness/index.ts').read_text(),
+              'canonical-client-config':Path('supabase/functions/canonical-client-config/index.ts').read_text(),
+          }
+          for name in sources:
+              assert manifest['functions'][name]['verify_jwt'] is True, name
+              assert 'pi-gateway-client' in sources[name], name
+              for forbidden in ('Deno.Command(', 'child_process', '/bin/sh', 'eval('):
+                  assert forbidden not in sources[name], (name, forbidden)
+
+          emergency=sources['emergency-bridge']
+          for item in ('bridge_admit_request','bridge_policy_decision','bridge_resolve_route','resolve_route','provider_called: false','credential_returned: false','values_exposed: false'):
+              assert item in emergency, item
+
+          readiness=sources['credential-readiness']
+          for item in ('bridge_admit_request','credential_readiness','values_returned: false','prefixes_returned: false','hashes_returned: false','lengths_returned: false'):
+              assert item in readiness, item
+
+          canonical=sources['canonical-client-config']
+          for item in ('bridge_admit_request','canonical_client_config','SUPABASE_PUBLISHABLE_KEYS','modern_publishable_key_required','legacy_anon_fallback_enabled: false','server_secret_returned: false','raw_token_fallback_enabled: false','deploy_enabled: false','paid_api_fallback: false','telegram_single_poller_enforced: true'):
+              assert item in canonical, item
+          PY
+
+      - name: Validate migration coverage and canonical component selection
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in \
+            supabase/migrations/20260819080000_emergency_bridge_control_plane.sql \
+            supabase/migrations/20260819080700_admit_credential_readiness.sql \
+            supabase/migrations/20260819080900_zero_cost_first_route_resolver.sql \
+            supabase/migrations/20260819081000_canonicalize_bridge_runtime_components.sql \
+            supabase/migrations/20260819081100_admit_canonical_client_config.sql; do
+            test -s "$file"
+          done
+          grep -F 'bridge_component_self_test' supabase/migrations/20260819081000_canonicalize_bridge_runtime_components.sql
+          grep -F "'edge.command-center'" supabase/migrations/20260819081000_canonicalize_bridge_runtime_components.sql
+          grep -F "'pending_audit'" supabase/migrations/20260819081000_canonicalize_bridge_runtime_components.sql
+          grep -F 'bridge_resolve_route' supabase/migrations/20260819080900_zero_cost_first_route_resolver.sql
+          grep -F 'stop_no_eligible_route' supabase/migrations/20260819080900_zero_cost_first_route_resolver.sql
+          grep -F 'canonical_client_config' supabase/migrations/20260819081100_admit_canonical_client_config.sql
+          grep -F 'paid_api_fallback_disabled' supabase/migrations/20260819080200_harden_token_gateway_ledger.sql
+
+      - name: Validate Pi activation package
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/install-supabase-emergency-bridge-on-pi.sh
+          python3 - <<'PY'
+          from pathlib import Path
+          source=Path('scripts/install-supabase-emergency-bridge-on-pi.sh').read_text()
+          marker='cat > "$CLIENT" <<\'PY\'\n'
+          start=source.index(marker)+len(marker)
+          end=source.index('\nPY\n\nchmod 700 "$CLIENT"',start)
+          compile(source[start:end],'openclaw-emergency-bridge','exec')
+          PY
+          grep -F 'CURRENT_SHORT_LIVED_PI_JWT_REQUIRED' scripts/install-supabase-emergency-bridge-on-pi.sh
+          grep -F 'NoNewPrivileges=true' scripts/install-supabase-emergency-bridge-on-pi.sh
+          grep -F 'ProtectSystem=strict' scripts/install-supabase-emergency-bridge-on-pi.sh
+          grep -F 'telegram_single_poller_enforced' scripts/install-supabase-emergency-bridge-on-pi.sh
+          ! grep -F 'SUPABASE_SERVICE_ROLE_KEY' scripts/install-supabase-emergency-bridge-on-pi.sh
+
+      - name: Reject embedded secrets and destructive rollback
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -RInE \
+            --exclude='*.md' \
+            --exclude='package-lock.json' \
+            '(sk-proj-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|sb_secret_[A-Za-z0-9_-]{20,}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|Bearer[[:space:]]+[A-Za-z0-9._-]{40,})' \
+            supabase scripts
+          rollback=supabase/rollback/20260819080000_emergency_bridge_disable.sql
+          grep -F 'set enabled=false' "$rollback"
+          grep -F "mode='disabled'" "$rollback"
+          grep -F "destructive_drop',false" "$rollback"
+          ! grep -Eiq '\bdrop[[:space:]]+(table|schema|function)\b' "$rollback"
