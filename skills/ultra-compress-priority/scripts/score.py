@@ -51,9 +51,8 @@ elif hit("cost"):
     route = "local_ollama_qwen25_3b_then_openrouter_free_then_stop"
 elif rank == "S":
     route = "phone_codex_cli_gpt56_sol_after_gates"
-elife = None
-if route if False else False:
-    pass
+else:
+    route = "cache_or_noop_then_answer_in_3_lines"
 
 reason_parts = []
 for label, enabled in [
@@ -74,7 +73,8 @@ next_action = {
     "connector_read_then_draft_pr": "read_status_then_prepare_draft_only",
     "local_ollama_qwen25_3b_then_openrouter_free_then_stop": "use_free_route_before_any_paid_model",
     "phone_codex_cli_gpt56_sol_after_gates": "verify_T3_T4_before_claiming_live",
-}.get(route, "answer_in_3_lines")
+    "cache_or_noop_then_answer_in_3_lines": "answer_in_3_lines",
+}[route]
 
 capsule = f"score={score} rank={rank} route={route} reason={reason} next={next_action} blocked={blocked}"
 print(json.dumps({
