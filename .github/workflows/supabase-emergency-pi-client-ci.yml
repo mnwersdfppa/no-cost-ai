@@ -1,0 +1,59 @@
+name: Supabase emergency Pi client checks
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/install-supabase-emergency-bridge-on-pi.sh'
+      - '.github/workflows/supabase-emergency-pi-client-ci.yml'
+  push:
+    branches:
+      - feat/supabase-emergency-bridge-20260819
+    paths:
+      - 'scripts/install-supabase-emergency-bridge-on-pi.sh'
+      - '.github/workflows/supabase-emergency-pi-client-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Validate shell syntax
+        run: bash -n scripts/install-supabase-emergency-bridge-on-pi.sh
+
+      - name: Validate fail-closed invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          file=scripts/install-supabase-emergency-bridge-on-pi.sh
+          grep -F 'CURRENT_SHORT_LIVED_PI_JWT_REQUIRED' "$file"
+          grep -F 'paid_api_fallback' "$file"
+          grep -F 'public_shell_execution' "$file"
+          grep -F 'telegram_single_poller_enforced' "$file"
+          grep -F 'NoNewPrivileges=true' "$file"
+          grep -F 'ProtectSystem=strict' "$file"
+          grep -F 'MemoryDenyWriteExecute=true' "$file"
+          grep -F 'values_exposed' "$file"
+          grep -F 'values_returned' "$file"
+          ! grep -F 'set -x' "$file"
+          ! grep -F 'SUPABASE_SERVICE_ROLE_KEY' "$file"
+          ! grep -E '(getUpdates\(|start_polling\(|run_polling\(|PHONE_RELAY_ENABLED)' "$file"
+          ! grep -E 'echo[^\n]*PI_ACCESS_TOKEN|print\([^\n]*TOKEN' "$file"
+
+      - name: Extract and compile embedded Python client
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          source=Path('scripts/install-supabase-emergency-bridge-on-pi.sh').read_text()
+          start=source.index("cat > \"$CLIENT\" <<'PY'\n") + len("cat > \"$CLIENT\" <<'PY'\n")
+          end=source.index("\nPY\n\nchmod 700 \"$CLIENT\"", start)
+          client=source[start:end]
+          compile(client, 'openclaw-emergency-bridge', 'exec')
+          print('EMBEDDED_PYTHON=PASS')
+          PY
