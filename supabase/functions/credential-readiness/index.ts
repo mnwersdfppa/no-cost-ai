@@ -2,8 +2,27 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.56.0";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
-const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+const LEGACY_SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+
+function parseDictionary(name: string): Record<string, string> {
+  const raw = Deno.env.get(name);
+  if (!raw) return {};
+  try {
+    const value = JSON.parse(raw);
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    return Object.fromEntries(
+      Object.entries(value).filter((entry): entry is [string, string] =>
+        typeof entry[1] === "string" && entry[1].length > 0
+      ),
+    );
+  } catch {
+    return {};
+  }
+}
+
+const secretKeys = parseDictionary("SUPABASE_SECRET_KEYS");
+const adminKey = secretKeys.default ?? LEGACY_SERVICE_ROLE;
+const admin = createClient(SUPABASE_URL, adminKey, {
   auth: { persistSession: false, autoRefreshToken: false },
 });
 
@@ -29,28 +48,40 @@ function reply(body: unknown, status = 200) {
       "content-type": "application/json; charset=utf-8",
       "cache-control": "no-store",
       "x-content-type-options": "nosniff",
+      "referrer-policy": "no-referrer",
     },
   });
 }
 
 async function requirePi(req: Request) {
   const authorization = req.headers.get("authorization");
-  if (!authorization?.startsWith("Bearer ")) throw reply({ ok: false, error: "unauthorized" }, 401);
+  if (!authorization?.startsWith("Bearer ")) {
+    throw reply({ ok: false, error: "unauthorized", values_exposed: false }, 401);
+  }
   const { data, error } = await admin.auth.getUser(authorization.slice(7));
-  if (error || !data.user) throw reply({ ok: false, error: "unauthorized" }, 401);
-  if (data.user.app_metadata?.role !== "pi-gateway-client") throw reply({ ok: false, error: "pi_identity_required" }, 403);
+  if (error || !data.user) {
+    throw reply({ ok: false, error: "unauthorized", values_exposed: false }, 401);
+  }
+  if (data.user.app_metadata?.role !== "pi-gateway-client") {
+    throw reply({ ok: false, error: "pi_identity_required", values_exposed: false }, 403);
+  }
   return data.user;
 }
 
 Deno.serve(async (req: Request) => {
-  if (req.method !== "POST") return reply({ ok: false, error: "method_not_allowed" }, 405);
+  if (req.method !== "POST") {
+    return reply({ ok: false, error: "method_not_allowed", values_exposed: false }, 405);
+  }
+  if (!SUPABASE_URL || !adminKey) {
+    return reply({ ok: false, error: "server_not_configured", values_exposed: false }, 503);
+  }
 
   let user;
   try {
     user = await requirePi(req);
   } catch (response) {
     if (response instanceof Response) return response;
-    return reply({ ok: false, error: "authentication_failed" }, 401);
+    return reply({ ok: false, error: "authentication_failed", values_exposed: false }, 401);
   }
 
   const now = new Date().toISOString();
@@ -70,7 +101,9 @@ Deno.serve(async (req: Request) => {
       ? current.runtime_presence
       : {};
     const runtimePresence = { ...existingPresence, supabase_edge_env: present };
-    const protectedStatus = ["valid", "invalid", "blocked", "external_only"].includes(current?.validation_status ?? "");
+    const protectedStatus = ["valid", "invalid", "blocked", "external_only"].includes(
+      current?.validation_status ?? "",
+    );
     const validationStatus = protectedStatus
       ? current!.validation_status
       : present
@@ -100,7 +133,7 @@ Deno.serve(async (req: Request) => {
   await admin.rpc("bridge_record_event", {
     p_event_type: "credential_readiness_refresh",
     p_node_name: null,
-    p_correlation_id: null,
+    p_correlation_id: req.headers.get("x-correlation-id"),
     p_severity: "info",
     p_outcome: "succeeded",
     p_detail: {
@@ -113,7 +146,8 @@ Deno.serve(async (req: Request) => {
   return reply({
     ok: true,
     results,
-    platform_managed_supabase_runtime: Boolean(SUPABASE_URL && SERVICE_ROLE_KEY),
+    platform_managed_supabase_runtime: Boolean(SUPABASE_URL && adminKey),
+    selected_server_key_type: secretKeys.default ? "secret" : "legacy_service_role_compatibility",
     values_returned: false,
     prefixes_returned: false,
     hashes_returned: false,
