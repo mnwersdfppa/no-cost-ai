@@ -1,0 +1,78 @@
+name: Normalize Supabase emergency v3 canonical sources
+
+on:
+  push:
+    branches:
+      - feat/supabase-emergency-bridge-20260819
+    paths:
+      - '.github/workflows/normalize-supabase-emergency-v3.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: normalize-supabase-emergency-v3
+  cancel-in-progress: false
+
+jobs:
+  normalize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_BRANCH: feat/supabase-emergency-bridge-20260819
+      TARGET_PR: '5'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          persist-credentials: true
+          fetch-depth: 1
+
+      - name: Replace canonical sources with the recorded deployed v3 sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 0644 \
+            supabase/functions/deployed/emergency-bridge-v3/index.ts \
+            supabase/functions/emergency-bridge/index.ts
+          install -m 0644 \
+            supabase/functions/deployed/credential-readiness-v3/index.ts \
+            supabase/functions/credential-readiness/index.ts
+          install -m 0644 \
+            supabase/functions/deployed/canonical-client-config-v3/index.ts \
+            supabase/functions/canonical-client-config/index.ts
+
+          cmp -s \
+            supabase/functions/emergency-bridge/index.ts \
+            supabase/functions/deployed/emergency-bridge-v3/index.ts
+          cmp -s \
+            supabase/functions/credential-readiness/index.ts \
+            supabase/functions/deployed/credential-readiness-v3/index.ts
+          cmp -s \
+            supabase/functions/canonical-client-config/index.ts \
+            supabase/functions/deployed/canonical-client-config-v3/index.ts
+
+      - name: Commit normalized canonical sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            supabase/functions/emergency-bridge/index.ts \
+            supabase/functions/credential-readiness/index.ts \
+            supabase/functions/canonical-client-config/index.ts
+          if git diff --cached --quiet; then
+            echo 'Canonical sources already match deployed v3 records.'
+          else
+            git commit -m 'fix: align canonical Supabase Edge sources with deployed v3'
+            git push origin HEAD:${TARGET_BRANCH}
+          fi
+
+      - name: Record normalization on Draft PR 5
+        shell: bash
+        run: |
+          gh pr comment "$TARGET_PR" --repo "$GITHUB_REPOSITORY" --body 'Canonical source normalization completed: `emergency-bridge`, `credential-readiness`, and `canonical-client-config` now match their recorded deployed v3 sources. The final integrity CI will verify source equality, JWT/admission boundaries, route fail-closed behavior, Pi package safety, secret scanning, and non-destructive rollback.'
