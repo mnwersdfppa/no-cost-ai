@@ -12,6 +12,7 @@ status: candidate
 - Supabase is authoritative for machine-readable patterns, observations, scores, skill versions, promotion gates and execution receipts.
 - Search official documentation and official source repositories before creating new code.
 - Every candidate must pass static security, deterministic E2E and rollback verification before canary use.
+- Every persisted receipt and evidence object must state `secret_values_included=false`.
 - Never automatically promote high-risk or critical patterns, credential changes, host-control operations, public exposure, destructive actions, billing changes, Telegram inbound polling, merge operations or Production deployment.
 - Promotion changes registry metadata only. It does not download, execute, install or activate externally discovered code.
 
