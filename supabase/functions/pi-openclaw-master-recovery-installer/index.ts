@@ -2,11 +2,15 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.56.0";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
-const BASE_RECOVERY_URL = `${SUPABASE_URL}/functions/v1/pi-recovery-installer-verified`;
-const BASE_RECOVERY_SHA = "4c21d9eab6fff335950f8a4c8c7a064a20b9aa00aead487b811cee779e8ae947";
-const DELIVERY_INSTALLER_URL = `${SUPABASE_URL}/functions/v1/pi-telegram-delivery-worker-installer`;
-const DELIVERY_INSTALLER_SHA = "1db248ffbc0fea0bf22bcf17e2908134c9554f64539e1fe908dc0e2939268e97";
+const MODEL_AUTH_URL = `${SUPABASE_URL}/functions/v1/pi-recovery-installer-current-format-verified`;
+const MODEL_AUTH_SHA = "0754e14b097578edfc2659390456162f88053c70d9610578d686438faa389f54";
+const RECOVERY_WORKER_URL = `${SUPABASE_URL}/functions/v1/pi-recovery-worker-current-format-verified`;
+const RECOVERY_WORKER_SHA = "56094db3aeb87a757d433f29e8857fdde59d29a476415bd7928e6a218b086b92";
+const DELIVERY_URL = `${SUPABASE_URL}/functions/v1/pi-telegram-delivery-worker-installer`;
+const DELIVERY_SHA = "1db248ffbc0fea0bf22bcf17e2908134c9554f64539e1fe908dc0e2939268e97";
 const CONFIG_KEY = "pi.master_recovery.installer_snapshot";
+
+type JsonRecord = Record<string, unknown>;
 
 function parseNamed(raw: string | undefined): Record<string, string> {
   if (!raw) return {};
@@ -68,7 +72,7 @@ set -Eeuo pipefail
 umask 077
 
 ROOT="\${OPENCLAW_ROOT:-$HOME/.openclaw}"
-RUNTIME_DIR="$ROOT/runtime"
+RUNTIME_DIR="\${OPENCLAW_RUNTIME_DIR:-$ROOT/runtime}"
 RECEIPT="$RUNTIME_DIR/pi-openclaw-master-recovery-receipt.json"
 TMP="$(mktemp -d)"
 cleanup() { rm -rf -- "$TMP"; }
@@ -81,16 +85,22 @@ mkdir -p "$RUNTIME_DIR"
 chmod 700 "$RUNTIME_DIR"
 
 curl -fsS --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 90 \
-  -o "$TMP/pi-recovery.sh" '${BASE_RECOVERY_URL}'
-printf '%s  %s\\n' '${BASE_RECOVERY_SHA}' "$TMP/pi-recovery.sh" | sha256sum -c -
-chmod 0700 "$TMP/pi-recovery.sh"
-bash "$TMP/pi-recovery.sh"
+  -o "$TMP/model-auth.sh" '${MODEL_AUTH_URL}'
+printf '%s  %s\\n' '${MODEL_AUTH_SHA}' "$TMP/model-auth.sh" | sha256sum -c -
+chmod 0700 "$TMP/model-auth.sh"
+bash "$TMP/model-auth.sh"
 
 curl -fsS --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 90 \
-  -o "$TMP/pi-telegram-delivery-worker.sh" '${DELIVERY_INSTALLER_URL}'
-printf '%s  %s\\n' '${DELIVERY_INSTALLER_SHA}' "$TMP/pi-telegram-delivery-worker.sh" | sha256sum -c -
-chmod 0700 "$TMP/pi-telegram-delivery-worker.sh"
-bash "$TMP/pi-telegram-delivery-worker.sh"
+  -o "$TMP/recovery-worker.sh" '${RECOVERY_WORKER_URL}'
+printf '%s  %s\\n' '${RECOVERY_WORKER_SHA}' "$TMP/recovery-worker.sh" | sha256sum -c -
+chmod 0700 "$TMP/recovery-worker.sh"
+bash "$TMP/recovery-worker.sh"
+
+curl -fsS --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 90 \
+  -o "$TMP/telegram-delivery.sh" '${DELIVERY_URL}'
+printf '%s  %s\\n' '${DELIVERY_SHA}' "$TMP/telegram-delivery.sh" | sha256sum -c -
+chmod 0700 "$TMP/telegram-delivery.sh"
+bash "$TMP/telegram-delivery.sh"
 
 python3 - "$RECEIPT" <<'PY'
 import json
@@ -103,11 +113,15 @@ path.write_text(
         {
             "result": "installed",
             "model_and_auth_recovery": True,
+            "recovery_queue_worker": True,
             "telegram_delivery_worker": True,
-            "base_recovery_sha256": "${BASE_RECOVERY_SHA}",
-            "telegram_delivery_installer_sha256": "${DELIVERY_INSTALLER_SHA}",
+            "model_auth_sha256": "${MODEL_AUTH_SHA}",
+            "recovery_worker_sha256": "${RECOVERY_WORKER_SHA}",
+            "telegram_delivery_sha256": "${DELIVERY_SHA}",
+            "refresh_token_minimum_chars": 8,
             "guardian_gateway": "pi-model-gateway-guardian",
             "server_retry_schedule": "2min",
+            "pi_recovery_schedule": "2min+jitter",
             "pi_delivery_schedule": "2min+jitter",
             "outbound_only_delivery": True,
             "second_telegram_poller_created": False,
@@ -141,12 +155,16 @@ Deno.serve(async (req: Request) => {
       url: `${SUPABASE_URL}/functions/v1/pi-openclaw-master-recovery-installer`,
       sha256,
       bytes,
-      base_recovery_url: BASE_RECOVERY_URL,
-      base_recovery_sha256: BASE_RECOVERY_SHA,
-      telegram_delivery_installer_url: DELIVERY_INSTALLER_URL,
-      telegram_delivery_installer_sha256: DELIVERY_INSTALLER_SHA,
+      model_auth_url: MODEL_AUTH_URL,
+      model_auth_sha256: MODEL_AUTH_SHA,
+      recovery_worker_url: RECOVERY_WORKER_URL,
+      recovery_worker_sha256: RECOVERY_WORKER_SHA,
+      telegram_delivery_url: DELIVERY_URL,
+      telegram_delivery_sha256: DELIVERY_SHA,
+      refresh_token_minimum_chars: 8,
       guardian_gateway: "pi-model-gateway-guardian",
       server_retry_schedule: "*/2 * * * *",
+      pi_recovery_schedule: "2min+jitter",
       pi_delivery_schedule: "2min+jitter",
       outbound_only_delivery: true,
       second_telegram_poller_created: false,
@@ -156,8 +174,8 @@ Deno.serve(async (req: Request) => {
     },
     sensitivity: "non_secret",
     enabled: true,
-    source: "supabase-composed-verified-installers-v2",
-    notes: "One-command Pi recovery installer composed from two exact SHA-pinned Supabase installers and the canonical two-minute server retry schedule.",
+    source: "supabase-current-format-verified-stack-v2",
+    notes: "Current-format three-layer Pi recovery installer with exact SHA-pinned model/auth, recovery queue and Telegram delivery installers plus the canonical two-minute server retry schedule.",
     updated_at: new Date().toISOString(),
   }, { onConflict: "config_key" });
   if (error) return fail("master_installer_snapshot_persist_failed", 503);
