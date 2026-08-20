@@ -123,6 +123,7 @@ jobs:
           if sorted(docker.get('platforms', [])) != ['linux/amd64', 'linux/arm64']:
               raise SystemExit('required multiarchitecture platforms missing')
 
+          # Secret-like literals are prohibited across source, docs, skills and evidence.
           combined = '\n'.join([migration, docs, skill, json.dumps(evidence, sort_keys=True)])
           secret_patterns = [
               r'sk-proj-[A-Za-z0-9_-]{12,}',
@@ -137,6 +138,9 @@ jobs:
           if matches:
               raise SystemExit(f'secret-like literal detected: {matches}')
 
+          # Runtime constructs are checked only on executable migration/source surfaces.
+          # Narrative documentation may describe a forbidden construct without executing it.
+          runtime_surface = migration
           forbidden_runtime = [
               r'shell\s*=\s*True',
               r'\beval\s*\(',
@@ -144,9 +148,12 @@ jobs:
               r'Telegram[^\n]{0,40}getUpdates',
               r'curl\s*\|\s*(?:sh|bash)',
           ]
-          runtime_matches = [pattern for pattern in forbidden_runtime if re.search(pattern, combined, re.IGNORECASE)]
+          runtime_matches = [
+              pattern for pattern in forbidden_runtime
+              if re.search(pattern, runtime_surface, re.IGNORECASE)
+          ]
           if runtime_matches:
-              raise SystemExit(f'forbidden runtime construct detected: {runtime_matches}')
+              raise SystemExit(f'forbidden executable construct detected: {runtime_matches}')
 
           if 'contents: read' not in workflow:
               raise SystemExit('workflow must be read-only')
@@ -172,6 +179,7 @@ jobs:
               'schema_version': evidence.get('schema_version'),
               'state': evidence.get('state'),
               'active_skills': evidence.get('pattern_system', {}).get('active_bridge_skills', []),
+              'runtime_scan_scope': 'executable_migration_only',
               'secret_values_included': False,
               'repository_mutation': False,
           }, sort_keys=True))
@@ -186,6 +194,7 @@ jobs:
             echo
             echo '- Supabase authoritative: enforced'
             echo '- Reuse before build: enforced'
+            echo '- Runtime scan scope: executable source only'
             echo '- High-risk automatic promotion: OFF'
             echo '- Arbitrary execution: OFF'
             echo '- Secret values in evidence: OFF'
