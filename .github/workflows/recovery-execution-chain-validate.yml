@@ -120,9 +120,15 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          text = Path(".github/workflows/recovery-execution-chain-validate.yml").read_text(encoding="utf-8")
-          forbidden = ("git push", "gh pr merge", "supabase db push", "vercel --prod", "docker push")
+          text = Path(".github/workflows/recovery-execution-chain-validate.yml").read_text(encoding="utf-8").lower()
+          forbidden = (
+              "git" + " push",
+              "gh pr" + " merge",
+              "supabase db" + " push",
+              "vercel " + "--prod",
+              "docker" + " push",
+          )
           for marker in forbidden:
-              assert marker not in text.lower(), marker
+              assert marker not in text, marker
           print("VALIDATION_ONLY_PASS")
           PY
