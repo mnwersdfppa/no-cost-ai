@@ -6,8 +6,10 @@ on:
       - 'pi/activate-opencode-tailscale.sh'
       - 'pi/recover-opencode-first-tailscale-second.sh'
       - 'supabase/functions/pi-infra-bootstrap/**'
-      - 'supabase/migrations/20260819210608_activate_opencode_tailscale_and_harden_model_routes.sql'
+      - 'supabase/functions/pi-model-gateway-guardian/**'
       - 'supabase/migrations/20260819212129_mark_tailscale_node_key_pending_pi_verification.sql'
+      - 'supabase/migrations/202608200001_openclaw_guardian_reconciliation.sql'
+      - 'supabase/migrations/202608200002_promote_openclaw_guardian_after_e2e.sql'
       - '.github/workflows/opencode-tailscale-pi-recovery-ci.yml'
   push:
     branches:
@@ -16,8 +18,10 @@ on:
       - 'pi/activate-opencode-tailscale.sh'
       - 'pi/recover-opencode-first-tailscale-second.sh'
       - 'supabase/functions/pi-infra-bootstrap/**'
-      - 'supabase/migrations/20260819210608_activate_opencode_tailscale_and_harden_model_routes.sql'
+      - 'supabase/functions/pi-model-gateway-guardian/**'
       - 'supabase/migrations/20260819212129_mark_tailscale_node_key_pending_pi_verification.sql'
+      - 'supabase/migrations/202608200001_openclaw_guardian_reconciliation.sql'
+      - 'supabase/migrations/202608200002_promote_openclaw_guardian_after_e2e.sql'
       - '.github/workflows/opencode-tailscale-pi-recovery-ci.yml'
   workflow_dispatch:
 
@@ -31,13 +35,15 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
-      - name: Validate shell syntax
+      - name: Validate shell and Edge syntax
         shell: bash
         run: |
           bash -n pi/activate-opencode-tailscale.sh
           bash -n pi/recover-opencode-first-tailscale-second.sh
+          deno check supabase/functions/pi-infra-bootstrap/index.ts
+          deno check supabase/functions/pi-model-gateway-guardian/index.ts
 
-      - name: Validate recovery and cloud contracts
+      - name: Validate scoped recovery and cloud contracts
         shell: bash
         run: |
           set -euo pipefail
@@ -45,80 +51,84 @@ jobs:
           from pathlib import Path
 
           legacy = Path('pi/activate-opencode-tailscale.sh').read_text(encoding='utf-8')
-          model_first = Path('pi/recover-opencode-first-tailscale-second.sh').read_text(encoding='utf-8')
+          wrapper = Path('pi/recover-opencode-first-tailscale-second.sh').read_text(encoding='utf-8')
           edge = Path('supabase/functions/pi-infra-bootstrap/index.ts').read_text(encoding='utf-8')
+          guardian = Path('supabase/functions/pi-model-gateway-guardian/index.ts').read_text(encoding='utf-8')
           config = Path('supabase/functions/pi-infra-bootstrap/config.toml').read_text(encoding='utf-8')
-          migration = Path('supabase/migrations/20260819210608_activate_opencode_tailscale_and_harden_model_routes.sql').read_text(encoding='utf-8')
+          seed = Path('supabase/migrations/202608200001_openclaw_guardian_reconciliation.sql').read_text(encoding='utf-8')
+          promote = Path('supabase/migrations/202608200002_promote_openclaw_guardian_after_e2e.sql').read_text(encoding='utf-8')
           correction = Path('supabase/migrations/20260819212129_mark_tailscale_node_key_pending_pi_verification.sql').read_text(encoding='utf-8')
 
-          common_required = (
-              'pi-auth-refresh',
-              'pi-infra-bootstrap',
-              'opencode/nemotron-3-ultra-free',
-              'opencode/deepseek-v4-flash-free',
-              'opencode/mimo-v2.5-free',
+          assert 'recover-opencode-first-tailscale-second.sh' in legacy
+          assert 'exec "$CANONICAL" "$@"' in legacy
+
+          wrapper_required = (
+              'pi-recovery-installer-verified',
+              '4c21d9eab6fff335950f8a4c8c7a064a20b9aa00aead487b811cee779e8ae947',
+              "--proto '=https'",
+              'sha256sum --check --status',
+              'INSTALLER_SHA256_MISMATCH',
+              'PI_REFRESH_TOKEN',
               'agents.defaults.model',
-              'agents.entries.$AGENT_ID.model',
-              'tailscale up',
-              '--auth-key="$TAILSCALE_AUTHKEY"',
-              '--ssh',
-              'openclaw config validate',
-              'openclaw gateway restart',
-              'providerOverride',
-              'modelOverrideSource',
-              'second_telegram_poller_created',
-              'paid_api_fallback_enabled',
+              'provider_secret_returned',
+              'RECOVERY_MODE=SUPABASE_GUARDIAN_SCOPED_PI_JWT',
+              'SECOND_TELEGRAM_POLLER=false',
+              'PAID_API_FALLBACK=false',
           )
-          for script in (legacy, model_first):
-              for needle in common_required:
-                  assert needle in script, needle
-              assert 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free' not in script
-
-          for needle in (
-              'Model recovery is now committed. Tailscale is independent and best-effort.',
-              'CONFIG_BACKUP=""',
-              'SESSION_BACKUP=""',
-              'TAILSCALE_STATUS="auth_key_rejected_or_expired"',
-              'RESULT=MODEL_VERIFIED',
-              'model_verified_tailscale_pending',
-              'rm -f "$SECRETS_TEMP"',
-          ):
-              assert needle in model_first, needle
-
-          model_commit = model_first.index('MODEL_VERIFIED=true')
-          tailscale_attempt = model_first.index('try_tailscale()')
-          assert model_commit < tailscale_attempt
+          for needle in wrapper_required:
+              assert needle in wrapper, needle
 
           edge_required = (
               'Opencode-api-key',
               'Tailscale-fff-api-key',
               'pi-gateway-client',
               'MAX_BOOTSTRAPS_PER_HOUR',
+              'refreshSession',
               'bridge_request_ledger',
               'authenticated_pi_only',
               'https://opencode.ai/zen/v1/models',
+              'pi-model-gateway-guardian/v1',
+              'include_tailscale_auth_key',
+              'deliverTailscaleAuthKey',
               'node_auth_key',
-              'cacheable: false',
+              'export_original_provider_key_to_pi: false',
+              'start_second_telegram_poller: false',
+              'surface_raw_provider_error_to_telegram: false',
+              'provider_secret_returned: false',
               'values_logged: false',
           )
           for needle in edge_required:
               assert needle in edge, needle
-          assert 'verify_jwt = true' in config
+          assert 'verify_jwt = false' in config
 
-          migration_required = (
-              'opencode_zen_free_route',
-              'tailscale_node_enrollment',
-              "'openrouter_free_route', false",
-              "'local_ollama_route', false",
-              'opencode/nemotron-3-ultra-free',
-              'opencode/deepseek-v4-flash-free',
-              'telegram-model-session-unpin-v1',
-              "r.health_status in ('healthy', 'degraded')",
-              'revoke all on function public.bridge_resolve_route',
+          guardian_required = (
+              'const MAX_ATTEMPTS = 2',
+              'async function requirePi',
+              'async function queueRequest',
+              '요청을 안전하게 보존했습니다',
+              'provider_secret_returned: false',
           )
-          for needle in migration_required:
-              assert needle in migration, needle
-          assert "local_http' and r.health_status='unknown" not in migration
+          for needle in guardian_required:
+              assert needle in guardian, needle
+
+          for needle in (
+              'bridge_model_health',
+              'claim_openclaw_recovery_task',
+              'pi_model_gateway_guardian_e2e',
+              'pi_recovery_queue_api_e2e',
+          ):
+              assert needle in seed, needle
+
+          for needle in (
+              "gate_key='pi_model_gateway_guardian_e2e'",
+              "gate_key='pi_recovery_queue_api_e2e'",
+              "component_key='edge.pi-model-gateway-guardian'",
+              "component_key='edge.token-gateway'",
+              "lifecycle_status='compatibility'",
+              "'supabase.opencode_model_guardian'",
+              "mode='disabled'",
+          ):
+              assert needle in promote, needle
 
           for needle in (
               "validation_status = 'unverified'",
@@ -129,7 +139,7 @@ jobs:
               assert needle in correction, needle
           PY
 
-      - name: Reject embedded secrets and unsafe execution
+      - name: Reject embedded secrets and obsolete direct-provider routing
         shell: bash
         run: |
           set -euo pipefail
@@ -141,24 +151,28 @@ jobs:
               Path('pi/activate-opencode-tailscale.sh'),
               Path('pi/recover-opencode-first-tailscale-second.sh'),
               Path('supabase/functions/pi-infra-bootstrap/index.ts'),
-              Path('supabase/migrations/20260819210608_activate_opencode_tailscale_and_harden_model_routes.sql'),
-              Path('supabase/migrations/20260819212129_mark_tailscale_node_key_pending_pi_verification.sql'),
+              Path('supabase/functions/pi-model-gateway-guardian/index.ts'),
+              Path('supabase/migrations/202608200001_openclaw_guardian_reconciliation.sql'),
+              Path('supabase/migrations/202608200002_promote_openclaw_guardian_after_e2e.sql'),
           ]
           text = '\n'.join(path.read_text(encoding='utf-8') for path in paths)
+          scripts = '\n'.join(path.read_text(encoding='utf-8') for path in paths[:2])
 
           forbidden_patterns = {
-              'OpenRouter literal': r'sk-or-v1-[A-Za-z0-9_-]{8,}',
-              'OpenAI literal': r'sk-proj-[A-Za-z0-9_-]{8,}',
-              'Tailscale literal': r'tskey-(?:auth|api|client)-[A-Za-z0-9_-]{8,}',
-              'Bearer literal': r'Bearer\s+[A-Za-z0-9._~-]{20,}',
+              'OpenRouter secret literal': r'sk-or-v1-[A-Za-z0-9_-]{8,}',
+              'OpenAI secret literal': r'sk-proj-[A-Za-z0-9_-]{8,}',
+              'Tailscale secret literal': r'tskey-(?:auth|api|client)-[A-Za-z0-9_-]{8,}',
+              'Bearer credential literal': r'Bearer\s+[A-Za-z0-9._~-]{20,}',
               'Telegram token assignment': r'TELEGRAM_BOT_TOKEN=',
               'second poller primitive': r'(?:getUpdates|start_polling|run_polling)\(',
           }
           for label, pattern in forbidden_patterns.items():
               assert re.search(pattern, text) is None, label
 
-          for path in paths[:2]:
-              compact = re.sub(r'\s+', '', path.read_text(encoding='utf-8')).lower()
-              assert '"paid_api_fallback_enabled":true' not in compact
-              assert '"paid_api_fallback_requested":true' not in compact
+          assert 'OPENCODE_API_KEY=' not in scripts
+          assert 'TAILSCALE_AUTHKEY=' not in scripts
+          assert 'opencode/nemotron-3-ultra-free' not in scripts
+          assert 'curl ' in scripts
+          assert '| bash' not in scripts
+          assert 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free' not in scripts
           PY
