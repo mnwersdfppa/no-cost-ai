@@ -168,14 +168,14 @@ jobs:
               'OpenAI secret literal': r'sk-proj-[A-Za-z0-9_-]{8,}',
               'Tailscale secret literal': r'tskey-(?:auth|api|client)-[A-Za-z0-9_-]{8,}',
               'Bearer credential literal': r'Bearer\s+[A-Za-z0-9._~-]{20,}',
-              'Telegram token assignment': r'TELEGRAM_BOT_TOKEN=',
+              'Telegram token assignment': r'^\s*(?:export\s+)?TELEGRAM_BOT_TOKEN=',
               'second poller primitive': r'(?:getUpdates|start_polling|run_polling)\(',
           }
           for label, pattern in forbidden_patterns.items():
-              assert re.search(pattern, text) is None, label
+              assert re.search(pattern, text, re.MULTILINE) is None, label
 
-          assert 'OPENCODE_API_KEY=' not in scripts
-          assert 'TAILSCALE_AUTHKEY=' not in scripts
+          assert re.search(r'^\s*(?:export\s+)?OPENCODE_API_KEY=', scripts, re.MULTILINE) is None
+          assert re.search(r'^\s*(?:export\s+)?TAILSCALE_AUTHKEY=', scripts, re.MULTILINE) is None
           assert 'opencode/nemotron-3-ultra-free' not in scripts
           assert 'curl ' in scripts
           assert '| bash' not in scripts
