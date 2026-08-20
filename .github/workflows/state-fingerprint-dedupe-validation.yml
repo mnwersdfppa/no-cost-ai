@@ -45,7 +45,7 @@ jobs:
           set -euo pipefail
           deno check supabase/functions/state-fingerprint-dedupe/index.ts
 
-      - name: Validate deployment manifest
+      - name: Validate active deployment manifest
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -57,52 +57,90 @@ jobs:
               .read_text(encoding='utf-8')
           )
 
+          assert data['schema_version'] == 1
           assert data['project_id'] == 'dpllasnpfskyyyzebyal'
-          assert data['function']['name'] == 'state-fingerprint-dedupe'
-          assert data['function']['verify_jwt'] is True
-          assert set(data['function']['allowed_roles']) == {
+          assert data['state'] == 'ACTIVE'
+
+          function = data['function']
+          assert function['name'] == 'state-fingerprint-dedupe'
+          assert function['status'] == 'ACTIVE'
+          assert function['verify_jwt'] is True
+          assert set(function['allowed_roles']) == {
               'pi-gateway-client',
               'pattern-observer',
           }
-          assert data['function']['execution_key_required'] is True
-          assert data['function']['canonical_payload_returned'] is False
-          assert data['database']['rls_enabled'] is True
-          assert data['database']['anon_access'] is False
-          assert data['database']['authenticated_direct_table_access'] is False
-          assert data['database']['service_role_only_mutation'] is True
-          assert data['database']['exact_match_only'] is True
-          assert data['database']['similar_items_auto_merged'] is False
-          assert data['normalization']['secret_key_redaction'] is True
-          assert data['normalization']['request_secret_rejection'] is True
-          assert data['normalization']['caller_custom_ignore_keys'] is False
-          assert data['live_e2e']['state'] == 'pass'
-          assert data['live_e2e']['unauthenticated_status'] == 401
-          assert data['live_e2e']['first_status'] == 200
-          assert data['live_e2e']['replay_status'] == 200
-          assert data['live_e2e']['replay_seen_count'] == 2
-          assert data['live_e2e']['similar_state_preserved'] is True
-          assert data['live_e2e']['duplicate_execution_status'] == 409
-          assert data['live_e2e']['secret_like_content_status'] == 400
-          assert data['live_e2e']['temporary_users_remaining'] == 0
-          assert data['live_e2e']['temporary_state_rows_remaining'] == 0
-          assert data['live_e2e']['temporary_ledger_rows_remaining'] == 0
-          assert data['skill']['state'] == 'canary'
-          assert data['skill']['canary_success_runs'] >= 3
-          assert data['skill']['canary_failed_runs'] == 0
-          for key, value in data['security'].items():
-              if key == 'secret_values_included':
-                  assert value is False
-          assert data['security']['arbitrary_code_execution'] is False
-          assert data['security']['automatic_similar_merge'] is False
-          assert data['security']['credential_scope_auto_increase'] is False
-          assert data['security']['automatic_paid_api'] is False
-          assert data['security']['second_telegram_poller'] is False
-          assert data['security']['automatic_merge'] is False
-          assert data['security']['production_deployment'] is False
-          print('manifest_contract=pass')
+          assert function['execution_key_required'] is True
+          assert function['canonical_payload_returned'] is False
+
+          database = data['database']
+          assert database['rls_enabled'] is True
+          assert database['anon_access'] is False
+          assert database['authenticated_direct_table_access'] is False
+          assert database['service_role_only_mutation'] is True
+          assert database['exact_match_only'] is True
+          assert database['similar_items_auto_merged'] is False
+
+          normalization = data['normalization']
+          assert normalization['secret_key_redaction'] is True
+          assert normalization['secret_like_string_redaction'] is True
+          assert normalization['request_secret_rejection'] is True
+          assert normalization['caller_custom_ignore_keys'] is False
+
+          e2e = data['live_e2e']
+          assert e2e['state'] == 'pass'
+          assert e2e['unauthenticated_status'] == 401
+          assert e2e['first_status'] == 200
+          assert e2e['replay_status'] == 200
+          assert e2e['exact_replay_same_fingerprint'] is True
+          assert e2e['replay_seen_count'] == 2
+          assert e2e['similar_state_preserved'] is True
+          assert e2e['duplicate_execution_status'] == 409
+          assert e2e['secret_like_content_status'] == 400
+          assert e2e['canonical_payload_returned'] is False
+          assert e2e['temporary_users_remaining'] == 0
+          assert e2e['temporary_state_rows_remaining'] == 0
+          assert e2e['temporary_ledger_rows_remaining'] == 0
+
+          skill = data['skill']
+          assert skill['state'] == 'active'
+          assert skill['version'] == 1
+          assert skill['canary_duration_minutes'] >= skill['minimum_canary_minutes']
+          assert skill['canary_success_runs'] >= 3
+          assert skill['canary_failed_runs'] == 0
+          assert skill['canary_rollback_runs'] == 0
+          assert skill['missing_gates'] == 0
+          assert skill['forbidden_permissions'] == 0
+          assert skill['source_status_locked'] is True
+
+          github = data['github']
+          assert github['repository'] == 'mnwersdfppa/no-cost-ai'
+          assert github['pull_request'] == 5
+          assert github['workflow_success'] == github['workflow_total'] == 33
+          assert github['draft'] is True
+          assert github['merged'] is False
+
+          security = data['security']
+          assert all(
+              security[key] is False
+              for key in (
+                  'secret_values_included',
+                  'provider_secret_returned',
+                  'canonical_payload_returned',
+                  'arbitrary_code_execution',
+                  'automatic_similar_merge',
+                  'automatic_data_delete',
+                  'credential_scope_auto_increase',
+                  'automatic_paid_api',
+                  'second_telegram_poller',
+                  'automatic_merge',
+                  'production_deployment',
+                  'physical_pi_complete',
+              )
+          )
+          print('active_manifest_contract=pass')
           PY
 
-      - name: Validate SQL boundary
+      - name: Validate SQL and permission boundary
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -133,17 +171,15 @@ jobs:
               assert marker.lower() in lowered, marker
 
           assert 'grant execute on function public.bridge_upsert_state_fingerprint' in lowered
-          assert 'to service_role' in lowered
           assert re.search(
               r'grant\s+execute\s+on\s+function\s+public\.bridge_upsert_state_fingerprint.*?to\s+(anon|authenticated)',
               lowered,
               flags=re.DOTALL,
           ) is None
-
           assert "v_secret_a text:='sk-'||'proj-'" in sql
           assert "canonical_payload::text not like '%'||v_secret_a||'%'" in sql
           assert 'delete from public.bridge_state_fingerprints where namespace=v_namespace' in lowered
-          print('sql_boundary=pass')
+          print('sql_permission_boundary=pass')
           PY
 
       - name: Reject arbitrary execution and secret literals
