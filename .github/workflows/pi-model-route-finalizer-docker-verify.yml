@@ -8,6 +8,13 @@ on:
       - pi/pi-model-route-finalizer-20260821.sh
       - docker/pi-model-route-finalizer/**
       - .github/workflows/pi-model-route-finalizer-docker-verify.yml
+  pull_request:
+    branches:
+      - fix/pi-gateway-systemd-owner-20260821
+    paths:
+      - pi/pi-model-route-finalizer-20260821.sh
+      - docker/pi-model-route-finalizer/**
+      - .github/workflows/pi-model-route-finalizer-docker-verify.yml
   workflow_dispatch:
 
 permissions:
