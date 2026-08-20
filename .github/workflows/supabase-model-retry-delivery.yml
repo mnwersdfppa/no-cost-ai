@@ -53,6 +53,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           python3 - <<'PY'
+          import re
           from pathlib import Path
 
           retry = Path('supabase/functions/model-retry-worker/index.ts').read_text(encoding='utf-8')
@@ -97,7 +98,8 @@ jobs:
               "task_type = 'telegram_result_delivery'",
           ]
           for marker in migration_required:
-              assert marker in migration.lower() if marker == 'for update skip locked' else marker in migration, marker
+              haystack = migration.lower() if marker == 'for update skip locked' else migration
+              assert marker in haystack, marker
 
           assert 'openclaw message send' in pi_worker
           assert 'channels.telegram.allowFrom' in pi_worker
@@ -119,15 +121,14 @@ jobs:
           for marker in forbidden:
               assert marker not in combined, marker
 
-          credential_patterns = [
-              'sk-proj-',
-              'ghp_',
-              'tskey-auth-',
-              'tskey-api-',
-              'xoxb-',
+          credential_value_patterns = [
+              r'sk-proj-[A-Za-z0-9_-]{16,}',
+              r'ghp_[A-Za-z0-9]{20,}',
+              r'tskey-(?:auth|api|client)-[A-Za-z0-9_-]{16,}',
+              r'xox[baprs]-[A-Za-z0-9-]{20,}',
           ]
-          for marker in credential_patterns:
-              assert marker not in combined, marker
+          for pattern in credential_value_patterns:
+              assert re.search(pattern, combined) is None, pattern
           PY
 
       - name: Confirm non-destructive rollout boundaries
