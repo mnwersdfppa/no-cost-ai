@@ -50,7 +50,7 @@ def _platform_tuple(value: Any) -> tuple[str, str] | None:
 def _collect_platform_manifests(
     archive: tarfile.TarFile,
     descriptor: dict[str, Any],
-) -> list[tuple[tuple[str, str], dict[str, Any], str]]:
+) -> list[tuple[tuple[str, str], dict[str, Any], str, str]]:
     """Return image manifests, tolerating exporters that omit index platforms.
 
     BuildKit's OCI exporter normally copies platform metadata onto index
@@ -66,7 +66,7 @@ def _collect_platform_manifests(
     document = load_json(archive, blob_name(digest))
     nested = document.get("manifests")
     if isinstance(nested, list):
-        collected: list[tuple[tuple[str, str], dict[str, Any], str]] = []
+        collected: list[tuple[tuple[str, str], dict[str, Any], str, str]] = []
         for child in nested:
             if isinstance(child, dict):
                 collected.extend(_collect_platform_manifests(archive, child))
@@ -84,7 +84,7 @@ def _collect_platform_manifests(
     if platform is None:
         return []
     source = "descriptor" if declared is not None else "config"
-    return [(platform, document, source)]
+    return [(platform, document, source, digest)]
 
 
 def main() -> int:
@@ -108,7 +108,7 @@ def main() -> int:
         for descriptor in descriptors:
             if not isinstance(descriptor, dict):
                 continue
-            for key, manifest, platform_source in _collect_platform_manifests(
+            for key, manifest, platform_source, manifest_digest in _collect_platform_manifests(
                 archive, descriptor
             ):
                 if key not in EXPECTED:
@@ -127,14 +127,7 @@ def main() -> int:
                         f"compressed image size out of policy for {key}: {compressed}"
                     )
                 platforms[key] = {
-                    "manifest_digest": next(
-                        (
-                            descriptor_digest.get("digest")
-                            for descriptor_digest in [descriptor]
-                            if isinstance(descriptor_digest.get("digest"), str)
-                        ),
-                        None,
-                    ),
+                    "manifest_digest": manifest_digest,
                     "compressed_bytes": compressed,
                     "compressed_mb": round(compressed / (1024 * 1024), 2),
                     "layer_count": len(layers),
