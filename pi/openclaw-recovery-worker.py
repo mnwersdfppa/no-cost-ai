@@ -39,6 +39,7 @@ INSTALLER_URL = (
 )
 INSTALLER_SHA256 = "4c21d9eab6fff335950f8a4c8c7a064a20b9aa00aead487b811cee779e8ae947"
 QUEUE_PATH = "pi-work-queue"
+MIN_REFRESH_TOKEN_CHARS = 8
 ALLOWED_TASKS = {
     "pi_supabase_auth_model_recovery": "verified_supabase_recovery_installer",
     "worker_liveness_guardian": "known_service_liveness",
@@ -135,7 +136,7 @@ def decode_json(data: bytes) -> dict[str, Any]:
 
 def refresh_session() -> bool:
     reload_session()
-    if not BASE.startswith("https://") or len(REFRESH_TOKEN) < 20:
+    if not BASE.startswith("https://") or len(REFRESH_TOKEN) < MIN_REFRESH_TOKEN_CHARS:
         return False
     body = json.dumps({"refresh_token": REFRESH_TOKEN}, separators=(",", ":")).encode()
     request = urllib.request.Request(
@@ -144,7 +145,7 @@ def refresh_session() -> bool:
         method="POST",
         headers={
             "content-type": "application/json",
-            "user-agent": "openclaw-recovery-worker/1",
+            "user-agent": "openclaw-recovery-worker/2",
         },
     )
     try:
@@ -156,7 +157,7 @@ def refresh_session() -> bool:
     refresh = payload.get("refresh_token")
     if payload.get("ok") is not True or not isinstance(access, str) or len(access) < 20:
         return False
-    if not isinstance(refresh, str) or len(refresh) < 20:
+    if not isinstance(refresh, str) or len(refresh) < MIN_REFRESH_TOKEN_CHARS:
         refresh = REFRESH_TOKEN
     save_session(access, refresh)
     return True
@@ -173,7 +174,7 @@ def queue_request(body: dict[str, Any], retry_auth: bool = True) -> dict[str, An
     headers = {
         "authorization": f"Bearer {ACCESS_TOKEN}",
         "content-type": "application/json",
-        "user-agent": "openclaw-recovery-worker/1",
+        "user-agent": "openclaw-recovery-worker/2",
     }
     if PUBLISHABLE_KEY:
         headers["apikey"] = PUBLISHABLE_KEY
@@ -221,7 +222,7 @@ def run(command: list[str], timeout: int, *, check: bool = True) -> subprocess.C
 def download_verified_installer() -> pathlib.Path:
     request = urllib.request.Request(
         INSTALLER_URL,
-        headers={"user-agent": "openclaw-recovery-worker/1"},
+        headers={"user-agent": "openclaw-recovery-worker/2"},
     )
     try:
         with urllib.request.urlopen(request, timeout=40) as response:
@@ -396,12 +397,14 @@ def self_test() -> int:
         "worker_liveness_guardian",
         "telegram_model_failover_repair",
     }
+    assert MIN_REFRESH_TOKEN_CHARS == 8
     assert INSTALLER_URL.startswith("https://dpllasnpfskyyyzebyal.supabase.co/")
     assert len(INSTALLER_SHA256) == 64
     assert "shell=True" not in pathlib.Path(__file__).read_text(encoding="utf-8")
     print(json.dumps({
         "ok": True,
         "allowed_task_types": sorted(ALLOWED_TASKS),
+        "refresh_token_minimum_chars": MIN_REFRESH_TOKEN_CHARS,
         "arbitrary_payload_execution": False,
         "secret_values_included": False,
     }, separators=(",", ":"), sort_keys=True))
