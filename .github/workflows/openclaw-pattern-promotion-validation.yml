@@ -164,7 +164,8 @@ jobs:
               'private key literal': r'BEGIN\s+(?:RSA|OPENSSH|EC)\s+PRIVATE\s+KEY',
           }
           for label, pattern in forbidden.items():
-              assert re.search(pattern, combined, re.IGNORECASE) is None, label
+              if re.search(pattern, combined, re.IGNORECASE):
+                  raise SystemExit(f'forbidden:{label}')
 
           print('pattern_promotion_contract=pass')
           PY
