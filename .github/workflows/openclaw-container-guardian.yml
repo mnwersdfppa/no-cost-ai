@@ -54,7 +54,6 @@ jobs:
         uses: docker/setup-buildx-action@v4
         with:
           driver: docker-container
-          install: true
 
       - name: Record immutable source hashes
         shell: bash
@@ -62,18 +61,22 @@ jobs:
           set -euo pipefail
           sha256sum \
             "$CONTEXT/guardian.py" \
+            "$CONTEXT/self_test.py" \
             "$CONTEXT/Dockerfile" \
             "$CONTEXT/check_oci.py" \
             "$CONTEXT/compose.yaml" \
             "$CONTEXT/.dockerignore" \
             | tee /tmp/source-sha256.txt
 
-      - name: Compile and self-test guardian
+      - name: Compile and validate guardian
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m py_compile "$CONTEXT/guardian.py" "$CONTEXT/check_oci.py"
-          python3 "$CONTEXT/guardian.py" self-test
+          python3 -m py_compile \
+            "$CONTEXT/guardian.py" \
+            "$CONTEXT/self_test.py" \
+            "$CONTEXT/check_oci.py"
+          python3 "$CONTEXT/self_test.py"
           docker buildx build --check "$CONTEXT"
 
       - name: Build and execute native image
@@ -93,7 +96,9 @@ jobs:
             --pids-limit 64 \
             --memory 256m \
             --network none \
-            openclaw-compat-guardian:test self-test
+            --entrypoint python3 \
+            openclaw-compat-guardian:test \
+            /opt/openclaw-compat-guardian/self_test.py
 
       - name: Build multi-platform OCI archive
         shell: bash
