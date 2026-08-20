@@ -1,0 +1,92 @@
+{
+  "schema_version": 2,
+  "generated_at": "2026-08-20T03:23:00Z",
+  "state": "CLOUD_READY_PHYSICAL_PI_PENDING",
+  "supabase_project": "dpllasnpfskyyyzebyal",
+  "credential": {
+    "canonical_alias": "Docker-api-key",
+    "credential_class": "docker_hub_personal_access_token",
+    "english_login_instruction_parsed": true,
+    "docker_hub_auth_status": 200,
+    "public_pull_status": 200,
+    "namespace_pull_status": 200,
+    "namespace_push_status": 200,
+    "credential_location": "supabase_edge_only",
+    "credential_value_included": false,
+    "identifier_included": false,
+    "issued_registry_token_included": false
+  },
+  "artifact": {
+    "image": "docker.io/odifool/openclaw-compat:2026.08.20",
+    "image_by_digest": "docker.io/odifool/openclaw-compat@sha256:6c6df789c26cb0400171818fb0903d27ff799f9642d6e8c2eaf2b1c8e2e2894b",
+    "index_digest": "sha256:6c6df789c26cb0400171818fb0903d27ff799f9642d6e8c2eaf2b1c8e2e2894b",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
+    "base_image": "docker.io/library/alpine:3.24.1",
+    "repository_visibility": "public",
+    "run_as_user": "65532:65532",
+    "read_only_rootfs_supported": true,
+    "network_default": "none",
+    "docker_socket_required": false,
+    "privileged": false,
+    "provider_secrets_included": false,
+    "telegram_poller_included": false
+  },
+  "bootstrap_e2e": {
+    "evidence_ref": "net._http_response:265",
+    "bootstrap_version": 3,
+    "unauthorized_status": 401,
+    "refresh_session_returned": true,
+    "aarch64_normalized_to_arm64": true,
+    "prebuilt_strategy": "container_prebuilt_then_native_recovery",
+    "digest_pinned": true,
+    "security_flags_present": true,
+    "local_build_strategy": "container_local_build_then_native_recovery",
+    "native_fallback_strategy": "native_verified_installer_only",
+    "low_disk_strategy": "supabase_edge_queue",
+    "temporary_user_count_after_test": 0,
+    "temporary_observation_count_after_test": 0,
+    "provider_secret_returned": false,
+    "docker_registry_secret_returned": false
+  },
+  "decision_policy": {
+    "order": [
+      "native_host_required",
+      "docker_multiarch",
+      "docker_qemu_explicit",
+      "supabase_edge",
+      "blocked"
+    ],
+    "qemu_default": false,
+    "privileged_default": false,
+    "docker_socket_mount": false,
+    "provider_secret_mount": false,
+    "host_native_exceptions": [
+      "tailscale_tun",
+      "systemd_service_management",
+      "usb_devices",
+      "gpio",
+      "gpu_driver",
+      "single_telegram_poller"
+    ]
+  },
+  "github": {
+    "pull_request": 5,
+    "branch": "feat/supabase-emergency-bridge-20260819",
+    "draft_required": true,
+    "production_merge": false,
+    "automatic_registry_publish": false,
+    "published_image_execution_matrix": [
+      "linux/amd64",
+      "linux/arm64"
+    ]
+  },
+  "physical_pi": {
+    "docker_preflight_execution": "pending",
+    "native_recovery_execution": "pending",
+    "telegram_round_trip": "pending"
+  },
+  "secret_values_included": false
+}
