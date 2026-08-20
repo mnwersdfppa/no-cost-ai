@@ -47,6 +47,10 @@ jobs:
           assert deployment['canonical_model_component'] == 'edge.pi-model-gateway-guardian'
           assert deployment['canonical_model_route'] == 'supabase.opencode_model_guardian'
           assert deployment['canonical_base_url'].endswith('/pi-model-gateway-guardian/v1')
+          assert deployment['canonical_pi_installer'] == 'pi-openclaw-guardian-master-installer-verified'
+          assert deployment['canonical_pi_installer_url'].endswith('/pi-openclaw-guardian-master-installer-verified')
+          assert deployment['canonical_pi_installer_sha256'] == 'bc938153e8b6bfe90dabb0471d34eaebef595aca6f5ec94db64d1b206cd8ce39'
+          assert deployment['canonical_pi_installer_bytes'] == 3902
 
           expected = {
               'pi-model-gateway-guardian': (
@@ -64,6 +68,11 @@ jobs:
                   True,
                   'cd354b3443bed92b40fddb9449123fc9966c8312866ac72e22426a170c434ec6',
               ),
+              'pi-openclaw-guardian-master-installer-verified': (
+                  1,
+                  False,
+                  'db0df75fe5f729c2a52689c4b371272aec36df81e2d080753ce128ca3c5d5fe5',
+              ),
           }
           for name, (version, verify_jwt, digest) in expected.items():
               row = deployment['functions'][name]
@@ -73,21 +82,27 @@ jobs:
               assert row['ezbr_sha256'] == digest, name
               assert Path(row['source']).is_file(), row['source']
 
-          assert deployment['e2e_gates'] == {
-              'pi_model_gateway_guardian_e2e': 'pass',
-              'pi_recovery_queue_api_e2e': 'pass',
-          }
+          master = deployment['functions']['pi-openclaw-guardian-master-installer-verified']
+          assert master['artifact_sha256'] == deployment['canonical_pi_installer_sha256']
+          assert master['artifact_bytes'] == deployment['canonical_pi_installer_bytes']
+          assert master['source_commit'] == '9237ba0c09b97a79a75464ad2e8e2e83972d5dc7'
+
+          assert deployment['e2e_gates']['pi_model_gateway_guardian_e2e'] == 'pass'
+          assert deployment['e2e_gates']['pi_recovery_queue_api_e2e'] == 'pass'
+          assert deployment['e2e_gates']['pi_guardian_master_installer_integrity'] == 'pass'
           assert deployment['physical_gates']['pi_openclaw_model_activation'] == 'pending'
           assert deployment['physical_gates']['pi_recovery_queue_worker_active'] == 'pending'
-          assert deployment['security'] == {
-              'provider_secret_location': 'supabase_edge_only',
-              'provider_secret_returned_to_pi': False,
-              'tailscale_auth_key_default_return': False,
-              'paid_api_fallback': False,
-              'second_telegram_poller': False,
-              'max_immediate_model_attempts': 2,
-              'queue_ack_on_total_failure': True,
-          }
+
+          security = deployment['security']
+          assert security['provider_secret_location'] == 'supabase_edge_only'
+          assert security['provider_secret_returned_to_pi'] is False
+          assert security['tailscale_auth_key_default_return'] is False
+          assert security['paid_api_fallback'] is False
+          assert security['second_telegram_poller'] is False
+          assert security['max_immediate_model_attempts'] == 2
+          assert security['queue_ack_on_total_failure'] is True
+          assert security['master_installer_nested_sha_verification'] is True
+          assert security['master_installer_raw_provider_assignment'] is False
           PY
 
       - name: Validate Edge Function types and boundaries
@@ -100,6 +115,7 @@ jobs:
           deno check supabase/functions/pi-infra-bootstrap/index.ts
           deno check supabase/functions/pi-model-gateway-guardian/index.ts
           deno check supabase/functions/pi-work-queue/index.ts
+          deno check supabase/functions/pi-openclaw-guardian-master-installer-verified/index.ts
 
           python3 - <<'PY'
           from pathlib import Path
@@ -112,6 +128,8 @@ jobs:
           assert manifest['raw_provider_secret_returned_to_pi'] is False
           assert manifest['queue_on_provider_failure'] is True
           assert manifest['max_immediate_provider_attempts'] == 2
+          assert manifest['canonical_pi_installer'] == 'pi-openclaw-guardian-master-installer-verified'
+          assert manifest['canonical_pi_installer_sha256'] == 'bc938153e8b6bfe90dabb0471d34eaebef595aca6f5ec94db64d1b206cd8ce39'
           assert manifest['paid_provider_calls'] is False
           assert manifest['public_shell_execution'] is False
           assert manifest['telegram_single_poller_enforced'] is True
@@ -119,6 +137,7 @@ jobs:
           bootstrap = Path('supabase/functions/pi-infra-bootstrap/index.ts').read_text(encoding='utf-8')
           guardian = Path('supabase/functions/pi-model-gateway-guardian/index.ts').read_text(encoding='utf-8')
           queue = Path('supabase/functions/pi-work-queue/index.ts').read_text(encoding='utf-8')
+          master_edge = Path('supabase/functions/pi-openclaw-guardian-master-installer-verified/index.ts').read_text(encoding='utf-8')
 
           for marker in (
               'refreshSession',
@@ -149,6 +168,18 @@ jobs:
           ):
               assert marker in queue, marker
           assert 'eyJ[A-Za-z0-9_-]{20,}' in queue
+
+          for marker in (
+              '9237ba0c09b97a79a75464ad2e8e2e83972d5dc7',
+              'bc938153e8b6bfe90dabb0471d34eaebef595aca6f5ec94db64d1b206cd8ce39',
+              'const SCRIPT_BYTES = 3902',
+              'artifact_sha256_mismatch',
+              'artifact_contract_missing',
+              'x-openclaw-provider-secret-included',
+              'x-openclaw-second-telegram-poller',
+              'x-openclaw-paid-fallback',
+          ):
+              assert marker in master_edge, marker
 
           combined = bootstrap + '\n' + queue
           forbidden = {
@@ -222,12 +253,21 @@ jobs:
           bash -n pi/recover-opencode-first-tailscale-second.sh
           bash -n pi/activate-opencode-tailscale.sh
           bash -n pi/install-openclaw-recovery-queue-worker.sh
+          bash -n pi/install-openclaw-guardian-master.sh
           python3 -m py_compile pi/openclaw-recovery-queue-worker.py
 
           grep -F 'sha256sum --check --status' pi/recover-opencode-first-tailscale-second.sh
           grep -F 'RECOVERY_MODE=SUPABASE_GUARDIAN_SCOPED_PI_JWT' pi/recover-opencode-first-tailscale-second.sh
           ! grep -Eq '^\s*(export\s+)?OPENCODE_API_KEY=' pi/recover-opencode-first-tailscale-second.sh
           ! grep -Eq '^\s*(export\s+)?TAILSCALE_AUTHKEY=' pi/recover-opencode-first-tailscale-second.sh
+
+          grep -F 'MODEL_INSTALLER_SHA256="4c21d9eab6fff335950f8a4c8c7a064a20b9aa00aead487b811cee779e8ae947"' pi/install-openclaw-guardian-master.sh
+          grep -F 'WORKER_INSTALLER_SHA256="cfa9b13c12c5937c9d0156b9279d5834ffc267986b38d51e38dd0eaac1c87c22"' pi/install-openclaw-guardian-master.sh
+          grep -F 'provider_secret_exported": false' pi/install-openclaw-guardian-master.sh
+          grep -F 'paid_api_fallback": false' pi/install-openclaw-guardian-master.sh
+          grep -F 'second_telegram_poller": false' pi/install-openclaw-guardian-master.sh
+          ! grep -Eq '^\s*(export\s+)?OPENCODE_API_KEY=' pi/install-openclaw-guardian-master.sh
+          ! grep -Eq '^\s*(export\s+)?TAILSCALE_AUTHKEY=' pi/install-openclaw-guardian-master.sh
 
           ! grep -RInE \
             --exclude='*.md' \
