@@ -3,19 +3,21 @@ name: Supabase model gateway ownership gate
 on:
   pull_request:
     paths:
-      - 'supabase/migrations/20260819080900_zero_cost_first_route_resolver.sql'
-      - 'supabase/migrations/20260819081000_canonicalize_bridge_runtime_components.sql'
-      - 'supabase/migrations/20260819081200_select_policy_resolver_model_gateway.sql'
-      - 'supabase/functions/emergency-bridge/index.ts'
+      - 'supabase/functions/pi-infra-bootstrap/**'
+      - 'supabase/functions/pi-model-gateway-guardian/**'
+      - 'supabase/functions/pi-work-queue/**'
+      - 'supabase/migrations/202608200001_openclaw_guardian_reconciliation.sql'
+      - 'supabase/migrations/202608200002_promote_openclaw_guardian_after_e2e.sql'
       - '.github/workflows/supabase-model-gateway-selection-ci.yml'
   push:
     branches:
       - feat/supabase-emergency-bridge-20260819
     paths:
-      - 'supabase/migrations/20260819080900_zero_cost_first_route_resolver.sql'
-      - 'supabase/migrations/20260819081000_canonicalize_bridge_runtime_components.sql'
-      - 'supabase/migrations/20260819081200_select_policy_resolver_model_gateway.sql'
-      - 'supabase/functions/emergency-bridge/index.ts'
+      - 'supabase/functions/pi-infra-bootstrap/**'
+      - 'supabase/functions/pi-model-gateway-guardian/**'
+      - 'supabase/functions/pi-work-queue/**'
+      - 'supabase/migrations/202608200001_openclaw_guardian_reconciliation.sql'
+      - 'supabase/migrations/202608200002_promote_openclaw_guardian_after_e2e.sql'
       - '.github/workflows/supabase-model-gateway-selection-ci.yml'
 
 permissions:
@@ -28,31 +30,53 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
-      - name: Verify deterministic selected owner
+      - name: Verify E2E-gated Guardian ownership
         shell: bash
         run: |
           set -euo pipefail
-          resolver=supabase/migrations/20260819080900_zero_cost_first_route_resolver.sql
-          owner=supabase/migrations/20260819081200_select_policy_resolver_model_gateway.sql
-          edge=supabase/functions/emergency-bridge/index.ts
-          test -s "$resolver"
-          test -s "$owner"
-          grep -F "'db.bridge_resolve_route'" "$owner"
-          grep -F "'model_gateway'" "$owner"
-          grep -F "component_key='edge.token-gateway'" "$owner"
-          grep -F "selected=false" "$owner"
-          grep -F "lifecycle_status='pending_audit'" "$owner"
-          grep -F "v_model_owner='db.bridge_resolve_route'" "$owner"
-          grep -F "v_unaudited_token_gateway_selected=0" "$owner"
-          grep -F 'bridge_resolve_route' "$resolver"
-          grep -F 'stop_no_eligible_route' "$resolver"
-          grep -F "r.integration='openai'" "$resolver"
-          grep -F "control_key='paid_api_fallback'" "$resolver"
-          grep -F 'bridge_resolve_route' "$edge"
-          grep -F 'provider_called: false' "$edge"
-          grep -F 'credential_returned: false' "$edge"
+          seed=supabase/migrations/202608200001_openclaw_guardian_reconciliation.sql
+          promote=supabase/migrations/202608200002_promote_openclaw_guardian_after_e2e.sql
+          guardian=supabase/functions/pi-model-gateway-guardian/index.ts
+          bootstrap=supabase/functions/pi-infra-bootstrap/index.ts
+          queue=supabase/functions/pi-work-queue/index.ts
 
-      - name: Reject direct provider execution in selected resolver sources
+          for file in "$seed" "$promote" "$guardian" "$bootstrap" "$queue"; do
+            test -s "$file"
+          done
+
+          # A clean deployment must not select the model caller before E2E.
+          grep -F "'edge.pi-model-gateway-guardian'" "$seed"
+          grep -F "'model_gateway_guardian'" "$seed"
+          grep -F "'pending_audit'" "$seed"
+          grep -F "'not_tested'" "$seed"
+
+          # Promotion requires both the model and deterministic queue E2E gates.
+          grep -F "gate_key='pi_model_gateway_guardian_e2e'" "$promote"
+          grep -F "gate_key='pi_recovery_queue_api_e2e'" "$promote"
+          grep -F "status='pass'" "$promote"
+          grep -F "component_key='edge.pi-model-gateway-guardian'" "$promote"
+          grep -F "selected=true" "$promote"
+          grep -F "lifecycle_status='active'" "$promote"
+          grep -F "component_key='edge.pi-model-gateway'" "$promote"
+          grep -F "component_key='edge.token-gateway'" "$promote"
+          grep -F "selected=false" "$promote"
+          grep -F "lifecycle_status='compatibility'" "$promote"
+          grep -F "'supabase.opencode_model_guardian'" "$promote"
+          grep -F "/pi-model-gateway-guardian/v1" "$promote"
+
+          # The selected runtime is scoped, bounded and queue-backed.
+          grep -F 'const MAX_ATTEMPTS = 2' "$guardian"
+          grep -F 'async function requirePi' "$guardian"
+          grep -F 'async function queueRequest' "$guardian"
+          grep -F 'function queuedResponse' "$guardian"
+          grep -F 'provider_secret_returned: false' "$guardian"
+          grep -F 'surface_raw_provider_error_to_telegram: false' "$guardian"
+          grep -F 'claim_openclaw_recovery_task' "$seed"
+          grep -F 'action === "pull_recovery"' "$queue"
+          grep -F 'export_original_provider_key_to_pi: false' "$bootstrap"
+          grep -F 'start_second_telegram_poller: false' "$bootstrap"
+
+      - name: Confine direct model execution to Guardian
         shell: bash
         run: |
           set -euo pipefail
@@ -60,21 +84,30 @@ jobs:
           from pathlib import Path
           import re
 
-          sources = [
-              Path('supabase/migrations/20260819080900_zero_cost_first_route_resolver.sql'),
-              Path('supabase/migrations/20260819081200_select_policy_resolver_model_gateway.sql'),
+          guardian = Path('supabase/functions/pi-model-gateway-guardian/index.ts').read_text(encoding='utf-8')
+          non_callers = [
+              Path('supabase/functions/pi-infra-bootstrap/index.ts'),
+              Path('supabase/functions/pi-work-queue/index.ts'),
+              Path('supabase/migrations/202608200001_openclaw_guardian_reconciliation.sql'),
+              Path('supabase/migrations/202608200002_promote_openclaw_guardian_after_e2e.sql'),
           ]
-          text = '\n'.join(path.read_text(encoding='utf-8') for path in sources)
+          other_text = '\n'.join(path.read_text(encoding='utf-8') for path in non_callers)
+          all_text = guardian + '\n' + other_text
 
-          # Route-registry endpoint metadata is allowed. The selected SQL resolver
-          # must not contain an HTTP execution primitive or an authorization header.
+          assert 'https://opencode.ai/zen/v1/responses' in guardian
+          assert 'https://opencode.ai/zen/v1/responses' not in other_text
+
           forbidden = {
-              'fetch execution': r'\bfetch\s*\(',
-              'pg_net execution': r'\bnet\.http_(?:get|post|delete)\s*\(',
-              'http extension execution': r'\bhttp_(?:get|post|put|delete|patch)\s*\(',
-              'authorization header': r'Authorization\s*[:=].*Bearer',
-              'Deno provider execution': r'\bDeno\.Command\b',
+              'raw OpenCode key returned to Pi': r'OPENCODE_API_KEY\s*:',
+              'legacy Tailscale env returned to Pi': r'TAILSCALE_AUTHKEY\s*:',
+              'second Telegram poller': r'getUpdates|start_second_telegram_poller\s*:\s*true',
+              'automatic paid fallback': r'paid_fallback(?:_enabled)?\s*[:=]\s*true',
+              'SQL network model execution': r'\bnet\.http_(?:get|post|delete)\s*\(',
           }
           for label, pattern in forbidden.items():
-              assert re.search(pattern, text, re.IGNORECASE) is None, label
+              assert re.search(pattern, all_text, re.IGNORECASE) is None, label
+
+          assert 'authorization: `Bearer ${OPENCODE_KEY}`' in guardian
+          assert 'provider_secret_returned: false' in guardian
+          print('Guardian ownership is deterministic and E2E-gated')
           PY
