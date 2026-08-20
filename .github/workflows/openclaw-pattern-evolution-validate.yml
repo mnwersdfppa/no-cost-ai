@@ -155,7 +155,7 @@ jobs:
               'git ' + 'push',
               'supabase functions ' + 'deploy',
               'vercel ' + '--prod',
-              'pull_request_target:',
+              'pull_request' + '_target:',
           ]:
               if forbidden in workflow:
                   raise SystemExit(f'workflow mutation boundary violated: {forbidden}')
