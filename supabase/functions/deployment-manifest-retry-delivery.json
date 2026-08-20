@@ -1,0 +1,68 @@
+{
+  "project_id": "dpllasnpfskyyyzebyal",
+  "status": "ACTIVE_HEALTHY",
+  "canonical_model_gateway": "pi-model-gateway-guardian",
+  "server_retry_schedule": "*/5 * * * *",
+  "pi_delivery_schedule": "2min+jitter",
+  "functions": {
+    "model-retry-worker": {
+      "version": 1,
+      "status": "ACTIVE",
+      "verify_jwt": false,
+      "custom_auth": "supabase_vault_hash_verification",
+      "ezbr_sha256": "4d8c4faa38d0fc33750286410288b36685d8cede10281c86ee1c0ff1b0b0fd37",
+      "source": "supabase/functions/model-retry-worker/index.ts"
+    },
+    "pi-result-delivery-queue": {
+      "version": 1,
+      "status": "ACTIVE",
+      "verify_jwt": true,
+      "ezbr_sha256": "a4d80e5d7b8243a745a9449805550f466bbc11b8731891674daefb53b87721b4",
+      "source": "supabase/functions/pi-result-delivery-queue/index.ts"
+    },
+    "pi-telegram-delivery-worker-installer": {
+      "version": 1,
+      "status": "ACTIVE",
+      "verify_jwt": false,
+      "ezbr_sha256": "f9ab4b1e8b4b85122e699cf06f856cfae271340d014a148b3efd2a82806616f2",
+      "artifact_sha256": "44e9e59c9252d8423b97a2954ecaf5614c66f3b7ff7acdac1593c18eadf72b18",
+      "artifact_bytes": 28107,
+      "source_commit": "292aae516c8c174c7174b88be1e8ff42d1223a99"
+    },
+    "pi-openclaw-master-recovery-installer": {
+      "version": 1,
+      "status": "ACTIVE",
+      "verify_jwt": false,
+      "ezbr_sha256": "51626f5bc9c7dff7cb2380451e9fb245d4941f686d64739fc35d93ecb3d5c676",
+      "artifact_sha256": "4c5f43fd097c60d695a611ead01b5079ac187f15a367bff674b1c3d130c8a44a",
+      "artifact_bytes": 2351
+    }
+  },
+  "database_contracts": {
+    "model_health_table": "bridge_model_health",
+    "record_model_result_rpc": "bridge_record_model_result",
+    "model_retry_claim_rpc": "bridge_claim_model_retry_task",
+    "telegram_delivery_claim_rpc": "bridge_claim_telegram_delivery_task",
+    "worker_token_verifier_rpc": "bridge_verify_model_retry_worker_token",
+    "worker_internal_invoker_rpc": "bridge_invoke_model_retry_worker"
+  },
+  "e2e_gates": {
+    "server_model_retry_worker_e2e": "pass",
+    "pi_result_delivery_queue_e2e": "pass"
+  },
+  "physical_gates": {
+    "pi_openclaw_model_activation": "pending",
+    "pi_telegram_result_delivery_worker": "pending",
+    "tailscale_pi_enrollment": "pending_optional"
+  },
+  "security": {
+    "provider_secret_location": "supabase_edge_only",
+    "worker_auth_location": "supabase_vault_only",
+    "provider_secret_returned_to_pi": false,
+    "worker_token_returned": false,
+    "raw_provider_error_surfaced_to_telegram": false,
+    "second_telegram_poller": false,
+    "paid_api_fallback": false,
+    "outbound_delivery_command": "openclaw message send"
+  }
+}
