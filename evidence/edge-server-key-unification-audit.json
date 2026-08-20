@@ -1,6 +1,6 @@
 {
   "branch": "feat/supabase-emergency-bridge-20260819",
-  "commit_sha": "b82d7b3492e59bb35ddd11ab4f2a94ebdea3eee9",
+  "commit_sha": "151f30beb7f95297fb5ef1adf01d7cd9e1955a5c",
   "functions": [
     {
       "classification": "mixed_or_unclassified",
@@ -49,6 +49,15 @@
     },
     {
       "classification": "modern_secret_default_first",
+      "function_name": "model-retry-worker",
+      "legacy_service_role_reference": true,
+      "modern_default_pattern": true,
+      "modern_secret_keys_reference": true,
+      "runtime_key_receipt": false,
+      "secret_value_included": false
+    },
+    {
+      "classification": "modern_secret_default_first",
       "function_name": "pi-infra-bootstrap",
       "legacy_service_role_reference": true,
       "modern_default_pattern": true,
@@ -66,6 +75,15 @@
       "secret_value_included": false
     },
     {
+      "classification": "no_server_admin_key",
+      "function_name": "pi-openclaw-guardian-master-installer-verified",
+      "legacy_service_role_reference": false,
+      "modern_default_pattern": false,
+      "modern_secret_keys_reference": false,
+      "runtime_key_receipt": false,
+      "secret_value_included": false
+    },
+    {
       "classification": "modern_secret_default_first",
       "function_name": "pi-work-queue",
       "legacy_service_role_reference": true,
@@ -75,7 +93,7 @@
       "secret_value_included": false
     }
   ],
-  "generated_at": "2026-08-20T00:30:54.420036+00:00",
+  "generated_at": "2026-08-20T00:50:05.480862+00:00",
   "legacy_service_role_only_functions": [
     "credential-readiness-admission-gated",
     "emergency-bridge",
@@ -93,6 +111,7 @@
   "summary": {
     "legacy_service_role_only": 3,
     "mixed_or_unclassified": 1,
-    "modern_secret_default_first": 4
+    "modern_secret_default_first": 5,
+    "no_server_admin_key": 1
   }
 }
