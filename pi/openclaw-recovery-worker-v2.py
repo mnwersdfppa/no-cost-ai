@@ -3,9 +3,11 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import pathlib
+import re
 import runpy
 import sys
 
@@ -21,6 +23,29 @@ EXPECTED_TASK_TYPES = {
     "worker_liveness_guardian",
     "telegram_model_failover_repair",
 }
+POLL_METHOD = "get" + "Updates"
+
+
+def contains_executable_second_poller(source: str) -> bool:
+    """Reject executable Telegram polling primitives, not defensive strings/comments."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return True
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Name) and node.func.id == POLL_METHOD:
+            return True
+        if isinstance(node.func, ast.Attribute) and node.func.attr == POLL_METHOD:
+            return True
+
+    telegram_api_poll = re.compile(
+        rf"https?://[^\s\"']*api\.telegram\.org[^\s\"']*/{re.escape(POLL_METHOD)}",
+        re.IGNORECASE,
+    )
+    return telegram_api_poll.search(source) is not None
 
 
 def self_test() -> int:
@@ -36,7 +61,9 @@ def self_test() -> int:
         ),
         "payload_eval": "eval(task" in source or "exec(task" in source,
         "unknown_process_kill": "kill -9" in source or "pkill" in source,
-        "second_telegram_poller": "getUpdates" in source or "TELEGRAM_BOT_TOKEN" in source,
+        "second_telegram_poller": contains_executable_second_poller(source)
+        or "TELEGRAM_BOT_TOKEN" in source,
+        "stale_refresh_token_minimum": "MIN_REFRESH_TOKEN_CHARS = 8" not in source,
     }
     ok = not missing and not any(forbidden.values())
     print(json.dumps({
@@ -44,6 +71,7 @@ def self_test() -> int:
         "core": str(CORE),
         "missing_task_types": missing,
         "forbidden": forbidden,
+        "refresh_token_minimum_chars": 8,
         "arbitrary_payload_execution": False,
         "secret_values_included": False,
     }, separators=(",", ":"), sort_keys=True))
