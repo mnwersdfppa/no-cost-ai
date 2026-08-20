@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "project_id": "dpllasnpfskyyyzebyal",
-  "recorded_at": "2026-08-20T06:12:00Z",
-  "state": "CANARY_API_ACTIVE",
+  "recorded_at": "2026-08-20T06:38:20Z",
+  "state": "ACTIVE",
   "function": {
     "name": "state-fingerprint-dedupe",
     "version": 1,
@@ -86,12 +86,20 @@
   },
   "skill": {
     "name": "state-fingerprint-dedupe",
-    "state": "canary",
+    "version": 1,
+    "state": "active",
     "risk_tier": "low",
-    "auto_promotable": true,
+    "auto_promotable": false,
+    "canary_started_at": "2026-08-20T06:07:45Z",
+    "activated_at": "2026-08-20T06:38:20Z",
+    "canary_duration_minutes": 30.59,
     "canary_success_runs": 3,
     "canary_failed_runs": 0,
+    "canary_rollback_runs": 0,
     "minimum_canary_minutes": 30,
+    "missing_gates": 0,
+    "forbidden_permissions": 0,
+    "source_status_locked": true,
     "required_gates": [
       "static_security",
       "schema_validation",
@@ -99,6 +107,16 @@
       "rollback",
       "secret_boundary"
     ]
+  },
+  "github": {
+    "repository": "mnwersdfppa/no-cost-ai",
+    "pull_request": 5,
+    "branch": "feat/supabase-emergency-bridge-20260819",
+    "validated_source_head": "f9d0dfad17f2c38c809e0a4583982510f2426a52",
+    "workflow_total": 33,
+    "workflow_success": 33,
+    "draft": true,
+    "merged": false
   },
   "security": {
     "secret_values_included": false,
@@ -111,6 +129,7 @@
     "automatic_paid_api": false,
     "second_telegram_poller": false,
     "automatic_merge": false,
-    "production_deployment": false
+    "production_deployment": false,
+    "physical_pi_complete": false
   }
 }
