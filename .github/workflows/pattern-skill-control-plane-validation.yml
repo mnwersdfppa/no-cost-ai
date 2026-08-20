@@ -1,0 +1,236 @@
+name: Validate pattern-to-skill control plane
+
+on:
+  pull_request:
+    paths:
+      - 'docs/pattern-to-skill-evolution-system.md'
+      - 'supabase/functions/pattern-observation-intake/**'
+      - 'supabase/functions/pattern-skill-readiness/**'
+      - 'supabase/functions/deployment-manifest-pattern-skill.json'
+      - 'supabase/migrations/20260820003000_pattern_to_skill_schema.sql'
+      - 'supabase/migrations/20260820003100_pattern_to_skill_functions.sql'
+      - 'supabase/migrations/20260820003200_pattern_to_skill_seed_schedule.sql'
+      - '.github/workflows/pattern-skill-control-plane-validation.yml'
+  push:
+    branches:
+      - feat/supabase-emergency-bridge-20260819
+    paths:
+      - 'docs/pattern-to-skill-evolution-system.md'
+      - 'supabase/functions/pattern-observation-intake/**'
+      - 'supabase/functions/pattern-skill-readiness/**'
+      - 'supabase/functions/deployment-manifest-pattern-skill.json'
+      - 'supabase/migrations/20260820003000_pattern_to_skill_schema.sql'
+      - 'supabase/migrations/20260820003100_pattern_to_skill_functions.sql'
+      - 'supabase/migrations/20260820003200_pattern_to_skill_seed_schedule.sql'
+      - '.github/workflows/pattern-skill-control-plane-validation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pattern-skill-control-plane-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Type-check Edge Functions
+        run: |
+          set -euo pipefail
+          deno check supabase/functions/pattern-observation-intake/index.ts
+          deno check supabase/functions/pattern-skill-readiness/index.ts
+
+      - name: Validate deployment manifest
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path('supabase/functions/deployment-manifest-pattern-skill.json')
+          data = json.loads(path.read_text(encoding='utf-8'))
+
+          assert data['project_id'] == 'dpllasnpfskyyyzebyal'
+          assert data['canonical_storage'] == 'supabase'
+          assert data['functions']['pattern-observation-intake']['verify_jwt'] is True
+          assert data['functions']['pattern-observation-intake']['execution_key_required'] is True
+          assert data['functions']['pattern-observation-intake']['secret_like_content_rejected'] is True
+          assert data['functions']['pattern-observation-intake']['raw_logs_accepted'] is False
+          assert data['functions']['pattern-skill-readiness']['verify_jwt'] is True
+          assert data['functions']['pattern-skill-readiness']['read_only'] is True
+          assert data['scheduler']['schedule'] == '*/30 * * * *'
+          assert data['scheduler']['metadata_only_promotion'] is True
+          assert data['scheduler']['external_fetch'] is False
+          assert data['promotion']['arbitrary_code_execution'] is False
+          assert data['research']['search_before_build'] is True
+          assert data['research']['automatic_code_execution'] is False
+          assert data['notion_migration']['automatic_source_delete'] is False
+          assert data['notion_migration']['secret_migration'] is False
+          assert data['docker_compatibility']['repository_creation_is_not_publication'] is True
+          assert data['docker_compatibility']['image_contains_credentials'] is False
+          assert data['security']['secret_values_included'] is False
+          assert data['security']['automatic_credential_scope_increase'] is False
+          assert data['security']['automatic_paid_api'] is False
+          assert data['security']['automatic_merge'] is False
+          assert data['security']['production_deployment'] is False
+          assert data['security']['second_telegram_poller'] is False
+          assert data['security']['hidden_infrastructure'] is False
+          assert data['security']['unauthorized_access'] is False
+          assert data['security']['jailbreak_or_safeguard_bypass'] is False
+          print('manifest_contract=pass')
+          PY
+
+      - name: Validate schema and RPC boundaries
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          schema = Path('supabase/migrations/20260820003000_pattern_to_skill_schema.sql').read_text(encoding='utf-8')
+          functions = Path('supabase/migrations/20260820003100_pattern_to_skill_functions.sql').read_text(encoding='utf-8')
+          seed = Path('supabase/migrations/20260820003200_pattern_to_skill_seed_schedule.sql').read_text(encoding='utf-8')
+
+          required_tables = {
+              'bridge_pattern_observations',
+              'bridge_pattern_candidates',
+              'bridge_research_queue',
+              'bridge_solution_catalog',
+              'bridge_skill_registry',
+              'bridge_skill_versions',
+              'bridge_skill_evaluations',
+              'bridge_automation_runs',
+              'bridge_source_bindings',
+              'bridge_capability_registry',
+          }
+          for table in required_tables:
+              assert f'create table if not exists public.{table}' in schema, table
+              assert f"'{table}'" in schema, f'RLS loop missing {table}'
+
+          for marker in (
+              'enable row level security',
+              'revoke all on table',
+              'grant all on table',
+              'secret_values_included boolean not null default false',
+              'unique(skill_key,execution_key)',
+          ):
+              assert marker in schema.lower(), marker
+
+          required_functions = {
+              'bridge_refresh_pattern_candidate',
+              'bridge_record_pattern_observation',
+              'bridge_score_pattern_candidates',
+              'bridge_enqueue_pattern_research',
+              'bridge_claim_research_task',
+              'bridge_skill_gate_status',
+              'bridge_promote_skill_candidate',
+              'bridge_pattern_skill_sweep',
+              'bridge_pattern_skill_readiness',
+          }
+          for function in required_functions:
+              assert f'function public.{function}' in functions, function
+
+          for marker in (
+              "metadata_only_promotion',true",
+              "'arbitrary_code_execution',false",
+              "'hidden_infrastructure',false",
+              "'credential_scope_auto_increase',false",
+              "'search_before_build',true",
+              "on conflict(skill_key,execution_key) do nothing",
+              "v_success_runs>=3",
+              "v_failed_runs=0",
+          ):
+              assert marker in functions, marker
+
+          assert "'*/30 * * * *'" in seed
+          assert "'openclaw-pattern-skill-sweeper-v1'" in seed
+          assert "'delete_source_automatically',false" in seed
+          assert "'migrate_secrets',false" in seed
+          assert "'reasoning_is_fallback_not_default',true" in seed
+
+          mutation_grants = re.findall(
+              r'grant execute on function public\.(bridge_[^(]+)',
+              functions,
+              flags=re.IGNORECASE,
+          )
+          assert 'bridge_pattern_skill_readiness' in mutation_grants
+          print('schema_rpc_contract=pass')
+          PY
+
+      - name: Reject arbitrary execution and secret literals
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          paths = [
+              Path('supabase/functions/pattern-observation-intake/index.ts'),
+              Path('supabase/functions/pattern-skill-readiness/index.ts'),
+              Path('supabase/migrations/20260820003000_pattern_to_skill_schema.sql'),
+              Path('supabase/migrations/20260820003100_pattern_to_skill_functions.sql'),
+              Path('supabase/migrations/20260820003200_pattern_to_skill_seed_schedule.sql'),
+          ]
+          texts = {path: path.read_text(encoding='utf-8') for path in paths}
+          edge = texts[paths[0]] + '\n' + texts[paths[1]]
+
+          forbidden_edge = (
+              r'Deno\.Command\s*\(',
+              r'new\s+Function\s*\(',
+              r'\beval\s*\(',
+              r'getUpdates',
+              r'curl\s*\|\s*(?:sh|bash)',
+          )
+          for pattern in forbidden_edge:
+              assert re.search(pattern, edge, re.IGNORECASE) is None, pattern
+
+          combined = '\n'.join(texts.values())
+          secret_literals = (
+              r'sk-proj-[A-Za-z0-9_-]{20,}',
+              r'ghp_[A-Za-z0-9]{20,}',
+              r'github_pat_[A-Za-z0-9_]{20,}',
+              r'xox[baprs]-[A-Za-z0-9-]{20,}',
+              r'tskey-(?:auth|api|client)-[A-Za-z0-9_-]{20,}',
+              r'dckr_(?:pat|oat)_[A-Za-z0-9_-]{20,}',
+          )
+          for pattern in secret_literals:
+              assert re.search(pattern, combined) is None, pattern
+
+          assert 'SECRET_LIKE' in edge
+          assert 'secret_like_content_rejected' in edge
+          assert 'raw_logs_copied: false' in edge
+          print('execution_and_secret_boundary=pass')
+          PY
+
+      - name: Confirm non-production workflow
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          workflow = Path('.github/workflows/pattern-skill-control-plane-validation.yml').read_text(encoding='utf-8')
+          forbidden = [
+              'supabase functions ' + 'deploy',
+              'vercel ' + '--prod',
+              'gh pr ' + 'merge',
+              'git push ' + 'origin main',
+              'contents: write',
+          ]
+          for marker in forbidden:
+              assert marker not in workflow, marker
+          assert 'contents: read' in workflow
+          assert 'persist-credentials: false' in workflow
+          print('production_mutation=off')
+          PY
