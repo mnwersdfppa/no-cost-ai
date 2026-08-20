@@ -24,11 +24,12 @@ Before creating new infrastructure, search the authoritative source catalog and 
 
 - Permissive official sources: Supabase components, PostgreSQL, pgvector, Docker Buildx, LangGraph, LangChain, Temporal, OpenTelemetry Collector, Node-RED, Prefect, Kestra.
 - Open standard: Model Context Protocol.
-- Source-available with a separate license gate: n8n and mixed Windmill distributions.
+- **n8n is source-available, not permissively open source for every use case.** Its relevant distribution terms include the **Sustainable Use License** and Enterprise License. Hosting, resale, white-labeling, embedding, and commercial redistribution require a separate license review before selection.
+- Other source-available candidates, including mixed Windmill distributions, also remain behind a license gate.
 - Managed or proprietary optional services: LangSmith and Notion API.
 - Platform terms: GitHub Actions/API and project-native OpenClaw interfaces.
 
-A source being publicly visible does not automatically permit resale, white-label hosting, redistribution, or embedding in another commercial service.
+A source being publicly visible does not automatically permit resale, white-label hosting, redistribution, or embedding in another commercial service. License classification is part of solution scoring and cannot be bypassed by an automation macro.
 
 ## Research pipeline
 
