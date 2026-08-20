@@ -1,7 +1,7 @@
 {
   "project_id": "dpllasnpfskyyyzebyal",
   "status": "ACTIVE_HEALTHY",
-  "recorded_at": "2026-08-20T03:16:00Z",
+  "recorded_at": "2026-08-20T03:27:00Z",
   "canonical_model_gateway": "pi-model-gateway-guardian",
   "server_retry_schedule": "*/2 * * * *",
   "canonical_server_retry_job": "openclaw-model-retry-worker-v2",
@@ -12,15 +12,17 @@
   "canonical_pi_installer_bytes": 2973,
   "functions": {
     "model-retry-worker": {
-      "version": 5,
+      "version": 6,
       "status": "ACTIVE",
       "verify_jwt": false,
       "custom_auth": "supabase_vault_sha256_verification",
       "auth_header": "x-openclaw-scheduler-token",
+      "deployment_mode": "pinned_github_source_bundle",
+      "source_commit": "2491e4f39e44f0e6883c20982e7e5ac21d29de41",
       "positive_auth_status": 200,
       "negative_auth_status": 401,
       "max_tasks_per_run": 2,
-      "ezbr_sha256": "9fefe07db4ea0f88bf54c2b651b1a122b6fdee0aafebb1b46394a672b47f5459",
+      "ezbr_sha256": "f6c4029150f102b4d62011ed78ef50270e2dbbcbb6e7a718b3d6208340074f6f",
       "source": "supabase/functions/model-retry-worker/index.ts"
     },
     "pi-result-delivery-queue": {
