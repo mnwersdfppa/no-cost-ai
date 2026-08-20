@@ -6,6 +6,7 @@ const OPENCODE_ALIAS = "Opencode-api-key";
 const TAILSCALE_ALIAS = "Tailscale-fff-api-key";
 const MAX_BODY_BYTES = 16_384;
 const MAX_BOOTSTRAPS_PER_HOUR = 3;
+const MIN_REFRESH_TOKEN_CHARS = 8;
 const DEFAULT_GATEWAY = `${SUPABASE_URL}/functions/v1/pi-model-gateway-guardian/v1`;
 const DISCOVERABLE_FREE_MODELS = [
   "nemotron-3-ultra-free",
@@ -38,7 +39,7 @@ function parseNamed(raw: string | undefined): Record<string, string> {
     const value = JSON.parse(raw);
     if (!value || typeof value !== "object" || Array.isArray(value)) return {};
     return Object.fromEntries(
-      Object.entries(value).filter(([, v]) => typeof v === "string" && v.length > 0),
+      Object.entries(value).filter(([, item]) => typeof item === "string" && item.length > 0),
     ) as Record<string, string>;
   } catch {
     return {};
@@ -119,7 +120,7 @@ function safeGateway(value: unknown): string {
   if (typeof value !== "string") return DEFAULT_GATEWAY;
   try {
     const url = new URL(value);
-    const expectedHost = `${new URL(SUPABASE_URL).hostname}`;
+    const expectedHost = new URL(SUPABASE_URL).hostname;
     if (url.protocol !== "https:" || url.hostname !== expectedHost) return DEFAULT_GATEWAY;
     if (!url.pathname.includes("/functions/v1/pi-model-gateway-guardian/v1")) return DEFAULT_GATEWAY;
     return url.toString().replace(/\/$/, "");
@@ -151,7 +152,7 @@ async function userForAccessToken(token: string) {
 }
 
 async function refreshSession(refreshToken: string): Promise<Session | null> {
-  if (!publishableKey || refreshToken.length < 20 || refreshToken.length > 4096) return null;
+  if (!publishableKey || refreshToken.length < MIN_REFRESH_TOKEN_CHARS || refreshToken.length > 4096) return null;
   let response: Response;
   try {
     response = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
@@ -159,7 +160,7 @@ async function refreshSession(refreshToken: string): Promise<Session | null> {
       headers: {
         "content-type": "application/json",
         apikey: publishableKey,
-        "user-agent": "openclaw-pi-infra-bootstrap/5",
+        "user-agent": "openclaw-pi-infra-bootstrap/6",
       },
       body: JSON.stringify({ refresh_token: refreshToken }),
       signal: AbortSignal.timeout(12_000),
@@ -167,6 +168,7 @@ async function refreshSession(refreshToken: string): Promise<Session | null> {
   } catch {
     return null;
   }
+
   const data = await response.json().catch(() => ({}));
   if (!response.ok || typeof data?.access_token !== "string") return null;
   const user = await userForAccessToken(data.access_token);
@@ -187,7 +189,7 @@ async function authenticate(req: Request, body: JsonRecord): Promise<Session | n
     const user = await userForAccessToken(bearer);
     if (user) return { user, accessToken: bearer, refreshToken: null, expiresIn: null, refreshed: false };
   }
-  const refreshToken = bounded(body.refresh_token, 20, 4096);
+  const refreshToken = bounded(body.refresh_token, MIN_REFRESH_TOKEN_CHARS, 4096);
   return refreshToken ? await refreshSession(refreshToken) : null;
 }
 
@@ -204,7 +206,7 @@ async function openCodeModels(key: string) {
     const response = await fetch("https://opencode.ai/zen/v1/models", {
       headers: {
         authorization: `Bearer ${key}`,
-        "user-agent": "openclaw-pi-infra-bootstrap/5",
+        "user-agent": "openclaw-pi-infra-bootstrap/6",
       },
       signal: AbortSignal.timeout(12_000),
     });
@@ -225,8 +227,7 @@ async function openCodeModels(key: string) {
 }
 
 async function controlsMap(keys: string[]): Promise<Record<string, boolean>> {
-  const { data, error } = await admin
-    .from("bridge_controls")
+  const { data, error } = await admin.from("bridge_controls")
     .select("control_key,enabled")
     .in("control_key", keys);
   if (error) return {};
@@ -234,8 +235,7 @@ async function controlsMap(keys: string[]): Promise<Record<string, boolean>> {
 }
 
 async function loadCanonicalRoute(discoverable: string[]): Promise<CanonicalRoute> {
-  const { data, error } = await admin
-    .from("bridge_canonical_config")
+  const { data, error } = await admin.from("bridge_canonical_config")
     .select("config_value")
     .eq("config_key", "model.runtime_route")
     .eq("enabled", true)
@@ -247,7 +247,9 @@ async function loadCanonicalRoute(discoverable: string[]): Promise<CanonicalRout
   const configuredPrimary = providerId(config.primary);
   const primaryId = configuredPrimary && discoverable.includes(configuredPrimary)
     ? configuredPrimary
-    : (discoverable.includes("nemotron-3-ultra-free") ? "nemotron-3-ultra-free" : (discoverable[0] ?? null));
+    : discoverable.includes("nemotron-3-ultra-free")
+      ? "nemotron-3-ultra-free"
+      : discoverable[0] ?? null;
   const configuredFallbacks = Array.isArray(config.fallbacks)
     ? config.fallbacks.map(providerId).filter((id): id is string => Boolean(id))
     : [];
@@ -267,6 +269,7 @@ async function loadCanonicalRoute(discoverable: string[]): Promise<CanonicalRout
       on_timeout: "enqueue_and_backoff",
       surface_raw_provider_error_to_telegram: false,
     };
+
   return {
     baseUrl: safeGateway(config.base_url),
     primaryId,
@@ -282,8 +285,11 @@ Deno.serve(async (req: Request) => {
   if (req.method !== "POST") return fail("method_not_allowed", 405);
 
   let body: JsonRecord;
-  try { body = await bodyObject(req); }
-  catch (result) { return result instanceof Response ? result : fail("invalid_request", 400); }
+  try {
+    body = await bodyObject(req);
+  } catch (result) {
+    return result instanceof Response ? result : fail("invalid_request", 400);
+  }
 
   const session = await authenticate(req, body);
   if (!session) return fail("pi_session_refresh_required", 401);
@@ -296,26 +302,35 @@ Deno.serve(async (req: Request) => {
 
   const ledgerAction = `infra_${action}`;
   const { data: existing } = await admin.from("bridge_request_ledger")
-    .select("allowed,reason").eq("user_id", session.user.id)
-    .eq("action", ledgerAction).eq("execution_key", executionKey).maybeSingle();
+    .select("allowed,reason")
+    .eq("user_id", session.user.id)
+    .eq("action", ledgerAction)
+    .eq("execution_key", executionKey)
+    .maybeSingle();
   if (existing) return fail("duplicate_execution_key", 409);
 
   const { count, error: countError } = await admin.from("bridge_request_ledger")
     .select("request_id", { count: "exact", head: true })
-    .eq("user_id", session.user.id).eq("action", "infra_bootstrap")
+    .eq("user_id", session.user.id)
+    .eq("action", "infra_bootstrap")
     .gte("created_at", new Date(Date.now() - 3_600_000).toISOString());
   if (countError) return fail("rate_limit_check_failed", 503);
   if (action === "bootstrap" && (count ?? 0) >= MAX_BOOTSTRAPS_PER_HOUR) {
     await admin.from("bridge_request_ledger").insert({
-      user_id: session.user.id, action: ledgerAction, execution_key: executionKey,
-      allowed: false, duplicate: false, reason: "rate_limit_exceeded",
+      user_id: session.user.id,
+      action: ledgerAction,
+      execution_key: executionKey,
+      allowed: false,
+      duplicate: false,
+      reason: "rate_limit_exceeded",
     });
     return fail("rate_limit_exceeded", 429);
   }
 
   const opencode = Deno.env.get(OPENCODE_ALIAS)?.trim() ?? "";
   const tailscale = Deno.env.get(TAILSCALE_ALIAS)?.trim() ?? "";
-  const catalog = opencode ? await openCodeModels(opencode)
+  const catalog = opencode
+    ? await openCodeModels(opencode)
     : { ok: false, status: null as number | null, visibleCount: 0, discoverableFree: [] as string[] };
   const route = await loadCanonicalRoute(catalog.discoverableFree);
   const tailscaleCredentialClass = tailscale ? tailscaleClass(tailscale) : "missing";
@@ -328,13 +343,16 @@ Deno.serve(async (req: Request) => {
   const deliverTailscaleAuthKey = includeTailscaleAuthKey && tailscaleReady;
 
   await admin.from("bridge_request_ledger").insert({
-    user_id: session.user.id, action: ledgerAction, execution_key: executionKey,
-    allowed: action === "status" || modelReady, duplicate: false,
+    user_id: session.user.id,
+    action: ledgerAction,
+    execution_key: executionKey,
+    allowed: action === "status" || modelReady,
+    duplicate: false,
     reason: modelReady ? "admitted" : "model_infrastructure_not_ready",
   });
 
   await admin.from("bridge_events").insert({
-    event_type: `pi_infra_${action}_v5`,
+    event_type: `pi_infra_${action}_v6`,
     node_name: "raspberry-pi5",
     correlation_id: correlationId,
     severity: modelReady ? "info" : "warning",
@@ -342,6 +360,7 @@ Deno.serve(async (req: Request) => {
     detail: {
       actor_user_id: session.user.id,
       session_refreshed: session.refreshed,
+      refresh_token_format_minimum: MIN_REFRESH_TOKEN_CHARS,
       gateway_base_url: route.baseUrl,
       active_primary: route.primaryId,
       active_fallback_count: route.fallbackIds.length,
@@ -391,7 +410,8 @@ Deno.serve(async (req: Request) => {
       session: sessionPayload,
       provider,
       tailscale: {
-        present: Boolean(tailscale), credential_class: tailscaleCredentialClass,
+        present: Boolean(tailscale),
+        credential_class: tailscaleCredentialClass,
         node_enrollment_usable: tailscaleReady,
       },
       destination: "authenticated_pi_only",
