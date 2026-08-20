@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "state": "PUBLISHING_PENDING_PUBLIC_MULTIARCH_VERIFICATION",
+  "image": "ghcr.io/mnwersdfppa/openclaw-pi-compat",
+  "tag": "edge",
+  "required_platforms": [
+    "linux/amd64",
+    "linux/arm64"
+  ],
+  "pi_platform": "linux/arm64",
+  "role": "outbound_diagnostic_compatibility",
+  "canonical_openclaw_runtime": false,
+  "selected_by_default": false,
+  "runs_as_user": "10001:10001",
+  "read_only_compatible": true,
+  "privileged_mode_required": false,
+  "host_network_required": false,
+  "docker_socket_required": false,
+  "telegram_poller": false,
+  "provider_credentials_included": false,
+  "supabase_service_role_included": false,
+  "paid_fallback_enabled": false,
+  "sbom_enabled": true,
+  "provenance_enabled": true,
+  "public_pull_required_before_activation": true,
+  "production_merge_performed": false,
+  "vercel_production_deployment": false,
+  "secret_values_included": false
+}
