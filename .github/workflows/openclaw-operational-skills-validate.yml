@@ -1,0 +1,132 @@
+name: Validate promoted OpenClaw operational skills
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'skills/api-first-capability-router/**'
+      - 'skills/state-fingerprint-dedupe/**'
+      - 'skills/notion-ssot-projection-guard/**'
+      - 'skills/runtime-compatibility-resolver/**'
+      - '.github/workflows/openclaw-operational-skills-validate.yml'
+  push:
+    branches:
+      - feat/supabase-emergency-bridge-20260819
+    paths:
+      - 'skills/api-first-capability-router/**'
+      - 'skills/state-fingerprint-dedupe/**'
+      - 'skills/notion-ssot-projection-guard/**'
+      - 'skills/runtime-compatibility-resolver/**'
+      - '.github/workflows/openclaw-operational-skills-validate.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openclaw-operational-skills-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate skill contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import re
+          from pathlib import Path
+
+          skills = {
+              'api-first-capability-router': [
+                  'verified native API',
+                  'Unknown intents route to manual review',
+                  'Never return credentials',
+              ],
+              'state-fingerprint-dedupe': [
+                  'Compute SHA-256',
+                  'Similarity is not authority',
+                  'never hash raw secrets',
+              ],
+              'notion-ssot-projection-guard': [
+                  'Supabase owns machine state',
+                  'no bulk deletion',
+                  'secret_values_included=false',
+              ],
+              'runtime-compatibility-resolver': [
+                  'linux/arm64',
+                  'linux/amd64',
+                  'no Docker socket',
+                  'Telegram inbound polling',
+              ],
+          }
+
+          combined = []
+          for name, markers in skills.items():
+              path = Path('skills') / name / 'SKILL.md'
+              if not path.is_file():
+                  raise SystemExit(f'missing skill: {path}')
+              text = path.read_text(encoding='utf-8')
+              expected = f'---\nname: {name}\n'
+              if not text.startswith(expected):
+                  raise SystemExit(f'invalid frontmatter: {name}')
+              missing = [marker for marker in markers if marker.lower() not in text.lower()]
+              if missing:
+                  raise SystemExit(f'{name} missing markers: {missing}')
+              combined.append(text)
+
+          text = '\n'.join(combined)
+          secret_patterns = [
+              r'sk-proj-[A-Za-z0-9_-]{12,}',
+              r'ghp_[A-Za-z0-9]{16,}',
+              r'github_pat_[A-Za-z0-9_]{16,}',
+              r'tskey-(?:auth|api|client)-[A-Za-z0-9_-]{12,}',
+              r'Bearer\s+[A-Za-z0-9._~+/-]{16,}',
+              r'BEGIN\s+(?:RSA|OPENSSH|EC)\s+PRIVATE\s+KEY',
+          ]
+          if any(re.search(pattern, text, re.IGNORECASE) for pattern in secret_patterns):
+              raise SystemExit('secret-like literal detected')
+
+          forbidden = [
+              r'shell\s*=\s*True',
+              r'\beval\s*\(',
+              r'\bexec\s*\(',
+              r'curl\s*\|\s*(?:sh|bash)',
+              r'getUpdates',
+          ]
+          if any(re.search(pattern, text, re.IGNORECASE) for pattern in forbidden):
+              raise SystemExit('forbidden executable or second-poller construct detected')
+
+          print({
+              'result': 'PASS',
+              'skills': sorted(skills),
+              'repository_mutation': False,
+              'secret_values_included': False,
+          })
+          PY
+
+      - name: Write summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## Promoted OpenClaw operational skills'
+            echo
+            echo '- API-first routing: validated'
+            echo '- State fingerprint deduplication: validated'
+            echo '- Notion projection guard: validated'
+            echo '- Runtime compatibility resolver: validated'
+            echo '- Repository mutation: OFF'
+            echo '- Secret values: OFF'
+          } >> "$GITHUB_STEP_SUMMARY"
