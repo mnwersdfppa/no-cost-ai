@@ -199,13 +199,14 @@ jobs:
           workflow = Path(
               '.github/workflows/state-fingerprint-dedupe-validation.yml'
           ).read_text(encoding='utf-8')
-          for marker in (
+          forbidden = (
               'supabase functions ' + 'deploy',
               'vercel ' + '--prod',
               'gh pr ' + 'merge',
               'git push ' + 'origin main',
-              'contents: write',
-          ):
+              'contents:' + ' write',
+          )
+          for marker in forbidden:
               assert marker not in workflow, marker
           assert 'contents: read' in workflow
           assert 'persist-credentials: false' in workflow
