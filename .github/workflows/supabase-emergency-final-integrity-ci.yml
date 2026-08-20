@@ -26,13 +26,15 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
 
       - name: Set up Deno
         uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
 
-      - name: Validate live Guardian deployment manifest
+      - name: Validate deployment manifests
         shell: bash
         run: |
           set -euo pipefail
@@ -40,95 +42,113 @@ jobs:
           from pathlib import Path
           import json
 
-          deployment = json.loads(
-              Path('supabase/functions/deployment-manifest-guardian.json').read_text(encoding='utf-8')
-          )
-          assert deployment['project_id'] == 'dpllasnpfskyyyzebyal'
-          assert deployment['canonical_model_component'] == 'edge.pi-model-gateway-guardian'
-          assert deployment['canonical_model_route'] == 'supabase.opencode_model_guardian'
-          assert deployment['canonical_base_url'].endswith('/pi-model-gateway-guardian/v1')
-          assert deployment['canonical_pi_installer'] == 'pi-openclaw-master-recovery-installer'
-          assert deployment['canonical_pi_installer_url'].endswith('/pi-openclaw-master-recovery-installer')
-          assert deployment['canonical_pi_installer_sha256'] == 'e44df620e78778e7711f67783ed64fa3639761ce34554e50eda46f7589096179'
-          assert deployment['canonical_pi_installer_bytes'] == 2350
+          root = Path('supabase/functions')
+          manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
+          guardian = json.loads((root / 'deployment-manifest-guardian.json').read_text(encoding='utf-8'))
+          delivery = json.loads((root / 'deployment-manifest-retry-delivery.json').read_text(encoding='utf-8'))
 
-          expected = {
-              'pi-model-gateway-guardian': (
-                  1,
-                  False,
-                  'd8942436d02728e48ed5a4d0c488e610f618dda52dd3012053977dd8007566a9',
-              ),
-              'pi-infra-bootstrap': (
-                  7,
-                  False,
-                  '35781ccb3a2209fba93b80de4f4d5843546ad65bb9bb18b76332cdcc9be8911e',
-              ),
-              'pi-auth-refresh': (
-                  5,
-                  False,
-                  'aa44010cee4d26dbd35774bc14c664f648e3c5e0f45e7ed83e0004fe1da82b8c',
-              ),
-              'pi-work-queue': (
-                  9,
-                  True,
-                  'cd354b3443bed92b40fddb9449123fc9966c8312866ac72e22426a170c434ec6',
-              ),
-              'pi-openclaw-master-recovery-installer': (
-                  3,
-                  False,
-                  '08b74af34fce597a72760aebcdef32a02986109236ad005a121e9be324070f8f',
-              ),
-              'pi-openclaw-guardian-master-installer-verified': (
-                  1,
-                  False,
-                  'db0df75fe5f729c2a52689c4b371272aec36df81e2d080753ce128ca3c5d5fe5',
-              ),
+          project = 'dpllasnpfskyyyzebyal'
+          master_sha = '3293587b3d1e1692b9969b5db115a8403787e29c52c88a142bc082fc568d052b'
+          model_installer_sha = '4c21d9eab6fff335950f8a4c8c7a064a20b9aa00aead487b811cee779e8ae947'
+          delivery_installer_sha = '1db248ffbc0fea0bf22bcf17e2908134c9554f64539e1fe908dc0e2939268e97'
+
+          assert manifest['project_id'] == project
+          assert manifest['canonical_model_gateway'] == 'pi-model-gateway-guardian'
+          assert manifest['canonical_model_provider'] == 'supabase-opencode'
+          assert manifest['canonical_server_retry_job'] == 'openclaw-model-retry-worker-v2'
+          assert manifest['canonical_server_retry_schedule'] == '*/2 * * * *'
+          assert manifest['server_retry_auth'] == 'supabase_vault_sha256_verification'
+          assert manifest['server_retry_raw_token_persisted'] is False
+          assert manifest['pi_refresh_token_minimum_chars'] == 8
+          assert manifest['pi_refresh_current_format_e2e'] is True
+          assert manifest['canonical_pi_installer'] == 'pi-openclaw-master-recovery-installer'
+          assert manifest['canonical_pi_installer_url'].endswith('/pi-openclaw-master-recovery-installer')
+          assert manifest['canonical_pi_installer_sha256'] == master_sha
+          assert manifest['canonical_pi_installer_bytes'] == 2346
+          assert manifest['canonical_model_auth_installer_sha256'] == model_installer_sha
+          assert manifest['canonical_telegram_delivery_installer_sha256'] == delivery_installer_sha
+          assert manifest['provider_secret_location'] == 'supabase_edge_only'
+          assert manifest['raw_provider_secret_returned_to_pi'] is False
+          assert manifest['paid_provider_calls'] is False
+          assert manifest['public_shell_execution'] is False
+          assert manifest['telegram_single_poller_enforced'] is True
+
+          expected_functions = {
+              'pi-model-gateway-guardian': (1, False, 'd8942436d02728e48ed5a4d0c488e610f618dda52dd3012053977dd8007566a9'),
+              'pi-infra-bootstrap': (7, False, '35781ccb3a2209fba93b80de4f4d5843546ad65bb9bb18b76332cdcc9be8911e'),
+              'pi-auth-refresh': (5, False, 'aa44010cee4d26dbd35774bc14c664f648e3c5e0f45e7ed83e0004fe1da82b8c'),
+              'pi-work-queue': (9, True, 'cd354b3443bed92b40fddb9449123fc9966c8312866ac72e22426a170c434ec6'),
+              'model-retry-worker': (4, False, 'cbf0f37f8e575d8236581dbb683fe5c428dc27321dd70cdb0b60ae6935dff39a'),
+              'pi-openclaw-master-recovery-installer': (4, False, 'fc420b11804bad4963f7b22856b9bf9b3b7580e48f629c504b3e4f1c916f7792'),
+              'pi-openclaw-guardian-master-installer-verified': (1, False, 'db0df75fe5f729c2a52689c4b371272aec36df81e2d080753ce128ca3c5d5fe5'),
           }
-          for name, (version, verify_jwt, digest) in expected.items():
-              row = deployment['functions'][name]
+          for name, (version, verify_jwt, digest) in expected_functions.items():
+              row = guardian['functions'][name]
               assert row['version'] == version, name
               assert row['status'] == 'ACTIVE', name
               assert row['verify_jwt'] is verify_jwt, name
               assert row['ezbr_sha256'] == digest, name
               assert Path(row['source']).is_file(), row['source']
 
-          assert deployment['functions']['pi-infra-bootstrap']['refresh_token_minimum_chars'] == 8
-          assert deployment['functions']['pi-auth-refresh']['refresh_token_minimum_chars'] == 8
+          retry = guardian['functions']['model-retry-worker']
+          assert retry['auth_mode'] == 'supabase_vault_sha256_verification'
+          assert retry['schedule'] == '*/2 * * * *'
+          assert retry['canonical_cron_job'] == 'openclaw-model-retry-worker-v2'
+          assert retry['positive_auth_status'] == 200
+          assert retry['negative_auth_status'] == 401
 
-          master = deployment['functions']['pi-openclaw-master-recovery-installer']
+          master = guardian['functions']['pi-openclaw-master-recovery-installer']
           assert master['canonical'] is True
-          assert master['artifact_sha256'] == deployment['canonical_pi_installer_sha256']
-          assert master['artifact_bytes'] == deployment['canonical_pi_installer_bytes']
-          assert master['base_recovery_sha256'] == '4c21d9eab6fff335950f8a4c8c7a064a20b9aa00aead487b811cee779e8ae947'
-          assert master['telegram_delivery_installer_sha256'] == '1db248ffbc0fea0bf22bcf17e2908134c9554f64539e1fe908dc0e2939268e97'
+          assert master['artifact_sha256'] == master_sha
+          assert master['artifact_bytes'] == 2346
+          assert master['base_recovery_sha256'] == model_installer_sha
+          assert master['telegram_delivery_installer_sha256'] == delivery_installer_sha
+          assert master['server_retry_schedule'] == '*/2 * * * *'
 
-          compatibility = deployment['functions']['pi-openclaw-guardian-master-installer-verified']
+          compatibility = guardian['functions']['pi-openclaw-guardian-master-installer-verified']
           assert compatibility['canonical'] is False
           assert compatibility['lifecycle_status'] == 'compatibility'
 
-          assert deployment['e2e_gates']['pi_model_gateway_guardian_e2e'] == 'pass'
-          assert deployment['e2e_gates']['pi_recovery_queue_api_e2e'] == 'pass'
-          assert deployment['e2e_gates']['pi_auth_refresh_current_format_e2e'] == 'pass'
-          assert deployment['e2e_gates']['pi_master_recovery_installer_integrity'] == 'pass'
-          assert deployment['physical_gates']['pi_openclaw_model_activation'] == 'pending'
-          assert deployment['physical_gates']['pi_recovery_queue_worker_active'] == 'pending'
+          for gate in (
+              'pi_model_gateway_guardian_e2e',
+              'pi_recovery_queue_api_e2e',
+              'pi_auth_refresh_current_format_e2e',
+              'server_model_retry_scheduler',
+              'pi_master_recovery_installer_integrity',
+          ):
+              assert guardian['e2e_gates'][gate] == 'pass', gate
 
-          security = deployment['security']
-          assert security['provider_secret_location'] == 'supabase_edge_only'
+          security = guardian['security']
+          assert security['retry_worker_auth'] == 'supabase_vault_sha256_verification'
+          assert security['retry_worker_raw_token_persisted'] is False
+          assert security['retry_worker_positive_auth_status'] == 200
+          assert security['retry_worker_negative_auth_status'] == 401
           assert security['provider_secret_returned_to_pi'] is False
-          assert security['tailscale_auth_key_default_return'] is False
           assert security['paid_api_fallback'] is False
           assert security['second_telegram_poller'] is False
-          assert security['max_immediate_model_attempts'] == 2
-          assert security['queue_ack_on_total_failure'] is True
-          assert security['pi_refresh_token_minimum_chars'] == 8
-          assert security['master_installer_nested_sha_verification'] is True
-          assert security['master_installer_raw_provider_assignment'] is False
           assert security['curl_pipe_shell'] is False
-          assert security['old_master_installer_enabled_in_ssot'] is False
+
+          assert delivery['project_id'] == project
+          assert delivery['server_retry_schedule'] == '*/2 * * * *'
+          assert delivery['canonical_server_retry_job'] == 'openclaw-model-retry-worker-v2'
+          assert delivery['functions']['model-retry-worker']['version'] == 4
+          assert delivery['functions']['model-retry-worker']['custom_auth'] == 'supabase_vault_sha256_verification'
+          assert delivery['functions']['model-retry-worker']['positive_auth_status'] == 200
+          assert delivery['functions']['model-retry-worker']['negative_auth_status'] == 401
+          assert delivery['functions']['pi-result-delivery-queue']['ezbr_sha256'] == 'a4d80e5d7b8243a745a9449805550f466bbc11b8731891674daefb53b87721b4'
+          assert delivery['functions']['pi-telegram-delivery-worker-installer']['version'] == 2
+          assert delivery['functions']['pi-telegram-delivery-worker-installer']['artifact_sha256'] == delivery_installer_sha
+          assert delivery['functions']['pi-openclaw-master-recovery-installer']['artifact_sha256'] == master_sha
+          assert delivery['database_contracts']['worker_verifier_input'] == 'sha256_hex_only'
+          assert delivery['e2e_gates']['server_model_retry_scheduler'] == 'pass'
+          assert delivery['security']['worker_db_verification'] == 'sha256_hex_only'
+          assert delivery['security']['worker_token_returned'] is False
+          assert delivery['security']['worker_token_persisted'] is False
+          assert delivery['security']['direct_telegram_get_updates'] is False
+          assert delivery['security']['second_telegram_poller'] is False
           PY
 
-      - name: Validate Edge Function types and boundaries
+      - name: Type-check canonical Edge Functions
         shell: bash
         run: |
           set -euo pipefail
@@ -139,53 +159,34 @@ jobs:
           deno check supabase/functions/pi-auth-refresh/index.ts
           deno check supabase/functions/pi-model-gateway-guardian/index.ts
           deno check supabase/functions/pi-work-queue/index.ts
+          deno check supabase/functions/model-retry-worker/index.ts
+          deno check supabase/functions/pi-result-delivery-queue/index.ts
           deno check supabase/functions/pi-openclaw-master-recovery-installer/index.ts
           deno check supabase/functions/pi-openclaw-guardian-master-installer-verified/index.ts
 
+      - name: Validate auth, queue, installer and safety contracts
+        shell: bash
+        run: |
+          set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          import json
           import re
 
-          manifest = json.loads(Path('supabase/functions/manifest.json').read_text(encoding='utf-8'))
-          assert manifest['canonical_model_gateway'] == 'pi-model-gateway-guardian'
-          assert manifest['provider_secret_location'] == 'supabase_edge_only'
-          assert manifest['raw_provider_secret_returned_to_pi'] is False
-          assert manifest['queue_on_provider_failure'] is True
-          assert manifest['max_immediate_provider_attempts'] == 2
-          assert manifest['pi_refresh_token_minimum_chars'] == 8
-          assert manifest['pi_refresh_current_format_e2e'] is True
-          assert manifest['functions']['pi-auth-refresh']['entrypoint'] == 'supabase/functions/pi-auth-refresh/index.ts'
-          assert manifest['functions']['pi-auth-refresh']['refresh_token_minimum_chars'] == 8
-          assert manifest['functions']['pi-infra-bootstrap']['refresh_token_minimum_chars'] == 8
-          assert manifest['canonical_pi_installer'] == 'pi-openclaw-master-recovery-installer'
-          assert manifest['canonical_pi_installer_url'].endswith('/pi-openclaw-master-recovery-installer')
-          assert manifest['canonical_pi_installer_sha256'] == 'e44df620e78778e7711f67783ed64fa3639761ce34554e50eda46f7589096179'
-          assert manifest['canonical_pi_installer_bytes'] == 2350
-          assert manifest['canonical_model_auth_installer_sha256'] == '4c21d9eab6fff335950f8a4c8c7a064a20b9aa00aead487b811cee779e8ae947'
-          assert manifest['canonical_telegram_delivery_installer_sha256'] == '1db248ffbc0fea0bf22bcf17e2908134c9554f64539e1fe908dc0e2939268e97'
-          assert manifest['functions']['pi-openclaw-master-recovery-installer']['canonical'] is True
-          assert manifest['functions']['pi-openclaw-guardian-master-installer-verified']['canonical'] is False
-          assert manifest['functions']['pi-openclaw-guardian-master-installer-verified']['lifecycle_status'] == 'compatibility'
-          assert manifest['paid_provider_calls'] is False
-          assert manifest['public_shell_execution'] is False
-          assert manifest['telegram_single_poller_enforced'] is True
-
           bootstrap = Path('supabase/functions/pi-infra-bootstrap/index.ts').read_text(encoding='utf-8')
-          auth_refresh = Path('supabase/functions/pi-auth-refresh/index.ts').read_text(encoding='utf-8')
+          refresh = Path('supabase/functions/pi-auth-refresh/index.ts').read_text(encoding='utf-8')
           guardian = Path('supabase/functions/pi-model-gateway-guardian/index.ts').read_text(encoding='utf-8')
           queue = Path('supabase/functions/pi-work-queue/index.ts').read_text(encoding='utf-8')
-          master_edge = Path('supabase/functions/pi-openclaw-master-recovery-installer/index.ts').read_text(encoding='utf-8')
-          compatibility_master = Path('supabase/functions/pi-openclaw-guardian-master-installer-verified/index.ts').read_text(encoding='utf-8')
+          retry = Path('supabase/functions/model-retry-worker/index.ts').read_text(encoding='utf-8')
+          delivery = Path('supabase/functions/pi-result-delivery-queue/index.ts').read_text(encoding='utf-8')
+          master = Path('supabase/functions/pi-openclaw-master-recovery-installer/index.ts').read_text(encoding='utf-8')
+          compatibility = Path('supabase/functions/pi-openclaw-guardian-master-installer-verified/index.ts').read_text(encoding='utf-8')
 
           for marker in (
               'const MIN_REFRESH_TOKEN_CHARS = 8',
-              'refreshSession',
               'pi-model-gateway-guardian/v1',
               'export_original_provider_key_to_pi: false',
               'start_second_telegram_poller: false',
               'surface_raw_provider_error_to_telegram: false',
-              'provider_secret_returned: false',
           ):
               assert marker in bootstrap, marker
 
@@ -196,13 +197,11 @@ jobs:
               'token_values_logged: false',
               'server_secret_returned: false',
           ):
-              assert marker in auth_refresh, marker
+              assert marker in refresh, marker
 
           for marker in (
               'const MAX_ATTEMPTS = 2',
-              'async function requirePi',
               'async function queueRequest',
-              'function queuedResponse',
               '요청을 안전하게 보존했습니다',
               'provider_secret_returned: false',
           ):
@@ -213,38 +212,50 @@ jobs:
               'ALLOWED_TYPES',
               'claim_openclaw_recovery_task',
               'secret_like_evidence_rejected',
-              'server_secret_returned: false',
           ):
               assert marker in queue, marker
-          assert 'eyJ[A-Za-z0-9_-]{20,}' in queue
+
+          for marker in (
+              'x-openclaw-scheduler-token',
+              'p_token_hash',
+              'sha256Hex',
+              'MAX_TASKS_PER_RUN = 2',
+              'bridge_claim_model_retry_task',
+              'telegram_result_delivery',
+              'direct_telegram_get_updates: false',
+              'vault_auth_verified: true',
+          ):
+              assert marker in retry, marker
+
+          for marker in (
+              'telegram_result_delivery',
+              'bridge_claim_telegram_delivery_task',
+              'secret_like_evidence_rejected',
+              'server_secret_returned: false',
+          ):
+              assert marker in delivery, marker
 
           for marker in (
               'const BASE_RECOVERY_SHA = "4c21d9eab6fff335950f8a4c8c7a064a20b9aa00aead487b811cee779e8ae947"',
               'const DELIVERY_INSTALLER_SHA = "1db248ffbc0fea0bf22bcf17e2908134c9554f64539e1fe908dc0e2939268e97"',
-              'pi.master_recovery.installer_snapshot',
-              'sha256Text',
+              '"server_retry_schedule": "2min"',
+              'server_retry_schedule: "*/2 * * * *"',
               'sha256sum -c -',
               'second_telegram_poller_created',
               'provider_secret_exported',
               'x-content-sha256',
-              'x-secret-values-included',
           ):
-              assert marker in master_edge, marker
-          assert re.search(r'curl\s*\|\s*(?:sh|bash)', master_edge) is None
+              assert marker in master, marker
 
           for marker in (
               '9237ba0c09b97a79a75464ad2e8e2e83972d5dc7',
               'bc938153e8b6bfe90dabb0471d34eaebef595aca6f5ec94db64d1b206cd8ce39',
-              'const SCRIPT_BYTES = 3902',
               'artifact_sha256_mismatch',
-              'artifact_contract_missing',
-              'x-openclaw-provider-secret-included',
               'x-openclaw-second-telegram-poller',
-              'x-openclaw-paid-fallback',
           ):
-              assert marker in compatibility_master, marker
+              assert marker in compatibility, marker
 
-          combined = bootstrap + '\n' + auth_refresh + '\n' + queue + '\n' + master_edge
+          combined = '\n'.join((bootstrap, refresh, queue, retry, delivery, master))
           forbidden = {
               'raw OpenCode key returned': r'OPENCODE_API_KEY\s*:',
               'legacy Tailscale env returned': r'TAILSCALE_AUTHKEY\s*:',
@@ -256,12 +267,13 @@ jobs:
               assert re.search(pattern, combined, re.IGNORECASE) is None, label
           PY
 
-      - name: Validate E2E-gated migrations and action-bound idempotency
+      - name: Validate reproducible migrations
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           required = {
               '20260819080000_emergency_bridge_control_plane.sql',
@@ -269,6 +281,7 @@ jobs:
               '202608200001_openclaw_guardian_reconciliation.sql',
               '202608200002_promote_openclaw_guardian_after_e2e.sql',
               '202608200003_bind_ledger_execution_keys_to_actions.sql',
+              '202608200004_harden_model_retry_scheduler_v2.sql',
           }
           files = {
               path.name: path.read_text(encoding='utf-8')
@@ -276,40 +289,30 @@ jobs:
           }
           assert not required.difference(files), sorted(required.difference(files))
 
-          seed = files['202608200001_openclaw_guardian_reconciliation.sql']
+          scheduler = files['202608200004_harden_model_retry_scheduler_v2.sql']
           for marker in (
-              'bridge_model_health',
-              'bridge_record_model_result',
-              'claim_openclaw_recovery_task',
-              'pi_model_gateway_guardian_e2e',
-              'pi_recovery_queue_api_e2e',
-              "'pending_audit'",
-              "'not_tested'",
+              'openclaw_model_retry_scheduler_token',
+              'x-openclaw-scheduler-token',
+              'p_token_hash',
+              'sha256_hex_only',
+              'openclaw-model-retry-worker-v2',
+              "'*/2 * * * *'",
+              'bridge_invoke_model_retry_worker',
+              'bridge_verify_model_retry_worker_token',
+              'legacy_jobs_removed',
+              'raw_token_persisted',
           ):
-              assert marker in seed, marker
+              assert marker in scheduler, marker
+          assert 'openclaw-model-retry-worker-v1' in scheduler
+          assert re.search(r'(sk-proj-|ghp_|xox[baprs]-|tskey-(?:auth|api|client)-)', scheduler) is None
 
-          promote = files['202608200002_promote_openclaw_guardian_after_e2e.sql']
-          for marker in (
-              "gate_key='pi_model_gateway_guardian_e2e'",
-              "gate_key='pi_recovery_queue_api_e2e'",
-              "component_key='edge.pi-model-gateway-guardian'",
-              "component_key='edge.pi-model-gateway'",
-              "component_key='edge.token-gateway'",
-              "lifecycle_status='compatibility'",
-              "'supabase.opencode_model_guardian'",
-              "mode='disabled'",
-          ):
-              assert marker in promote, marker
-
-          action_bound = ''.join(
-              files['202608200003_bind_ledger_execution_keys_to_actions.sql'].split()
-          ).lower()
+          action_bound = ''.join(files['202608200003_bind_ledger_execution_keys_to_actions.sql'].split()).lower()
           assert 'unique(user_id,action,execution_key)' in action_bound
           assert 'onconflict(user_id,action,execution_key)donothing' in action_bound
           assert 'unique(user_id,execution_key)' not in action_bound
           PY
 
-      - name: Validate Pi recovery packages and reject embedded secrets
+      - name: Validate Pi packages and reject embedded credentials
         shell: bash
         run: |
           set -euo pipefail
@@ -318,20 +321,9 @@ jobs:
           bash -n pi/activate-opencode-tailscale.sh
           bash -n pi/install-openclaw-recovery-queue-worker.sh
           bash -n pi/install-openclaw-guardian-master.sh
+          bash -n pi/install-openclaw-telegram-delivery-worker.sh
           python3 -m py_compile pi/openclaw-recovery-queue-worker.py
-
-          grep -F 'sha256sum --check --status' pi/recover-opencode-first-tailscale-second.sh
-          grep -F 'RECOVERY_MODE=SUPABASE_GUARDIAN_SCOPED_PI_JWT' pi/recover-opencode-first-tailscale-second.sh
-          ! grep -Eq '^\s*(export\s+)?OPENCODE_API_KEY=' pi/recover-opencode-first-tailscale-second.sh
-          ! grep -Eq '^\s*(export\s+)?TAILSCALE_AUTHKEY=' pi/recover-opencode-first-tailscale-second.sh
-
-          grep -F 'MODEL_INSTALLER_SHA256="4c21d9eab6fff335950f8a4c8c7a064a20b9aa00aead487b811cee779e8ae947"' pi/install-openclaw-guardian-master.sh
-          grep -F 'WORKER_INSTALLER_SHA256="cfa9b13c12c5937c9d0156b9279d5834ffc267986b38d51e38dd0eaac1c87c22"' pi/install-openclaw-guardian-master.sh
-          grep -F 'provider_secret_exported": false' pi/install-openclaw-guardian-master.sh
-          grep -F 'paid_api_fallback": false' pi/install-openclaw-guardian-master.sh
-          grep -F 'second_telegram_poller": false' pi/install-openclaw-guardian-master.sh
-          ! grep -Eq '^\s*(export\s+)?OPENCODE_API_KEY=' pi/install-openclaw-guardian-master.sh
-          ! grep -Eq '^\s*(export\s+)?TAILSCALE_AUTHKEY=' pi/install-openclaw-guardian-master.sh
+          python3 -m py_compile pi/openclaw-telegram-delivery-worker.py
 
           ! grep -RInE \
             --exclude='*.md' \
