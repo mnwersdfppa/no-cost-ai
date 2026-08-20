@@ -150,7 +150,7 @@ jobs:
           assert 'openclaw_promote_pattern' not in edge, 'Pi API must not expose promotion RPC'
           assert 'action === "promote"' not in edge
           assert 'action == "promote"' not in edge
-          assert 'Pattern Promotion Engine v1' in skill
+          assert '# Pattern Promotion Engine' in skill
           assert 'Supabase' in docs and 'Notion' in docs
 
           combined = '\n'.join((core, seed, edge))
