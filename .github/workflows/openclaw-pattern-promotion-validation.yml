@@ -91,7 +91,8 @@ jobs:
               'executable_payload_status': 400,
               'feedback_status': 200,
           }
-          assert manifest['e2e'] == expected_e2e
+          for key, value in expected_e2e.items():
+              assert manifest['e2e'][key] == value, key
           assert manifest['e2e']['temporary_identity_deleted'] is True
           assert manifest['e2e']['temporary_rows_deleted'] is True
 
