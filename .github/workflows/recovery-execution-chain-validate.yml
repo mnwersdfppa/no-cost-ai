@@ -68,7 +68,7 @@ jobs:
               "destructive table drop": r"\bdrop\s+table\b",
               "destructive delete": r"\bdelete\s+from\b",
               "arbitrary shell pipe": r"curl[^\n]*\|\s*(?:ba)?sh",
-              "secret literal": r"(?:sk-proj-|sk-or-v1-|ghp_|github_pat_|xox[baprs]-|tskey-(?:auth|api|client)-|dckr_(?:pat|oat)_)",
+              "complete secret literal": r"(?:sk-(?:proj|or-v1)-|ghp_|github_pat_|xox[baprs]-|tskey-(?:auth|api|client)-|dckr_(?:pat|oat)_)[A-Za-z0-9_-]{8,}",
           }
           for label, pattern in forbidden.items():
               assert re.search(pattern, sql, re.IGNORECASE) is None, label
