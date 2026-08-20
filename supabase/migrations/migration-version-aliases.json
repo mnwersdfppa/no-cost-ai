@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "project_id": "dpllasnpfskyyyzebyal",
+  "aliases": {
+    "20260820050000_openclaw_pattern_promotion_engine_v1.sql": {
+      "effective_version": "20260820033930",
+      "supabase_migration_name": "openclaw_pattern_promotion_engine_v1",
+      "reason": "The historical GitHub filename was recorded later than the actual migration applied through the Supabase migration API. SQL content is unchanged."
+    },
+    "20260820050100_seed_openclaw_pattern_promotion_engine_v1.sql": {
+      "effective_version": "20260820034426",
+      "supabase_migration_name": "seed_openclaw_pattern_promotion_engine_v1",
+      "reason": "The historical GitHub filename was recorded later than the actual seed migration applied through the Supabase migration API. SQL content is unchanged."
+    }
+  },
+  "verification": {
+    "source": "supabase_migrations.schema_migrations",
+    "verified_at": "2026-08-20T06:30:00Z",
+    "effective_versions_are_unique": true,
+    "alias_target_files_required": true,
+    "migration_name_required": true
+  },
+  "security": {
+    "changes_sql_content": false,
+    "automatic_database_mutation": false,
+    "automatic_migration_replay": false,
+    "automatic_merge": false,
+    "production_deployment": false,
+    "secret_values_included": false
+  }
+}
