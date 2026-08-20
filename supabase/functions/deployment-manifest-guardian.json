@@ -1,9 +1,13 @@
 {
   "project_id": "dpllasnpfskyyyzebyal",
-  "recorded_at": "2026-08-20T00:56:55Z",
+  "recorded_at": "2026-08-20T00:52:48Z",
   "canonical_model_component": "edge.pi-model-gateway-guardian",
   "canonical_model_route": "supabase.opencode_model_guardian",
   "canonical_base_url": "https://dpllasnpfskyyyzebyal.supabase.co/functions/v1/pi-model-gateway-guardian/v1",
+  "canonical_pi_installer": "pi-openclaw-guardian-master-installer-verified",
+  "canonical_pi_installer_url": "https://dpllasnpfskyyyzebyal.supabase.co/functions/v1/pi-openclaw-guardian-master-installer-verified",
+  "canonical_pi_installer_sha256": "bc938153e8b6bfe90dabb0471d34eaebef595aca6f5ec94db64d1b206cd8ce39",
+  "canonical_pi_installer_bytes": 3902,
   "functions": {
     "pi-model-gateway-guardian": {
       "version": 1,
@@ -28,11 +32,23 @@
       "auth_mode": "platform_jwt_plus_pi_gateway_client_role",
       "ezbr_sha256": "cd354b3443bed92b40fddb9449123fc9966c8312866ac72e22426a170c434ec6",
       "source": "supabase/functions/pi-work-queue/index.ts"
+    },
+    "pi-openclaw-guardian-master-installer-verified": {
+      "version": 1,
+      "status": "ACTIVE",
+      "verify_jwt": false,
+      "auth_mode": "public_integrity_pinned_artifact",
+      "ezbr_sha256": "db0df75fe5f729c2a52689c4b371272aec36df81e2d080753ce128ca3c5d5fe5",
+      "artifact_sha256": "bc938153e8b6bfe90dabb0471d34eaebef595aca6f5ec94db64d1b206cd8ce39",
+      "artifact_bytes": 3902,
+      "source_commit": "9237ba0c09b97a79a75464ad2e8e2e83972d5dc7",
+      "source": "supabase/functions/pi-openclaw-guardian-master-installer-verified/index.ts"
     }
   },
   "e2e_gates": {
     "pi_model_gateway_guardian_e2e": "pass",
-    "pi_recovery_queue_api_e2e": "pass"
+    "pi_recovery_queue_api_e2e": "pass",
+    "pi_guardian_master_installer_integrity": "pass"
   },
   "physical_gates": {
     "pi_openclaw_model_activation": "pending",
@@ -46,6 +62,8 @@
     "paid_api_fallback": false,
     "second_telegram_poller": false,
     "max_immediate_model_attempts": 2,
-    "queue_ack_on_total_failure": true
+    "queue_ack_on_total_failure": true,
+    "master_installer_nested_sha_verification": true,
+    "master_installer_raw_provider_assignment": false
   }
 }
