@@ -1,7 +1,7 @@
 {
   "project_id": "dpllasnpfskyyyzebyal",
-  "recorded_at": "2026-08-20T05:20:00Z",
-  "state": "CLOUD_ACTIVE_REUSE_FIRST_COMPLETE_PHYSICAL_PI_PENDING",
+  "recorded_at": "2026-08-20T05:46:00Z",
+  "state": "CLOUD_ACTIVE_REUSE_FIRST_RESEARCH_WORKER_PHYSICAL_PI_PENDING",
   "canonical_storage": "supabase",
   "human_knowledge_layer": "notion",
   "canonical_pattern_architecture": {
@@ -19,7 +19,9 @@
     "research_projection": "bridge_pattern_candidates",
     "research_queue": "bridge_research_queue",
     "solution_catalog": "openclaw_solution_sources",
+    "derived_solution_catalog": "bridge_solution_catalog",
     "source_matches": "openclaw_pattern_source_matches",
+    "derived_solution_matches": "bridge_pattern_solution_matches",
     "gated_skill_registry": "bridge_skill_registry",
     "single_candidate_authority": true
   },
@@ -47,6 +49,25 @@
       "verify_jwt": true,
       "replacement": "openclaw-pattern-engine:status,candidates,resolve",
       "source": "supabase/functions/pattern-skill-readiness/index.ts"
+    },
+    "pattern-research-worker": {
+      "version": 1,
+      "status": "ACTIVE",
+      "verify_jwt": false,
+      "auth_mode": "supabase_vault_sha256_verification",
+      "enabled_providers": [
+        "github",
+        "internal_catalog"
+      ],
+      "max_tasks_per_run": 2,
+      "max_github_results_per_task": 5,
+      "github_metadata_only": true,
+      "repository_content_download": false,
+      "readme_execution": false,
+      "arbitrary_url_fetch": false,
+      "automatic_install": false,
+      "automatic_skill_activation": false,
+      "source": "supabase/functions/pattern-research-worker/index.ts"
     }
   },
   "database_contracts": {
@@ -54,6 +75,7 @@
     "research_candidates": "bridge_pattern_candidates",
     "research_queue": "bridge_research_queue",
     "derived_solution_catalog": "bridge_solution_catalog",
+    "derived_solution_matches": "bridge_pattern_solution_matches",
     "skill_registry": "bridge_skill_registry",
     "skill_versions": "bridge_skill_versions",
     "skill_evaluations": "bridge_skill_evaluations",
@@ -62,7 +84,13 @@
     "capability_registry": "bridge_capability_registry",
     "canonical_sweep_rpc": "bridge_pattern_skill_sweep",
     "internal_reuse_rpc": "bridge_process_internal_research_tasks",
-    "research_deduplication_rpc": "bridge_suppress_redundant_external_research_tasks"
+    "research_deduplication_rpc": "bridge_suppress_redundant_external_research_tasks",
+    "research_worker_auth_rpc": "bridge_verify_pattern_research_worker_token",
+    "research_provider_claim_rpc": "bridge_claim_research_task_for_provider",
+    "research_expired_lease_rpc": "bridge_requeue_expired_research_tasks",
+    "research_complete_rpc": "bridge_complete_research_task",
+    "research_fail_rpc": "bridge_fail_research_task",
+    "research_invoke_rpc": "bridge_invoke_pattern_research_worker"
   },
   "scheduler": {
     "harvest_job": {
@@ -89,6 +117,16 @@
       "schedule": "24 * * * *",
       "external_fetch": false,
       "paid_api": false
+    },
+    "allowlisted_research_worker_job": {
+      "name": "openclaw-pattern-research-worker-v1",
+      "schedule": "6,21,36,51 * * * *",
+      "providers": [
+        "github",
+        "internal_catalog"
+      ],
+      "expired_lease_recovery": true,
+      "empty_queue_is_noop": true
     }
   },
   "verified_state": {
@@ -100,10 +138,17 @@
     "skills_synced": 15,
     "internal_catalog_tasks_completed": 13,
     "redundant_external_tasks_suppressed": 52,
+    "allowlisted_worker_live_response_id": 394,
+    "allowlisted_worker_claimed": 1,
+    "allowlisted_worker_completed": 1,
+    "allowlisted_worker_failed": 0,
+    "expired_leases_requeued": 2,
     "research_tasks_queued": 0,
     "research_tasks_failed": 0,
     "derived_solutions": 54,
-    "external_api_calls_for_research": 0,
+    "github_metadata_calls_for_research": 1,
+    "repository_content_downloads_for_research": 0,
+    "readme_executions_for_research": 0,
     "paid_api_calls_for_research": 0
   },
   "promotion": {
@@ -141,8 +186,23 @@
     ],
     "internal_catalog_first": true,
     "official_or_verified_integrated_results_suppress_duplicate_external_search": true,
-    "read_only_external_fetch_worker": "GATED_FOR_FUTURE_UNRESOLVED_PATTERNS",
-    "automatic_code_execution": false
+    "read_only_external_fetch_worker": "ACTIVE_ALLOWLISTED",
+    "active_worker_providers": [
+      "github",
+      "internal_catalog"
+    ],
+    "pending_provider_validation": [
+      "official_docs",
+      "mcp_registry",
+      "n8n_templates"
+    ],
+    "github_credential_alias": "Github-api-delicate-key",
+    "github_credential_selection": "required_read_capability_then_least_known_privilege",
+    "repository_content_download": false,
+    "readme_execution": false,
+    "automatic_code_execution": false,
+    "automatic_install": false,
+    "automatic_skill_activation": false
   },
   "notion_migration": {
     "operational_ssot": "supabase",
@@ -208,6 +268,9 @@
     "pattern_observation_intake_e2e": "pass_then_endpoint_retired",
     "pattern_skill_readiness_e2e": "pass_then_endpoint_retired",
     "pattern_skill_secret_rejection_e2e": "pass",
+    "pattern_research_worker_auth": "pass",
+    "pattern_research_worker_e2e": "pass",
+    "pattern_research_worker_scheduler": "pass",
     "docker_openclaw_multiarch_public_pull": "pass",
     "github_edge_credential_readonly_validation": "pass",
     "notion_edge_credential_readonly_validation": "pass"
@@ -218,6 +281,7 @@
     "telegram_round_trip": "PHYSICAL_PI_REQUIRED",
     "tailscale_pi_enrollment": "PHYSICAL_PI_REQUIRED",
     "n8n_endpoint_and_credential_validation": "N8N_BASE_URL_REQUIRED",
+    "research_external_source_expansion": "SOURCE_SPECIFIC_VALIDATION_REQUIRED",
     "github_overprivileged_alias_review": "MANUAL_DEPENDENCY_REVIEW_REQUIRED"
   },
   "security": {
