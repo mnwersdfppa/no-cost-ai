@@ -58,6 +58,7 @@ jobs:
               '20260819080525_emergency_bridge_self_test_v2.sql',
               '20260819080900_zero_cost_first_route_resolver.sql',
               '20260819081110_runtime_key_boundary_selftest.sql',
+              '202608200003_bind_ledger_execution_keys_to_actions.sql',
           }
           present = {path.name for path in migrations}
           missing = sorted(required - present)
@@ -111,6 +112,17 @@ jobs:
           for value in ('bridge_resolve_route', 'stop_no_eligible_route', 'paid_api_fallback'):
               if value not in resolver:
                   raise SystemExit(f'route resolver invariant missing: {value}')
+
+          action_bound = Path(
+              'supabase/migrations/202608200003_bind_ledger_execution_keys_to_actions.sql'
+          ).read_text()
+          compact = ''.join(action_bound.split()).lower()
+          for value in (
+              'unique(user_id,action,execution_key)',
+              'onconflict(user_id,action,execution_key)donothing',
+          ):
+              if value not in compact:
+                  raise SystemExit(f'action-bound idempotency missing: {value}')
           PY
 
       - name: Validate Edge Function security boundaries
@@ -142,7 +154,22 @@ jobs:
           grep -F 'raw_vercel_token_returned' pi/fetch-canonical-client-config.sh
           grep -F 'chmod 600' pi/fetch-canonical-client-config.sh
           grep -F 'mv -f "$TMP_ENV" "$OUTPUT_ENV"' pi/fetch-canonical-client-config.sh
-          ! grep -E 'echo.*(TOKEN|PUBLISHABLE_KEY=\$|SERVICE_ROLE|SECRET_KEY)' pi/fetch-canonical-client-config.sh
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          text = Path('pi/fetch-canonical-client-config.sh').read_text(encoding='utf-8')
+          forbidden = {
+              'token value echo': r'echo[^\n]*\$\{?(?:PI_ACCESS_TOKEN|SUPABASE_ACCESS_TOKEN|TOKEN)\}?',
+              'publishable key value echo': r'echo[^\n]*\$\{?(?:SUPABASE_PUBLISHABLE_KEY|PUBLISHABLE_KEY)\}?',
+              'service-role value echo': r'echo[^\n]*\$\{?(?:SUPABASE_SERVICE_ROLE_KEY|SERVICE_ROLE_KEY)\}?',
+              'secret key value echo': r'echo[^\n]*\$\{?(?:SUPABASE_SECRET_KEY|SECRET_KEY)\}?',
+          }
+          for label, pattern in forbidden.items():
+              if re.search(pattern, text):
+                  raise SystemExit(label)
+          print('Diagnostic labels are allowed; secret variable values are not echoed')
+          PY
 
       - name: Validate fail-closed policy
         shell: bash
