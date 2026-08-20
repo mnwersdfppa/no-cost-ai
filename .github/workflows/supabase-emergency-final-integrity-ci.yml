@@ -40,7 +40,7 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Validate converged deployment manifests
+      - name: Validate converged Docker and native recovery manifests
         shell: bash
         run: |
           set -euo pipefail
@@ -58,8 +58,11 @@ jobs:
 
           project = 'dpllasnpfskyyyzebyal'
           sha_re = re.compile(r'^[0-9a-f]{64}$')
-          canonical_installer = 'pi-openclaw-current-master-recovery-verified'
-          canonical_source = 'pi-openclaw-master-recovery-installer'
+          digest_re = re.compile(r'^sha256:[0-9a-f]{64}$')
+          canonical_installer = 'pi-openclaw-docker-compat-installer-verified'
+          canonical_source = 'pi/install-openclaw-docker-compat.sh'
+          native_installer = 'pi-openclaw-current-master-recovery-verified'
+          native_source = 'pi-openclaw-master-recovery-installer'
 
           assert manifest['project_id'] == guardian['project_id'] == delivery['project_id'] == project
           assert manifest['canonical_model_gateway'] == 'pi-model-gateway-guardian'
@@ -72,8 +75,11 @@ jobs:
           assert manifest['pi_refresh_current_format_e2e'] is True
           assert manifest['functions']['pi-auth-refresh']['refresh_token_minimum_chars'] == 8
           assert manifest['functions']['pi-infra-bootstrap']['refresh_token_minimum_chars'] == 8
+          assert manifest['functions']['pi-container-bootstrap']['refresh_token_minimum_chars'] == 8
           assert guardian['functions']['pi-auth-refresh']['refresh_token_minimum_chars'] == 8
           assert guardian['functions']['pi-infra-bootstrap']['refresh_token_minimum_chars'] == 8
+          assert guardian['functions']['pi-container-bootstrap']['refresh_token_minimum_chars'] == 8
+          assert delivery['functions']['pi-container-bootstrap']['refresh_token_minimum_chars'] == 8
 
           assert manifest['canonical_server_retry_job'] == guardian['canonical_server_retry_job'] == delivery['canonical_server_retry_job']
           assert manifest['canonical_server_retry_schedule'] == guardian['canonical_server_retry_schedule'] == delivery['server_retry_schedule'] == '*/2 * * * *'
@@ -82,40 +88,45 @@ jobs:
 
           for document in (manifest, guardian, delivery):
               assert document['canonical_pi_installer'] == canonical_installer
-              assert document['canonical_pi_installer_source'] == canonical_source
+              assert document['canonical_pi_installer_sha256'] == manifest['canonical_pi_installer_sha256']
+              assert document['canonical_pi_installer_bytes'] == manifest['canonical_pi_installer_bytes']
               assert sha_re.fullmatch(document['canonical_pi_installer_sha256'])
-              assert document['canonical_pi_installer_bytes'] > 2000
+              assert document['canonical_pi_installer_bytes'] > 6000
+          assert guardian['canonical_pi_installer_source'] == delivery['canonical_pi_installer_source'] == canonical_source
+          assert Path(canonical_source).is_file()
 
-          installer_sha = manifest['canonical_pi_installer_sha256']
-          installer_bytes = manifest['canonical_pi_installer_bytes']
-          assert guardian['canonical_pi_installer_sha256'] == delivery['canonical_pi_installer_sha256'] == installer_sha
-          assert guardian['canonical_pi_installer_bytes'] == delivery['canonical_pi_installer_bytes'] == installer_bytes
+          assert manifest['canonical_container_bootstrap'] == guardian['canonical_container_bootstrap'] == delivery['canonical_container_bootstrap'] == 'pi-container-bootstrap'
+          assert manifest['canonical_container_bootstrap_version'] == guardian['canonical_container_bootstrap_version'] == delivery['canonical_container_bootstrap_version'] == 3
+          assert manifest['canonical_container_digest'] == guardian['canonical_container_digest'] == delivery['canonical_container_digest']
+          assert digest_re.fullmatch(manifest['canonical_container_digest'])
+          assert manifest['canonical_container_platforms'] == guardian['canonical_container_platforms'] == delivery['canonical_container_platforms'] == ['linux/amd64', 'linux/arm64']
 
-          required_nested = (
-              'canonical_model_auth_installer_sha256',
-              'canonical_recovery_worker_installer_sha256',
-              'canonical_telegram_delivery_installer_sha256',
-          )
-          for key in required_nested:
-              assert sha_re.fullmatch(manifest[key]), key
+          assert manifest['native_recovery_installer'] == guardian['native_recovery_installer'] == delivery['native_recovery_installer'] == native_installer
+          assert guardian['native_recovery_installer_source'] == delivery['native_recovery_installer_source'] == native_source
+          assert manifest['native_recovery_installer_sha256'] == guardian['native_recovery_installer_sha256'] == delivery['native_recovery_installer_sha256']
+          assert sha_re.fullmatch(manifest['native_recovery_installer_sha256'])
+          assert guardian['native_recovery_installer_bytes'] == delivery['native_recovery_installer_bytes'] == 2973
 
-          current = guardian['functions'][canonical_installer]
-          source = guardian['functions'][canonical_source]
-          assert current['canonical'] is True
-          assert current['status'] == 'ACTIVE'
-          assert current['artifact_sha256'] == installer_sha
-          assert current['artifact_bytes'] == installer_bytes
-          assert source['canonical'] is False
-          assert source['lifecycle_status'] == 'verified_source'
-          assert source['artifact_sha256'] == installer_sha
-          assert source['artifact_bytes'] == installer_bytes
-          assert source['model_auth_installer_sha256'] == manifest['canonical_model_auth_installer_sha256']
-          assert source['recovery_worker_installer_sha256'] == manifest['canonical_recovery_worker_installer_sha256']
-          assert source['telegram_delivery_installer_sha256'] == manifest['canonical_telegram_delivery_installer_sha256']
+          docker_guardian = guardian['functions'][canonical_installer]
+          docker_delivery = delivery['functions'][canonical_installer]
+          assert docker_guardian['canonical'] is True and docker_delivery['canonical'] is True
+          assert docker_guardian['status'] == docker_delivery['status'] == 'ACTIVE'
+          assert docker_guardian['artifact_sha256'] == docker_delivery['artifact_sha256'] == manifest['canonical_pi_installer_sha256']
+          assert docker_guardian['artifact_bytes'] == docker_delivery['artifact_bytes'] == manifest['canonical_pi_installer_bytes']
+          assert docker_guardian['image_digest'] == docker_delivery['image_digest'] == manifest['canonical_container_digest']
+          assert docker_guardian['platforms'] == docker_delivery['platforms'] == manifest['canonical_container_platforms']
+
+          native_guardian = guardian['functions'][native_installer]
+          native_delivery = delivery['functions'][native_installer]
+          for row in (native_guardian, native_delivery):
+              assert row['canonical'] is False
+              assert row['lifecycle_status'] == 'native_rollback'
+              assert row['artifact_sha256'] == manifest['native_recovery_installer_sha256']
+              assert row['artifact_bytes'] == 2973
 
           retry_guardian = guardian['functions']['model-retry-worker']
           retry_delivery = delivery['functions']['model-retry-worker']
-          assert retry_guardian['version'] == retry_delivery['version']
+          assert retry_guardian['version'] == retry_delivery['version'] == 6
           assert retry_guardian['ezbr_sha256'] == retry_delivery['ezbr_sha256']
           assert retry_guardian['auth_mode'] == retry_delivery['custom_auth'] == 'supabase_vault_sha256_verification'
           assert retry_guardian['positive_auth_status'] == retry_delivery['positive_auth_status'] == 200
@@ -127,13 +138,12 @@ jobs:
                   assert Path(row['source']).is_file(), row['source']
               if 'ezbr_sha256' in row:
                   assert sha_re.fullmatch(row['ezbr_sha256']), name
-
           for name, row in delivery['functions'].items():
               assert row['status'] == 'ACTIVE', name
               if 'source' in row:
                   assert Path(row['source']).is_file(), row['source']
 
-          required_gates = (
+          for gate in (
               'pi_model_gateway_guardian_e2e',
               'pi_recovery_queue_api_e2e',
               'pi_auth_refresh_current_format_e2e',
@@ -141,33 +151,45 @@ jobs:
               'server_model_retry_scheduler',
               'pi_recovery_worker_current_installer_integrity',
               'pi_current_master_installer_integrity',
-          )
-          for gate in required_gates:
+              'docker_registry_multiarch_publish',
+              'pi_container_bootstrap_v3_e2e',
+              'docker_preemptive_compatibility_system',
+              'pi_docker_compat_installer_integrity',
+          ):
               assert guardian['e2e_gates'][gate] == 'pass', gate
-
           for gate in (
               'server_model_retry_worker_e2e',
               'server_model_retry_scheduler',
               'pi_result_delivery_queue_e2e',
               'pi_recovery_worker_current_installer_integrity',
               'pi_current_master_installer_integrity',
+              'docker_registry_multiarch_publish',
+              'pi_container_bootstrap_v3_e2e',
+              'docker_preemptive_compatibility_system',
+              'pi_docker_compat_installer_integrity',
           ):
               assert delivery['e2e_gates'][gate] == 'pass', gate
 
-          assert guardian['physical_gates']['pi_openclaw_model_activation'] == 'pending'
-          assert guardian['physical_gates']['pi_recovery_queue_worker_active'] == 'pending'
-          assert delivery['physical_gates']['pi_openclaw_model_activation'] == 'pending'
-          assert delivery['physical_gates']['pi_recovery_queue_worker_active'] == 'pending'
+          for document in (guardian, delivery):
+              assert document['physical_gates']['pi_openclaw_model_activation'] == 'pending'
+              assert document['physical_gates']['pi_recovery_queue_worker_active'] == 'pending'
 
           assert manifest['provider_secret_location'] == 'supabase_edge_only'
           assert manifest['raw_provider_secret_returned_to_pi'] is False
+          assert manifest['docker_socket_mount'] is False
+          assert manifest['docker_provider_secret_mount'] is False
+          assert manifest['docker_privileged_default'] is False
+          assert manifest['docker_qemu_default'] is False
           assert manifest['paid_provider_calls'] is False
           assert manifest['public_shell_execution'] is False
           assert manifest['telegram_single_poller_enforced'] is True
           for security in (guardian['security'], delivery['security']):
               assert security['provider_secret_returned_to_pi'] is False
+              assert security['docker_registry_secret_returned_to_pi'] is False
               assert security['paid_api_fallback'] is False
               assert security['second_telegram_poller'] is False
+          assert guardian['security']['docker_socket_mount'] is False
+          assert guardian['security']['privileged_container'] is False
           assert guardian['security']['curl_pipe_shell'] is False
           assert delivery['security']['direct_telegram_get_updates'] is False
           assert delivery['security']['worker_token_returned'] is False
@@ -176,7 +198,8 @@ jobs:
           print(json.dumps({
               'result': 'pass',
               'canonical_installer': canonical_installer,
-              'canonical_installer_sha256': installer_sha,
+              'canonical_installer_sha256': manifest['canonical_pi_installer_sha256'],
+              'native_rollback_installer': native_installer,
               'retry_worker_version': retry_guardian['version'],
               'physical_pi_pending': True,
               'secret_values_included': False,
@@ -212,21 +235,27 @@ jobs:
 
           paths = {
               'bootstrap': Path('supabase/functions/pi-infra-bootstrap/index.ts'),
+              'container_bootstrap': Path('supabase/functions/pi-container-bootstrap/index.ts'),
               'refresh': Path('supabase/functions/pi-auth-refresh/index.ts'),
               'guardian': Path('supabase/functions/pi-model-gateway-guardian/index.ts'),
               'queue': Path('supabase/functions/pi-work-queue/index.ts'),
               'retry': Path('supabase/functions/model-retry-worker/index.ts'),
               'delivery': Path('supabase/functions/pi-result-delivery-queue/index.ts'),
-              'master_source': Path('supabase/functions/pi-openclaw-master-recovery-installer/index.ts'),
-              'master_verified': Path('supabase/functions/pi-openclaw-current-master-recovery-verified/index.ts'),
+              'docker_installer': Path('supabase/functions/pi-openclaw-docker-compat-installer-verified/index.ts'),
+              'native_source': Path('supabase/functions/pi-openclaw-master-recovery-installer/index.ts'),
+              'native_verified': Path('supabase/functions/pi-openclaw-current-master-recovery-verified/index.ts'),
           }
           text = {name: path.read_text(encoding='utf-8') for name, path in paths.items()}
 
           assert 'const MIN_REFRESH_TOKEN_CHARS = 8' in text['bootstrap']
+          assert 'const MIN_REFRESH_TOKEN_CHARS = 8' in text['container_bootstrap']
           assert 'const MIN_REFRESH_TOKEN_CHARS = 8' in text['refresh']
           assert 'pi-model-gateway-guardian/v1' in text['bootstrap']
           assert 'start_second_telegram_poller: false' in text['bootstrap']
           assert 'export_original_provider_key_to_pi: false' in text['bootstrap']
+          assert 'typedExecutionPlan' in text['container_bootstrap']
+          assert 'docker_socket_mount: false' in text['container_bootstrap']
+          assert 'provider_secret_mount: false' in text['container_bootstrap']
           assert 'const MAX_ATTEMPTS = 2' in text['guardian']
           assert '요청을 안전하게 보존했습니다' in text['guardian']
           assert 'contract_version: 2' in text['queue']
@@ -236,8 +265,10 @@ jobs:
           assert 'telegram_result_delivery' in text['retry']
           assert 'bridge_claim_telegram_delivery_task' in text['delivery']
           assert 'secret_like_evidence_rejected' in text['delivery']
-          assert 'sha256sum -c -' in text['master_source']
-          assert 'x-content-sha256' in text['master_verified']
+          assert 'IMAGE_DIGEST' in text['docker_installer']
+          assert 'docker_registry_secret_returned' in text['docker_installer']
+          assert 'sha256sum -c -' in text['native_source']
+          assert 'x-content-sha256' in text['native_verified']
 
           combined = '\n'.join(text.values())
           forbidden = {
@@ -298,6 +329,7 @@ jobs:
 
           python3 -m py_compile pi/openclaw-recovery-worker-current.py
           python3 pi/openclaw-recovery-worker-current.py --self-test
+          bash -n pi/install-openclaw-docker-compat.sh
           find pi -maxdepth 1 -type f -name '*.sh' -print0 | xargs -0 -r -n1 bash -n
 
       - name: Write final integrity summary
@@ -308,11 +340,13 @@ jobs:
           {
             echo '## Supabase emergency final integrity gate'
             echo
-            echo '- Canonical runtime: Supabase Guardian + OpenCode'
-            echo '- Canonical installer: current-format three-layer master'
+            echo '- Canonical runtime: Docker compatibility preflight → verified native recovery'
+            echo '- Canonical installer: pi-openclaw-docker-compat-installer-verified'
+            echo '- Native rollback: pi-openclaw-current-master-recovery-verified'
             echo '- Retry schedule: every two minutes'
             echo '- Paid API fallback: OFF'
             echo '- Second Telegram poller: OFF'
+            echo '- Docker socket mount: OFF'
             echo '- Repository mutation from workflow: OFF'
             echo '- Production deployment from workflow: OFF'
           } >> "$GITHUB_STEP_SUMMARY"
