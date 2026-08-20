@@ -1,0 +1,314 @@
+name: Publish OpenClaw Pi compatibility image
+
+on:
+  push:
+    branches:
+      - feat/supabase-emergency-bridge-20260819
+    paths:
+      - 'container/openclaw-pi-compat-v1/**'
+      - '.github/workflows/openclaw-pi-compat-image.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: openclaw-pi-compat-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Compile and self-test probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile container/openclaw-pi-compat-v1/openclaw_compat.py
+          python container/openclaw-pi-compat-v1/openclaw_compat.py --self-test
+          sh -n container/openclaw-pi-compat-v1/entrypoint.sh
+
+      - name: Enforce non-privileged and single-poller contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from __future__ import annotations
+
+          import ast
+          import pathlib
+          import re
+
+          root = pathlib.Path('container/openclaw-pi-compat-v1')
+          python_path = root / 'openclaw_compat.py'
+          text = '\n'.join(
+              path.read_text(encoding='utf-8')
+              for path in [
+                  python_path,
+                  root / 'entrypoint.sh',
+                  root / 'Dockerfile',
+                  root / 'compose.example.yml',
+              ]
+          )
+          tree = ast.parse(python_path.read_text(encoding='utf-8'))
+
+          forbidden_names = {'eval', 'exec', 'compile'}
+          for node in ast.walk(tree):
+              if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                  assert node.func.id not in forbidden_names, f'forbidden call: {node.func.id}'
+
+          forbidden_patterns = {
+              'telegram_second_poller': r'getUpdates',
+              'telegram_token': r'TELEGRAM_BOT_TOKEN',
+              'provider_key': r'OPENCODE_API_KEY|OPENROUTER_API_KEY',
+              'tailscale_key': r'TAILSCALE.*(?:KEY|TOKEN)',
+              'supabase_server_key': r'SUPABASE_(?:SERVICE_ROLE_KEY|SECRET_KEYS)',
+              'docker_socket': r'docker\.sock',
+              'privileged': r'--privileged|privileged\s*:\s*true',
+              'host_network': r'network_mode\s*:\s*host',
+              'curl_pipe_shell': r'curl\s*\|\s*(?:sh|bash)',
+          }
+          for name, pattern in forbidden_patterns.items():
+              assert re.search(pattern, text, re.IGNORECASE) is None, name
+
+          dockerfile = (root / 'Dockerfile').read_text(encoding='utf-8')
+          assert 'USER 10001:10001' in dockerfile
+          assert 'HEALTHCHECK' in dockerfile
+          compose = (root / 'compose.example.yml').read_text(encoding='utf-8')
+          for marker in ['read_only: true', 'cap_drop:', 'no-new-privileges:true']:
+              assert marker in compose, marker
+
+          print('compatibility_container_contract=pass')
+          PY
+
+      - name: Confirm no production control-plane mutation
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -nE 'gh pr merge|vercel --prod|supabase functions deploy|git push .*main' \
+            .github/workflows/openclaw-pi-compat-image.yml
+
+  publish:
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      image: ${{ steps.image.outputs.name }}
+      digest: ${{ steps.build.outputs.digest }}
+      public_pull: ${{ steps.public.outputs.verified }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Resolve lowercase image name
+        id: image
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "name=ghcr.io/${owner}/openclaw-pi-compat" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v5
+        id: metadata
+        with:
+          images: ${{ steps.image.outputs.name }}
+          tags: |
+            type=raw,value=edge
+            type=sha,prefix=sha-
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
+      - name: Build and push OCI index
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: container/openclaw-pi-compat-v1
+          file: container/openclaw-pi-compat-v1/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=openclaw-pi-compat
+          cache-to: type=gha,mode=max,scope=openclaw-pi-compat
+
+      - name: Attest published image
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ steps.image.outputs.name }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Verify arm64 and amd64 manifests
+        shell: bash
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          docker buildx imagetools inspect "$IMAGE@$DIGEST" --raw > evidence/oci-index.json
+          python - <<'PY'
+          import json
+          import pathlib
+
+          path = pathlib.Path('evidence/oci-index.json')
+          index = json.loads(path.read_text(encoding='utf-8'))
+          platforms = {
+              (row.get('platform', {}).get('os'), row.get('platform', {}).get('architecture'))
+              for row in index.get('manifests', [])
+              if isinstance(row, dict)
+          }
+          required = {('linux', 'amd64'), ('linux', 'arm64')}
+          missing = sorted(required - platforms)
+          assert not missing, f'missing platforms: {missing}'
+          print(json.dumps({'platforms': sorted([f'{os}/{arch}' for os, arch in platforms])}))
+          PY
+
+      - name: Request public GHCR visibility
+        id: visibility
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5; do
+            if gh api \
+              --method PATCH \
+              -H 'Accept: application/vnd.github+json' \
+              '/user/packages/container/openclaw-pi-compat/visibility' \
+              -f visibility=public >/dev/null; then
+              echo 'requested=true' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo 'requested=false' >> "$GITHUB_OUTPUT"
+          exit 1
+
+      - name: Verify unauthenticated public pull
+        id: public
+        shell: bash
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker logout ghcr.io >/dev/null 2>&1 || true
+          verified=false
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            if docker pull "$IMAGE@$DIGEST" >/tmp/public-pull.log 2>&1; then
+              verified=true
+              break
+            fi
+            sleep 5
+          done
+          echo "verified=$verified" >> "$GITHUB_OUTPUT"
+          if [ "$verified" != true ]; then
+            printf 'WARN=ghcr_public_pull_not_verified\n' >&2
+          fi
+
+      - name: Write non-secret publication receipt
+        shell: bash
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          PUBLIC_PULL: ${{ steps.public.outputs.verified }}
+          VISIBILITY_REQUESTED: ${{ steps.visibility.outputs.requested }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import pathlib
+          from datetime import datetime, timezone
+
+          index = json.loads(pathlib.Path('evidence/oci-index.json').read_text(encoding='utf-8'))
+          platforms = sorted({
+              f"{row.get('platform', {}).get('os')}/{row.get('platform', {}).get('architecture')}"
+              for row in index.get('manifests', [])
+              if isinstance(row, dict)
+          })
+          receipt = {
+              'schema_version': 1,
+              'generated_at': datetime.now(timezone.utc).isoformat(),
+              'repository': os.environ['GITHUB_REPOSITORY'],
+              'commit_sha': os.environ['GITHUB_SHA'],
+              'image': os.environ['IMAGE'],
+              'digest': os.environ['DIGEST'],
+              'platforms': platforms,
+              'visibility_request_succeeded': os.environ.get('VISIBILITY_REQUESTED') == 'true',
+              'unauthenticated_public_pull_verified': os.environ.get('PUBLIC_PULL') == 'true',
+              'sbom_enabled': True,
+              'provenance_enabled': True,
+              'runs_as_non_root': True,
+              'privileged_mode_required': False,
+              'host_network_required': False,
+              'docker_socket_required': False,
+              'provider_credentials_included': False,
+              'second_telegram_poller_created': False,
+              'paid_fallback_enabled': False,
+              'secret_values_included': False,
+          }
+          pathlib.Path('evidence/openclaw-pi-compat-image.json').write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-pi-compat-image-${{ github.run_id }}
+          path: |
+            evidence/openclaw-pi-compat-image.json
+            evidence/oci-index.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Write job summary
+        shell: bash
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          PUBLIC_PULL: ${{ steps.public.outputs.verified }}
+        run: |
+          {
+            echo '## OpenClaw Pi compatibility image'
+            echo
+            echo "- Image: \`$IMAGE\`"
+            echo "- Digest: \`$DIGEST\`"
+            echo '- Platforms: `linux/amd64`, `linux/arm64`'
+            echo "- Unauthenticated public pull: \`$PUBLIC_PULL\`"
+            echo '- Runs as non-root: `true`'
+            echo '- Provider credentials included: `false`'
+            echo '- Second Telegram poller: `false`'
+            echo '- Paid fallback: `false`'
+          } >> "$GITHUB_STEP_SUMMARY"
