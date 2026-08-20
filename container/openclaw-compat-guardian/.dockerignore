@@ -1,0 +1,6 @@
+*
+!Dockerfile
+!guardian.py
+!check_oci.py
+!compose.yaml
+!README.md
