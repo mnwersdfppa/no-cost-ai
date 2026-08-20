@@ -1,0 +1,153 @@
+name: Validate OpenClaw reuse engine source
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'supabase/functions/openclaw-reuse-engine/**'
+      - 'supabase/functions/deployment-manifest-reuse-first.json'
+      - '.github/workflows/openclaw-reuse-engine-source-validate.yml'
+  push:
+    branches:
+      - feat/supabase-emergency-bridge-20260819
+    paths:
+      - 'supabase/functions/openclaw-reuse-engine/**'
+      - 'supabase/functions/deployment-manifest-reuse-first.json'
+      - '.github/workflows/openclaw-reuse-engine-source-validate.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openclaw-reuse-engine-source-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+
+      - name: Validate read-only Edge contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import pathlib
+          import re
+
+          source_path = pathlib.Path('supabase/functions/openclaw-reuse-engine/index.ts')
+          manifest_path = pathlib.Path('supabase/functions/deployment-manifest-reuse-first.json')
+          source = source_path.read_text(encoding='utf-8')
+          manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+
+          required_source = [
+              'pi-gateway-client',
+              'openclaw_solution_sources',
+              'openclaw_pattern_source_matches',
+              'openclaw_research_queries',
+              'openclaw_ssot_projection_queue',
+              'openclaw_reuse_first_queue',
+              'promotion_exposed: false',
+              'claim_exposed: false',
+              'provider_secret_returned: false',
+              'server_secret_returned: false',
+              'secret_values_included: false',
+          ]
+          for marker in required_source:
+              assert marker in source, marker
+
+          expected_actions = {
+              'status',
+              'sources',
+              'reuse_queue',
+              'research_queries',
+              'projection_status',
+          }
+          action_match = re.search(r'const ACTIONS = new Set\(\[(.*?)\]\);', source, re.DOTALL)
+          assert action_match, 'action allowlist missing'
+          observed_actions = set(re.findall(r'"([a-z_]+)"', action_match.group(1)))
+          assert observed_actions == expected_actions, observed_actions
+
+          forbidden_mutations = [
+              '.insert(',
+              '.update(',
+              '.upsert(',
+              '.delete(',
+              '.rpc(',
+          ]
+          for marker in forbidden_mutations:
+              assert marker not in source, marker
+
+          assert manifest['canonical_function'] == 'openclaw-reuse-engine'
+          assert manifest['function']['read_only'] is True
+          assert set(manifest['function']['actions']) == expected_actions
+          assert manifest['function']['promotion_exposed'] is False
+          assert manifest['function']['queue_claim_exposed'] is False
+          assert manifest['e2e']['result'] == 'pass'
+          assert manifest['e2e']['unauthorized_status'] == 401
+          assert manifest['e2e']['authenticated_status'] == 200
+          assert manifest['database']['rls'] is True
+          assert manifest['database']['service_role_only_mutations'] is True
+          for key, value in manifest['safety'].items():
+              assert value is False, (key, value)
+
+          combined = source + '\n' + manifest_path.read_text(encoding='utf-8')
+          secret_pattern = re.compile(
+              r'(sk-proj-[A-Za-z0-9_-]{12,}|ghp_[A-Za-z0-9]{16,}|'
+              r'github_pat_[A-Za-z0-9_]{16,}|xox[baprs]-[A-Za-z0-9-]{16,}|'
+              r'tskey-(?:auth|api|client)-[A-Za-z0-9_-]{12,}|'
+              r'BEGIN\s+(?:RSA|OPENSSH|EC)\s+PRIVATE\s+KEY)',
+              re.IGNORECASE,
+          )
+          assert secret_pattern.search(combined) is None
+          print('reuse_engine_source_contract=pass')
+          PY
+
+      - name: Confirm non-production workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          text = Path('.github/workflows/openclaw-reuse-engine-source-validate.yml').read_text(encoding='utf-8')
+          forbidden = [
+              'contents: ' + 'write',
+              'gh pr ' + 'merge',
+              'vercel ' + '--prod',
+              'supabase functions ' + 'deploy',
+              'git push ' + 'origin main',
+          ]
+          for marker in forbidden:
+              assert marker not in text, marker
+          assert 'contents: read' in text
+          print('production_mutation=off')
+          PY
+
+      - name: Write summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## Reuse engine source validation'
+            echo
+            echo '- Scoped Pi JWT: checked'
+            echo '- Read-only actions: checked'
+            echo '- Mutation methods: absent'
+            echo '- Secret literals: absent'
+            echo '- Production mutation: off'
+          } >> "$GITHUB_STEP_SUMMARY"
