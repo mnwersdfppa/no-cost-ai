@@ -5,7 +5,10 @@ const SCRIPT_SHA256 = "bc938153e8b6bfe90dabb0471d34eaebef595aca6f5ec94db64d1b206
 const SCRIPT_BYTES = 3902;
 
 async function sha256(bytes: Uint8Array): Promise<string> {
-  const digestInput = Uint8Array.from(bytes).buffer;
+  const digestInput = bytes.buffer.slice(
+    bytes.byteOffset,
+    bytes.byteOffset + bytes.byteLength,
+  ) as ArrayBuffer;
   const digest = await crypto.subtle.digest("SHA-256", digestInput);
   return [...new Uint8Array(digest)]
     .map((value) => value.toString(16).padStart(2, "0"))
