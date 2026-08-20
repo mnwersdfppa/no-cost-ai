@@ -92,10 +92,8 @@ jobs:
               'feedback_status': 200,
           }
           assert manifest['e2e'] == expected_e2e
-          assert manifest['cleanup']['temporary_users'] == 0
-          assert manifest['cleanup']['temporary_observations'] == 0
-          assert manifest['cleanup']['temporary_feedback'] == 0
-          assert manifest['cleanup']['temporary_ledger'] == 0
+          assert manifest['e2e']['temporary_identity_deleted'] is True
+          assert manifest['e2e']['temporary_rows_deleted'] is True
 
           core = core_path.read_text(encoding='utf-8')
           seed = seed_path.read_text(encoding='utf-8')
