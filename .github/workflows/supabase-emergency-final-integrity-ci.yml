@@ -47,10 +47,10 @@ jobs:
           assert deployment['canonical_model_component'] == 'edge.pi-model-gateway-guardian'
           assert deployment['canonical_model_route'] == 'supabase.opencode_model_guardian'
           assert deployment['canonical_base_url'].endswith('/pi-model-gateway-guardian/v1')
-          assert deployment['canonical_pi_installer'] == 'pi-openclaw-guardian-master-installer-verified'
-          assert deployment['canonical_pi_installer_url'].endswith('/pi-openclaw-guardian-master-installer-verified')
-          assert deployment['canonical_pi_installer_sha256'] == 'bc938153e8b6bfe90dabb0471d34eaebef595aca6f5ec94db64d1b206cd8ce39'
-          assert deployment['canonical_pi_installer_bytes'] == 3902
+          assert deployment['canonical_pi_installer'] == 'pi-openclaw-master-recovery-installer'
+          assert deployment['canonical_pi_installer_url'].endswith('/pi-openclaw-master-recovery-installer')
+          assert deployment['canonical_pi_installer_sha256'] == 'e44df620e78778e7711f67783ed64fa3639761ce34554e50eda46f7589096179'
+          assert deployment['canonical_pi_installer_bytes'] == 2350
 
           expected = {
               'pi-model-gateway-guardian': (
@@ -73,6 +73,11 @@ jobs:
                   True,
                   'cd354b3443bed92b40fddb9449123fc9966c8312866ac72e22426a170c434ec6',
               ),
+              'pi-openclaw-master-recovery-installer': (
+                  3,
+                  False,
+                  '08b74af34fce597a72760aebcdef32a02986109236ad005a121e9be324070f8f',
+              ),
               'pi-openclaw-guardian-master-installer-verified': (
                   1,
                   False,
@@ -90,15 +95,21 @@ jobs:
           assert deployment['functions']['pi-infra-bootstrap']['refresh_token_minimum_chars'] == 8
           assert deployment['functions']['pi-auth-refresh']['refresh_token_minimum_chars'] == 8
 
-          master = deployment['functions']['pi-openclaw-guardian-master-installer-verified']
+          master = deployment['functions']['pi-openclaw-master-recovery-installer']
+          assert master['canonical'] is True
           assert master['artifact_sha256'] == deployment['canonical_pi_installer_sha256']
           assert master['artifact_bytes'] == deployment['canonical_pi_installer_bytes']
-          assert master['source_commit'] == '9237ba0c09b97a79a75464ad2e8e2e83972d5dc7'
+          assert master['base_recovery_sha256'] == '4c21d9eab6fff335950f8a4c8c7a064a20b9aa00aead487b811cee779e8ae947'
+          assert master['telegram_delivery_installer_sha256'] == '1db248ffbc0fea0bf22bcf17e2908134c9554f64539e1fe908dc0e2939268e97'
+
+          compatibility = deployment['functions']['pi-openclaw-guardian-master-installer-verified']
+          assert compatibility['canonical'] is False
+          assert compatibility['lifecycle_status'] == 'compatibility'
 
           assert deployment['e2e_gates']['pi_model_gateway_guardian_e2e'] == 'pass'
           assert deployment['e2e_gates']['pi_recovery_queue_api_e2e'] == 'pass'
           assert deployment['e2e_gates']['pi_auth_refresh_current_format_e2e'] == 'pass'
-          assert deployment['e2e_gates']['pi_guardian_master_installer_integrity'] == 'pass'
+          assert deployment['e2e_gates']['pi_master_recovery_installer_integrity'] == 'pass'
           assert deployment['physical_gates']['pi_openclaw_model_activation'] == 'pending'
           assert deployment['physical_gates']['pi_recovery_queue_worker_active'] == 'pending'
 
@@ -113,6 +124,8 @@ jobs:
           assert security['pi_refresh_token_minimum_chars'] == 8
           assert security['master_installer_nested_sha_verification'] is True
           assert security['master_installer_raw_provider_assignment'] is False
+          assert security['curl_pipe_shell'] is False
+          assert security['old_master_installer_enabled_in_ssot'] is False
           PY
 
       - name: Validate Edge Function types and boundaries
@@ -126,6 +139,7 @@ jobs:
           deno check supabase/functions/pi-auth-refresh/index.ts
           deno check supabase/functions/pi-model-gateway-guardian/index.ts
           deno check supabase/functions/pi-work-queue/index.ts
+          deno check supabase/functions/pi-openclaw-master-recovery-installer/index.ts
           deno check supabase/functions/pi-openclaw-guardian-master-installer-verified/index.ts
 
           python3 - <<'PY'
@@ -144,8 +158,15 @@ jobs:
           assert manifest['functions']['pi-auth-refresh']['entrypoint'] == 'supabase/functions/pi-auth-refresh/index.ts'
           assert manifest['functions']['pi-auth-refresh']['refresh_token_minimum_chars'] == 8
           assert manifest['functions']['pi-infra-bootstrap']['refresh_token_minimum_chars'] == 8
-          assert manifest['canonical_pi_installer'] == 'pi-openclaw-guardian-master-installer-verified'
-          assert manifest['canonical_pi_installer_sha256'] == 'bc938153e8b6bfe90dabb0471d34eaebef595aca6f5ec94db64d1b206cd8ce39'
+          assert manifest['canonical_pi_installer'] == 'pi-openclaw-master-recovery-installer'
+          assert manifest['canonical_pi_installer_url'].endswith('/pi-openclaw-master-recovery-installer')
+          assert manifest['canonical_pi_installer_sha256'] == 'e44df620e78778e7711f67783ed64fa3639761ce34554e50eda46f7589096179'
+          assert manifest['canonical_pi_installer_bytes'] == 2350
+          assert manifest['canonical_model_auth_installer_sha256'] == '4c21d9eab6fff335950f8a4c8c7a064a20b9aa00aead487b811cee779e8ae947'
+          assert manifest['canonical_telegram_delivery_installer_sha256'] == '1db248ffbc0fea0bf22bcf17e2908134c9554f64539e1fe908dc0e2939268e97'
+          assert manifest['functions']['pi-openclaw-master-recovery-installer']['canonical'] is True
+          assert manifest['functions']['pi-openclaw-guardian-master-installer-verified']['canonical'] is False
+          assert manifest['functions']['pi-openclaw-guardian-master-installer-verified']['lifecycle_status'] == 'compatibility'
           assert manifest['paid_provider_calls'] is False
           assert manifest['public_shell_execution'] is False
           assert manifest['telegram_single_poller_enforced'] is True
@@ -154,7 +175,8 @@ jobs:
           auth_refresh = Path('supabase/functions/pi-auth-refresh/index.ts').read_text(encoding='utf-8')
           guardian = Path('supabase/functions/pi-model-gateway-guardian/index.ts').read_text(encoding='utf-8')
           queue = Path('supabase/functions/pi-work-queue/index.ts').read_text(encoding='utf-8')
-          master_edge = Path('supabase/functions/pi-openclaw-guardian-master-installer-verified/index.ts').read_text(encoding='utf-8')
+          master_edge = Path('supabase/functions/pi-openclaw-master-recovery-installer/index.ts').read_text(encoding='utf-8')
+          compatibility_master = Path('supabase/functions/pi-openclaw-guardian-master-installer-verified/index.ts').read_text(encoding='utf-8')
 
           for marker in (
               'const MIN_REFRESH_TOKEN_CHARS = 8',
@@ -197,6 +219,20 @@ jobs:
           assert 'eyJ[A-Za-z0-9_-]{20,}' in queue
 
           for marker in (
+              'const BASE_RECOVERY_SHA = "4c21d9eab6fff335950f8a4c8c7a064a20b9aa00aead487b811cee779e8ae947"',
+              'const DELIVERY_INSTALLER_SHA = "1db248ffbc0fea0bf22bcf17e2908134c9554f64539e1fe908dc0e2939268e97"',
+              'pi.master_recovery.installer_snapshot',
+              'sha256Text',
+              'sha256sum -c -',
+              'second_telegram_poller_created',
+              'provider_secret_exported',
+              'x-content-sha256',
+              'x-secret-values-included',
+          ):
+              assert marker in master_edge, marker
+          assert re.search(r'curl\s*\|\s*(?:sh|bash)', master_edge) is None
+
+          for marker in (
               '9237ba0c09b97a79a75464ad2e8e2e83972d5dc7',
               'bc938153e8b6bfe90dabb0471d34eaebef595aca6f5ec94db64d1b206cd8ce39',
               'const SCRIPT_BYTES = 3902',
@@ -206,14 +242,15 @@ jobs:
               'x-openclaw-second-telegram-poller',
               'x-openclaw-paid-fallback',
           ):
-              assert marker in master_edge, marker
+              assert marker in compatibility_master, marker
 
-          combined = bootstrap + '\n' + auth_refresh + '\n' + queue
+          combined = bootstrap + '\n' + auth_refresh + '\n' + queue + '\n' + master_edge
           forbidden = {
               'raw OpenCode key returned': r'OPENCODE_API_KEY\s*:',
               'legacy Tailscale env returned': r'TAILSCALE_AUTHKEY\s*:',
               'second Telegram poller': r'getUpdates|start_second_telegram_poller\s*:\s*true',
               'automatic paid fallback': r'paid_fallback(?:_enabled)?\s*[:=]\s*true',
+              'curl pipe shell': r'curl\s*\|\s*(?:sh|bash)',
           }
           for label, pattern in forbidden.items():
               assert re.search(pattern, combined, re.IGNORECASE) is None, label
