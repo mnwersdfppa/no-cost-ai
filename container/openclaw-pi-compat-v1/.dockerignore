@@ -1,0 +1,4 @@
+*
+!Dockerfile
+!openclaw_compat.py
+!entrypoint.sh
