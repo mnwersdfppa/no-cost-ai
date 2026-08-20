@@ -76,9 +76,9 @@ jobs:
 
           required = {
               'canonical-client-config': (
-                  'bridge_credential_alias_ssot',
-                  'bridge_record_runtime_key_selection',
-                  'values_exposed: false',
+                  'parseDictionary("SUPABASE_SECRET_KEYS")',
+                  'bridge_admit_request',
+                  'raw_vercel_token_returned: false',
               ),
               'credential-readiness': (
                   'bridge_admit_request',
