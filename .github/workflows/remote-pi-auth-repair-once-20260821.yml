@@ -1,0 +1,180 @@
+name: Remote Pi auth repair once
+
+on:
+  push:
+    branches:
+      - ops/remote-pi-auth-repair-20260821-r2
+    paths:
+      - .github/workflows/remote-pi-auth-repair-once-20260821.yml
+      - pi/pi-auth-repair-and-resume-20260821.sh
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: remote-pi-auth-repair-once-20260821-r2
+  cancel-in-progress: false
+
+jobs:
+  remote-repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact recovery bundle
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Verify local recovery script
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          SCRIPT=pi/pi-auth-repair-and-resume-20260821.sh
+          test "$(wc -c < "$SCRIPT" | tr -d ' ')" = "18109"
+          test "$(sha256sum "$SCRIPT" | awk '{print $1}')" = "a54d5f3d35fc4808962df9da64f318e86b81d205bef27d07abc20f7febf66a3d"
+          bash -n "$SCRIPT"
+
+      - name: Exchange GitHub OIDC for one-time Tailscale node key
+        id: broker
+        shell: bash
+        env:
+          BROKER_URL: https://dpllasnpfskyyyzebyal.supabase.co/functions/v1/github-oidc-tailscale-broker-once-20260821-r2
+          OIDC_AUDIENCE: odi-pi-recovery-20260821-r2
+        run: |
+          set -Eeuo pipefail
+          OIDC_JSON="$(curl --fail --silent --show-error \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${OIDC_AUDIENCE}")"
+          OIDC_TOKEN="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<<"$OIDC_JSON")"
+          unset OIDC_JSON
+
+          RESPONSE="$(curl --fail --silent --show-error \
+            --request POST \
+            --header "Authorization: Bearer ${OIDC_TOKEN}" \
+            --header 'content-type: application/json' \
+            --data '{}' \
+            "$BROKER_URL")"
+          unset OIDC_TOKEN
+
+          AUTHKEY="$(python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("ok") is True; print(d["auth_key"])' <<<"$RESPONSE")"
+          TARGET="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["target_ip"])' <<<"$RESPONSE")"
+          SSH_USER="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["ssh_user"])' <<<"$RESPONSE")"
+          HOSTNAME="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["hostname"])' <<<"$RESPONSE")"
+          unset RESPONSE
+
+          echo "::add-mask::$AUTHKEY"
+          {
+            echo "authkey=$AUTHKEY"
+            echo "target=$TARGET"
+            echo "ssh_user=$SSH_USER"
+            echo "hostname=$HOSTNAME"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Join the authorized Tailnet ephemerally
+        uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade
+        with:
+          authkey: ${{ steps.broker.outputs.authkey }}
+          hostname: ${{ steps.broker.outputs.hostname }}
+          statedir: /tmp/tailscale-state/
+          use-cache: 'true'
+
+      - name: Locate the Raspberry Pi peer
+        id: peer
+        shell: bash
+        env:
+          EXPECTED_IP: ${{ steps.broker.outputs.target }}
+        run: |
+          set -Eeuo pipefail
+          TARGET=""
+          for candidate in "$EXPECTED_IP" raspberry5 raspberry-pi5-openclaw; do
+            if timeout 20s tailscale ping --c 2 --timeout 6s "$candidate" >/tmp/ts-ping.log 2>&1; then
+              TARGET="$candidate"
+              break
+            fi
+          done
+          if [[ -z "$TARGET" ]]; then
+            echo "TAILSCALE_PEER_NOT_REACHABLE" >&2
+            tailscale status || true
+            exit 20
+          fi
+          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "TAILSCALE_PEER_REACHABLE target=$TARGET"
+
+      - name: Verify Tailscale SSH admission
+        shell: bash
+        env:
+          TARGET: ${{ steps.peer.outputs.target }}
+          SSH_USER: ${{ steps.broker.outputs.ssh_user }}
+        run: |
+          set -Eeuo pipefail
+          timeout 30s tailscale ssh "${SSH_USER}@${TARGET}" \
+            'printf "TS_SSH_REMOTE_OK host=%s user=%s\n" "$(hostname)" "$(id -un)"'
+
+      - name: Execute Pi authentication repair and resume recovery
+        shell: bash
+        env:
+          TARGET: ${{ steps.peer.outputs.target }}
+          SSH_USER: ${{ steps.broker.outputs.ssh_user }}
+        run: |
+          set -Eeuo pipefail
+          timeout 2100s tailscale ssh "${SSH_USER}@${TARGET}" \
+            'bash -s' \
+            < pi/pi-auth-repair-and-resume-20260821.sh \
+            | tee /tmp/pi-auth-repair-safe-output.log
+
+      - name: Collect secret-free remote summary
+        if: always()
+        shell: bash
+        env:
+          TARGET: ${{ steps.peer.outputs.target }}
+          SSH_USER: ${{ steps.broker.outputs.ssh_user }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p artifacts
+          if [[ -n "${TARGET:-}" ]]; then
+            timeout 60s tailscale ssh "${SSH_USER}@${TARGET}" 'python3 - <<'"'"'PY'"'"'
+          import json
+          from pathlib import Path
+
+          paths = [
+              Path.home()/".openclaw/receipts/pi-auth-repair-20260821.json",
+              Path.home()/".openclaw/receipts/full-recovery-dispatcher-20260821.json",
+              Path.home()/".openclaw/receipts/resume-recovery-20260821.json",
+              Path.home()/".openclaw/runtime/pi-model-route-finalizer-receipt.json",
+          ]
+          result = {"secret_values_included": False, "receipts": []}
+          for path in paths:
+              row = {"path": str(path), "present": path.is_file()}
+              if path.is_file():
+                  try:
+                      data = json.loads(path.read_text(encoding="utf-8"))
+                      if data.get("secret_values_included") is True:
+                          row["state"] = "blocked_secret_boundary"
+                      else:
+                          row.update({
+                              "state": "present",
+                              "result": data.get("result"),
+                              "blocker": data.get("blocker"),
+                              "correlation_id": data.get("correlation_id"),
+                              "gateway_rpc_ok": data.get("gateway_rpc_ok") if "gateway_rpc_ok" in data else (data.get("gateway") or {}).get("rpc") if isinstance(data.get("gateway"), dict) else None,
+                              "primary": (data.get("after") or {}).get("primary") if isinstance(data.get("after"), dict) else (data.get("model") or {}).get("primary") if isinstance(data.get("model"), dict) else None,
+                              "telegram_outbound_sent": data.get("telegram_outbound_sent"),
+                          })
+                  except Exception as exc:
+                      row["state"] = f"invalid_{type(exc).__name__}"
+              result["receipts"].append(row)
+          print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
+          PY' > artifacts/remote-summary.json || true
+          fi
+          if [[ -s /tmp/pi-auth-repair-safe-output.log ]]; then
+            tail -n 200 /tmp/pi-auth-repair-safe-output.log > artifacts/remote-safe-output.log
+          fi
+          cat artifacts/remote-summary.json 2>/dev/null || true
+
+      - name: Upload secret-free recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: remote-pi-auth-repair-evidence
+          path: artifacts/*
+          if-no-files-found: warn
+          retention-days: 3
