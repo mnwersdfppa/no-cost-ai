@@ -69,24 +69,27 @@ jobs:
 
           manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
           assert manifest['project_id'] == 'dpllasnpfskyyyzebyal'
-          assert manifest['engine'] == 'openclaw-pattern-engine'
-          assert manifest['engine_version'] == 1
-          assert manifest['custom_auth_role'] == 'pi-gateway-client'
-          assert manifest['promotion_action_exposed'] is False
-          assert manifest['arbitrary_execution_allowed'] is False
-          assert manifest['secret_values_included'] is False
-          assert manifest['scheduler']['harvest'] == '*/15 * * * *'
-          assert manifest['scheduler']['score_refresh'] == '7 * * * *'
+          function = manifest['function']
+          assert function['name'] == 'openclaw-pattern-engine'
+          assert function['version'] == 1
+          assert function['custom_auth'] == 'scoped_pi_gateway_client_jwt'
+          assert function['promotion_action_exposed'] is False
+          assert function['verify_jwt'] is False
+          assert manifest['safety']['arbitrary_execution_allowed'] is False
+          assert manifest['safety']['provider_secret_returned'] is False
+          assert manifest['safety']['server_secret_returned'] is False
+          assert manifest['schedules']['openclaw-pattern-harvest-v1'] == '*/15 * * * *'
+          assert manifest['schedules']['openclaw-pattern-score-v1'] == '7 * * * *'
 
           expected_e2e = {
               'unauthenticated_status': 401,
               'authenticated_status': 200,
-              'resolve_status_read': 200,
-              'safe_observe': 200,
-              'duplicate_execution_key': 409,
-              'secret_like_payload': 400,
-              'executable_like_payload': 400,
-              'feedback': 200,
+              'capability_resolve_status': 200,
+              'safe_observation_status': 200,
+              'duplicate_execution_status': 409,
+              'secret_like_payload_status': 400,
+              'executable_payload_status': 400,
+              'feedback_status': 200,
           }
           assert manifest['e2e'] == expected_e2e
           assert manifest['cleanup']['temporary_users'] == 0
