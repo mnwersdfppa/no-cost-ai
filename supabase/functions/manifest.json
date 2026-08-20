@@ -21,6 +21,7 @@
       "auth_mode": "custom_pi_access_or_refresh_token",
       "entrypoint": "supabase/functions/pi-infra-bootstrap/index.ts",
       "refresh_token_minimum_chars": 8,
+      "auth_server_validation_required": true,
       "purpose": "Refresh scoped Pi sessions and return Guardian routing metadata without returning the OpenCode provider secret"
     },
     "pi-model-gateway-guardian": {
@@ -33,13 +34,14 @@
       "verify_jwt": true,
       "auth_mode": "platform_jwt_plus_pi_gateway_client_role",
       "entrypoint": "supabase/functions/pi-work-queue/index.ts",
-      "purpose": "Secret-safe work queue with deterministic recovery-task claims and bounded leases"
+      "purpose": "Secret-safe work queue with deterministic recovery-task claims, bounded leases and a DB-enforced task contract"
     },
     "pi-auth-refresh": {
       "verify_jwt": false,
       "auth_mode": "supabase_refresh_token_exchange",
       "entrypoint": "supabase/functions/pi-auth-refresh/index.ts",
       "refresh_token_minimum_chars": 8,
+      "auth_server_validation_required": true,
       "purpose": "Rotate the short-lived Pi access token without exposing server credentials"
     },
     "model-retry-worker": {
@@ -51,22 +53,23 @@
       "max_tasks_per_run": 2,
       "purpose": "Vault-authenticated server retry worker that persists safe Telegram delivery tasks through the existing single OpenClaw poller"
     },
-    "pi-recovery-installer-verified": {
-      "verify_jwt": false,
-      "auth_mode": "public_integrity_pinned_artifact",
-      "purpose": "Serve the SHA-pinned model/auth recovery installer; the installer contains no provider secret"
-    },
-    "pi-recovery-worker-installer-verified": {
-      "verify_jwt": false,
-      "auth_mode": "public_integrity_pinned_artifact",
-      "purpose": "Serve the SHA-pinned deterministic recovery queue worker installer"
-    },
     "pi-openclaw-master-recovery-installer": {
       "verify_jwt": false,
-      "auth_mode": "public_composed_integrity_snapshot",
+      "auth_mode": "public_composed_integrity_snapshot_source",
       "entrypoint": "supabase/functions/pi-openclaw-master-recovery-installer/index.ts",
+      "canonical": false,
+      "lifecycle_status": "verified_source",
+      "purpose": "Compose exact SHA-pinned current-format model/auth, deterministic recovery worker and outbound Telegram delivery installers"
+    },
+    "pi-openclaw-current-master-recovery-verified": {
+      "verify_jwt": false,
+      "auth_mode": "public_integrity_pinned_artifact",
+      "entrypoint": "supabase/functions/pi-openclaw-current-master-recovery-verified/index.ts",
       "canonical": true,
-      "purpose": "Canonical one-command Pi installer that composes exact SHA-pinned model/auth recovery and outbound Telegram delivery installers"
+      "version": 2,
+      "artifact_sha256": "d8e4792e759d898a2a3c7434e973b82fdeddd10e291ac1d4973276ece7216419",
+      "artifact_bytes": 2973,
+      "purpose": "Canonical one-command Pi installer wrapper for the current-format three-layer recovery stack"
     },
     "pi-openclaw-guardian-master-installer-verified": {
       "verify_jwt": false,
@@ -74,7 +77,7 @@
       "entrypoint": "supabase/functions/pi-openclaw-guardian-master-installer-verified/index.ts",
       "canonical": false,
       "lifecycle_status": "compatibility",
-      "purpose": "Compatibility installer retained for rollback; superseded by pi-openclaw-master-recovery-installer"
+      "purpose": "Compatibility installer retained for rollback"
     }
   },
   "canonical_supabase_client_key": "SUPABASE_PUBLISHABLE_KEYS.default",
@@ -89,17 +92,23 @@
   "canonical_server_retry_job": "openclaw-model-retry-worker-v2",
   "server_retry_auth": "supabase_vault_sha256_verification",
   "server_retry_raw_token_persisted": false,
+  "recovery_queue_contract_guard": "openclaw_recovery_task_contract_guard",
+  "recovery_queue_contract_migration": "supabase/migrations/20260820021200_enforce_openclaw_recovery_task_contract_v1.sql",
   "pi_refresh_token_minimum_chars": 8,
   "pi_refresh_current_format_e2e": true,
-  "canonical_pi_installer": "pi-openclaw-master-recovery-installer",
-  "canonical_pi_installer_url": "https://dpllasnpfskyyyzebyal.supabase.co/functions/v1/pi-openclaw-master-recovery-installer",
-  "canonical_pi_installer_sha256": "3293587b3d1e1692b9969b5db115a8403787e29c52c88a142bc082fc568d052b",
-  "canonical_pi_installer_bytes": 2346,
-  "canonical_model_auth_installer_sha256": "4c21d9eab6fff335950f8a4c8c7a064a20b9aa00aead487b811cee779e8ae947",
+  "canonical_pi_installer": "pi-openclaw-current-master-recovery-verified",
+  "canonical_pi_installer_source": "pi-openclaw-master-recovery-installer",
+  "canonical_pi_installer_url": "https://dpllasnpfskyyyzebyal.supabase.co/functions/v1/pi-openclaw-current-master-recovery-verified",
+  "canonical_pi_installer_sha256": "d8e4792e759d898a2a3c7434e973b82fdeddd10e291ac1d4973276ece7216419",
+  "canonical_pi_installer_bytes": 2973,
+  "canonical_model_auth_installer_sha256": "0754e14b097578edfc2659390456162f88053c70d9610578d686438faa389f54",
+  "canonical_recovery_worker_installer_sha256": "56094db3aeb87a757d433f29e8857fdde59d29a476415bd7928e6a218b086b92",
   "canonical_telegram_delivery_installer_sha256": "1db248ffbc0fea0bf22bcf17e2908134c9554f64539e1fe908dc0e2939268e97",
   "compatibility_pi_installer": "pi-openclaw-guardian-master-installer-verified",
   "legacy_anon_fallback": false,
   "vercel_canonical_auth": "connected_connector",
+  "vercel_visible_project_count": 0,
+  "vercel_runtime_worker": false,
   "vercel_raw_token_fallback": false,
   "secret_values_embedded": false,
   "paid_provider_calls": false,
