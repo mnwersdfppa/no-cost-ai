@@ -1,13 +1,13 @@
 {
   "project_id": "dpllasnpfskyyyzebyal",
-  "recorded_at": "2026-08-20T01:20:26Z",
+  "recorded_at": "2026-08-20T01:31:13Z",
   "canonical_model_component": "edge.pi-model-gateway-guardian",
   "canonical_model_route": "supabase.opencode_model_guardian",
   "canonical_base_url": "https://dpllasnpfskyyyzebyal.supabase.co/functions/v1/pi-model-gateway-guardian/v1",
-  "canonical_pi_installer": "pi-openclaw-guardian-master-installer-verified",
-  "canonical_pi_installer_url": "https://dpllasnpfskyyyzebyal.supabase.co/functions/v1/pi-openclaw-guardian-master-installer-verified",
-  "canonical_pi_installer_sha256": "bc938153e8b6bfe90dabb0471d34eaebef595aca6f5ec94db64d1b206cd8ce39",
-  "canonical_pi_installer_bytes": 3902,
+  "canonical_pi_installer": "pi-openclaw-master-recovery-installer",
+  "canonical_pi_installer_url": "https://dpllasnpfskyyyzebyal.supabase.co/functions/v1/pi-openclaw-master-recovery-installer",
+  "canonical_pi_installer_sha256": "e44df620e78778e7711f67783ed64fa3639761ce34554e50eda46f7589096179",
+  "canonical_pi_installer_bytes": 2350,
   "functions": {
     "pi-model-gateway-guardian": {
       "version": 1,
@@ -43,11 +43,26 @@
       "ezbr_sha256": "cd354b3443bed92b40fddb9449123fc9966c8312866ac72e22426a170c434ec6",
       "source": "supabase/functions/pi-work-queue/index.ts"
     },
+    "pi-openclaw-master-recovery-installer": {
+      "version": 3,
+      "status": "ACTIVE",
+      "verify_jwt": false,
+      "auth_mode": "public_composed_integrity_snapshot",
+      "canonical": true,
+      "ezbr_sha256": "08b74af34fce597a72760aebcdef32a02986109236ad005a121e9be324070f8f",
+      "artifact_sha256": "e44df620e78778e7711f67783ed64fa3639761ce34554e50eda46f7589096179",
+      "artifact_bytes": 2350,
+      "base_recovery_sha256": "4c21d9eab6fff335950f8a4c8c7a064a20b9aa00aead487b811cee779e8ae947",
+      "telegram_delivery_installer_sha256": "1db248ffbc0fea0bf22bcf17e2908134c9554f64539e1fe908dc0e2939268e97",
+      "source": "supabase/functions/pi-openclaw-master-recovery-installer/index.ts"
+    },
     "pi-openclaw-guardian-master-installer-verified": {
       "version": 1,
       "status": "ACTIVE",
       "verify_jwt": false,
       "auth_mode": "public_integrity_pinned_artifact",
+      "canonical": false,
+      "lifecycle_status": "compatibility",
       "ezbr_sha256": "db0df75fe5f729c2a52689c4b371272aec36df81e2d080753ce128ca3c5d5fe5",
       "artifact_sha256": "bc938153e8b6bfe90dabb0471d34eaebef595aca6f5ec94db64d1b206cd8ce39",
       "artifact_bytes": 3902,
@@ -59,11 +74,12 @@
     "pi_model_gateway_guardian_e2e": "pass",
     "pi_recovery_queue_api_e2e": "pass",
     "pi_auth_refresh_current_format_e2e": "pass",
-    "pi_guardian_master_installer_integrity": "pass"
+    "pi_master_recovery_installer_integrity": "pass"
   },
   "physical_gates": {
     "pi_openclaw_model_activation": "pending",
     "pi_recovery_queue_worker_active": "pending",
+    "pi_telegram_result_delivery_worker": "pending_optional",
     "tailscale_pi_enrollment": "pending_optional"
   },
   "security": {
@@ -76,6 +92,8 @@
     "queue_ack_on_total_failure": true,
     "pi_refresh_token_minimum_chars": 8,
     "master_installer_nested_sha_verification": true,
-    "master_installer_raw_provider_assignment": false
+    "master_installer_raw_provider_assignment": false,
+    "curl_pipe_shell": false,
+    "old_master_installer_enabled_in_ssot": false
   }
 }
