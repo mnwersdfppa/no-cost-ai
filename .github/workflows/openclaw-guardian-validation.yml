@@ -1,0 +1,107 @@
+name: OpenClaw Guardian validation
+
+on:
+  pull_request:
+    paths:
+      - "supabase/functions/pi-infra-bootstrap/**"
+      - "supabase/functions/pi-model-gateway-guardian/**"
+      - "supabase/functions/pi-work-queue/**"
+      - "supabase/migrations/*openclaw_guardian*"
+      - "pi/openclaw-recovery-queue-worker.py"
+      - "pi/install-openclaw-recovery-queue-worker.sh"
+      - ".github/workflows/openclaw-guardian-validation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openclaw-guardian-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Validate Pi worker and installer syntax
+        run: |
+          python3 -m py_compile pi/openclaw-recovery-queue-worker.py
+          bash -n pi/install-openclaw-recovery-queue-worker.sh
+
+      - name: Validate Edge Function modules
+        run: |
+          deno check supabase/functions/pi-infra-bootstrap/index.ts
+          deno check supabase/functions/pi-model-gateway-guardian/index.ts
+          deno check supabase/functions/pi-work-queue/index.ts
+
+      - name: Verify auth boundary configuration
+        run: |
+          test "$(tr -d '[:space:]' < supabase/functions/pi-infra-bootstrap/config.toml)" = "verify_jwt=false"
+          test "$(tr -d '[:space:]' < supabase/functions/pi-model-gateway-guardian/config.toml)" = "verify_jwt=false"
+          test "$(tr -d '[:space:]' < supabase/functions/pi-work-queue/config.toml)" = "verify_jwt=true"
+
+      - name: Reject raw-provider-key and duplicate-poller regressions
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+
+          files = [
+              Path("supabase/functions/pi-infra-bootstrap/index.ts"),
+              Path("supabase/functions/pi-model-gateway-guardian/index.ts"),
+              Path("supabase/functions/pi-work-queue/index.ts"),
+              Path("supabase/migrations/202608200001_openclaw_guardian_reconciliation.sql"),
+          ]
+          text = "\n".join(path.read_text(encoding="utf-8") for path in files)
+
+          forbidden = {
+              "raw OpenCode key returned to Pi": r"OPENCODE_API_KEY\s*:",
+              "legacy Tailscale env return": r"TAILSCALE_AUTHKEY\s*:",
+              "Telegram polling duplication": r"getUpdates|start_second_telegram_poller\s*:\s*true",
+              "automatic paid fallback": r"paid_fallback(?:_enabled)?\s*[:=]\s*true",
+          }
+          failures = [label for label, pattern in forbidden.items() if re.search(pattern, text, re.I)]
+
+          secret_patterns = [
+              r"sk-proj-[A-Za-z0-9_-]{20,}",
+              r"ghp_[A-Za-z0-9]{20,}",
+              r"tskey-(?:auth|api|client)-[A-Za-z0-9_-]{20,}",
+          ]
+          for pattern in secret_patterns:
+              if re.search(pattern, text):
+                  failures.append(f"secret-like literal matched: {pattern}")
+
+          required = [
+              "pi-model-gateway-guardian",
+              "surface_raw_provider_error_to_telegram",
+              "claim_openclaw_recovery_task",
+              "provider_secret_returned: false",
+          ]
+          for marker in required:
+              if marker not in text:
+                  failures.append(f"required marker missing: {marker}")
+
+          if failures:
+              print("\n".join(f"FAIL: {item}" for item in failures), file=sys.stderr)
+              raise SystemExit(1)
+          print("Guardian validation passed")
+          PY
+
+      - name: Confirm validation-only workflow
+        run: |
+          ! grep -RniE 'supabase functions deploy|vercel deploy|gh pr merge|git push' .github/workflows/openclaw-guardian-validation.yml
