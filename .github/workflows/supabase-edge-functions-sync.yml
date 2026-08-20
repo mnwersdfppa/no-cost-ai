@@ -27,7 +27,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: supabase-edge-functions-sync-\${{ github.ref }}
+  group: supabase-edge-functions-sync-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -38,7 +38,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     outputs:
-      function_list: \${{ steps.manifest.outputs.function_list }}
+      function_list: ${{ steps.manifest.outputs.function_list }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -117,7 +117,7 @@ jobs:
       - name: Upload non-secret source receipt
         uses: actions/upload-artifact@v4
         with:
-          name: supabase-edge-source-receipt-\${{ github.sha }}
+          name: supabase-edge-source-receipt-${{ github.sha }}
           path: /tmp/supabase-source-receipt.json
           if-no-files-found: error
           retention-days: 14
@@ -128,7 +128,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      SUPABASE_ACCESS_TOKEN: \${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -198,7 +198,7 @@ jobs:
       - name: Upload deployment receipt
         uses: actions/upload-artifact@v4
         with:
-          name: supabase-edge-deployment-receipt-\${{ github.sha }}
+          name: supabase-edge-deployment-receipt-${{ github.sha }}
           path: supabase-edge-deployment-receipt.json
           if-no-files-found: error
           retention-days: 14
