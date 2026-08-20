@@ -5,6 +5,7 @@ on:
     paths:
       - 'supabase/functions/**'
       - 'supabase/migrations/**'
+      - 'pi/install-openclaw-docker-compat.sh'
       - '.github/workflows/normalize-final-bridge-branch.yml'
   push:
     branches:
@@ -12,6 +13,7 @@ on:
     paths:
       - 'supabase/functions/**'
       - 'supabase/migrations/**'
+      - 'pi/install-openclaw-docker-compat.sh'
       - '.github/workflows/normalize-final-bridge-branch.yml'
   workflow_dispatch:
 
@@ -59,7 +61,16 @@ jobs:
           )
           assert manifest['canonical_supabase_server_key'] == 'SUPABASE_SECRET_KEYS.default'
           assert manifest['canonical_model_gateway'] == 'pi-model-gateway-guardian'
-          assert manifest['canonical_pi_installer'] == 'pi-openclaw-current-master-recovery-verified'
+          assert manifest['canonical_pi_installer'] == 'pi-openclaw-docker-compat-installer-verified'
+          assert manifest['native_recovery_installer'] == 'pi-openclaw-current-master-recovery-verified'
+          assert manifest['canonical_container_bootstrap'] == 'pi-container-bootstrap'
+          assert manifest['canonical_container_bootstrap_version'] == 3
+          assert manifest['canonical_container_platforms'] == ['linux/amd64', 'linux/arm64']
+          assert re.fullmatch(r'sha256:[0-9a-f]{64}', manifest['canonical_container_digest'])
+          assert manifest['docker_qemu_default'] is False
+          assert manifest['docker_privileged_default'] is False
+          assert manifest['docker_socket_mount'] is False
+          assert manifest['docker_provider_secret_mount'] is False
           assert manifest['paid_provider_calls'] is False
           assert manifest['telegram_single_poller_enforced'] is True
 
@@ -84,6 +95,16 @@ jobs:
                   'bridge_record_runtime_key_selection',
                   'production_auto_route: false',
               ),
+              'pi-container-bootstrap': (
+                  'typedExecutionPlan',
+                  'docker_socket_mount: false',
+                  'provider_secret_mount: false',
+              ),
+              'pi-openclaw-docker-compat-installer-verified': (
+                  'IMAGE_DIGEST',
+                  'docker_registry_secret_returned',
+                  'x-second-telegram-poller',
+              ),
           }
           for name, needles in required.items():
               path = Path(f'supabase/functions/{name}/index.ts')
@@ -93,6 +114,26 @@ jobs:
                   assert needle in text, f'{name}: missing {needle}'
               for forbidden in ('Deno.Command(', 'child_process', '/bin/sh', 'eval('):
                   assert forbidden not in text, f'{name}: forbidden {forbidden}'
+
+          installer = Path('pi/install-openclaw-docker-compat.sh')
+          assert installer.is_file()
+          installer_text = installer.read_text(encoding='utf-8')
+          for marker in (
+              'NoNewPrivileges=true',
+              'ProtectSystem=strict',
+              'provider_secret_exported": False',
+              'docker_registry_secret_exported": False',
+              'second_telegram_poller_created": False',
+              'paid_api_fallback": False',
+          ):
+              assert marker in installer_text, marker
+          for pattern in (
+              r'curl\s*\|\s*(?:sh|bash)',
+              r'docker\s+run[^\n]*--privileged',
+              r'/var/run/docker\.sock',
+              r'getUpdates',
+          ):
+              assert re.search(pattern, installer_text, re.IGNORECASE) is None, pattern
 
           # Historical deployed snapshots remain rollback evidence only.
           assert Path('supabase/functions/deployed/final-v1').is_dir()
