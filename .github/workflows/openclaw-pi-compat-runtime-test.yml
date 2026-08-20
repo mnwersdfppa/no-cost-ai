@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
 
@@ -106,10 +106,15 @@ jobs:
             --tmpfs /tmp:size=16m,mode=1777 \
             --volume "$PWD/evidence/no-network:/data" \
             openclaw-pi-compat:test \
-            > evidence/no-network/stdout.json 2> evidence/no-network/stderr.txt
+            > /tmp/openclaw-no-network-stdout.json \
+            2> /tmp/openclaw-no-network-stderr.txt
           code=$?
           set -e
           test "$code" -eq 2
+          sudo chown -R "$(id -u):$(id -g)" evidence/no-network
+          install -m 0600 /tmp/openclaw-no-network-stdout.json evidence/no-network/stdout.json
+          install -m 0600 /tmp/openclaw-no-network-stderr.txt evidence/no-network/stderr.txt
+          rm -f /tmp/openclaw-no-network-stdout.json /tmp/openclaw-no-network-stderr.txt
           python - <<'PY'
           import json
           import pathlib
@@ -137,7 +142,7 @@ jobs:
           from datetime import datetime, timezone
 
           receipt = {
-              'schema_version': 1,
+              'schema_version': 2,
               'generated_at': datetime.now(timezone.utc).isoformat(),
               'repository': os.environ['GITHUB_REPOSITORY'],
               'commit_sha': os.environ['GITHUB_SHA'],
@@ -171,5 +176,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ! grep -nE 'docker push|packages: write|gh pr merge|vercel --prod|supabase functions deploy|git push .*main' \
-            .github/workflows/openclaw-pi-compat-runtime-test.yml
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/openclaw-pi-compat-runtime-test.yml')
+          text = path.read_text(encoding='utf-8')
+          runtime = text.split('- name: Confirm workflow cannot publish or merge', 1)[0]
+          forbidden = (
+              'docker' + ' push',
+              'packages:' + ' write',
+              'gh pr' + ' merge',
+              'vercel ' + '--prod',
+              'supabase functions ' + 'deploy',
+              'git push ' + 'main',
+          )
+          assert all(marker not in runtime for marker in forbidden)
+          PY
