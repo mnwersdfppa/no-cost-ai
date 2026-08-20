@@ -110,7 +110,7 @@ begin
     update public.bridge_route_registry
     set priority=15,
         enabled=true,
-        mode='compatibility',
+        mode='free_only',
         notes='Healthy rollback route retained; not selected as canonical after Guardian E2E.',
         last_checked_at=now(),
         updated_at=now()
