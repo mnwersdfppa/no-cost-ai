@@ -6,6 +6,7 @@ on:
       - 'docs/pattern-to-skill-evolution-system.md'
       - 'supabase/functions/pattern-observation-intake/**'
       - 'supabase/functions/pattern-skill-readiness/**'
+      - 'supabase/functions/pattern-research-worker/**'
       - 'supabase/functions/deployment-manifest-pattern-skill.json'
       - 'supabase/migrations/20260820003000_pattern_to_skill_schema.sql'
       - 'supabase/migrations/20260820003100_pattern_to_skill_functions.sql'
@@ -20,6 +21,7 @@ on:
       - 'docs/pattern-to-skill-evolution-system.md'
       - 'supabase/functions/pattern-observation-intake/**'
       - 'supabase/functions/pattern-skill-readiness/**'
+      - 'supabase/functions/pattern-research-worker/**'
       - 'supabase/functions/deployment-manifest-pattern-skill.json'
       - 'supabase/migrations/20260820003000_pattern_to_skill_schema.sql'
       - 'supabase/migrations/20260820003100_pattern_to_skill_functions.sql'
@@ -50,13 +52,17 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Type-check retired compatibility endpoints
+      - name: Type-check canonical and compatibility endpoints
         run: |
           set -euo pipefail
           deno check supabase/functions/pattern-observation-intake/index.ts
           deno check supabase/functions/pattern-skill-readiness/index.ts
+          deno check supabase/functions/pattern-research-worker/index.ts
           grep -F 'retired_use_openclaw_pattern_engine_observe' supabase/functions/pattern-observation-intake/index.ts
           grep -F 'retired_use_openclaw_pattern_engine_status' supabase/functions/pattern-skill-readiness/index.ts
+          grep -F 'bridge_verify_pattern_research_worker_token' supabase/functions/pattern-research-worker/index.ts
+          grep -F 'repository_content_downloaded: false' supabase/functions/pattern-research-worker/index.ts
+          grep -F 'automatic_skill_activation: false' supabase/functions/pattern-research-worker/index.ts
 
       - name: Validate manifest and migration contracts
         run: |
@@ -76,12 +82,24 @@ jobs:
           assert architecture['single_candidate_authority'] is True
           assert manifest['functions']['pattern-observation-intake']['status'] == 'RETIRED_410'
           assert manifest['functions']['pattern-skill-readiness']['status'] == 'RETIRED_410'
+          worker = manifest['functions']['pattern-research-worker']
+          assert worker['status'] == 'ACTIVE'
+          assert worker['enabled_providers'] == ['github', 'internal_catalog']
+          assert worker['github_metadata_only'] is True
+          assert worker['repository_content_download'] is False
+          assert worker['readme_execution'] is False
+          assert worker['automatic_install'] is False
+          assert worker['automatic_skill_activation'] is False
           assert manifest['scheduler']['canonical_sweep_job']['schedule'] == '19 * * * *'
           assert manifest['scheduler']['research_housekeeping_job']['schedule'] == '24 * * * *'
+          research_job = manifest['scheduler']['allowlisted_research_worker_job']
+          assert research_job['schedule'] == '6,21,36,51 * * * *'
+          assert research_job['providers'] == ['github', 'internal_catalog']
           assert manifest['verified_state']['internal_catalog_tasks_completed'] == 13
           assert manifest['verified_state']['redundant_external_tasks_suppressed'] == 52
           assert manifest['verified_state']['research_tasks_queued'] == 0
           assert manifest['verified_state']['research_tasks_failed'] == 0
+          assert manifest['verified_state']['allowlisted_worker_failed'] == 0
           assert manifest['notion_migration']['active_items_copied'] == 7
           assert manifest['notion_migration']['completed_items_retained'] == 3
           assert manifest['notion_migration']['source_retained'] is True
@@ -151,18 +169,30 @@ jobs:
               for path in (
                   'supabase/functions/pattern-observation-intake/index.ts',
                   'supabase/functions/pattern-skill-readiness/index.ts',
+                  'supabase/functions/pattern-research-worker/index.ts',
               )
           )
           for pattern in (
-              r'Deno\.Command\s*\(', r'new\s+Function\s*\(', r'\beval\s*\(',
-              r'fetch\s*\([^\n]*getUpdates', r'curl\s*\|\s*(?:sh|bash)',
+              r'Deno\.Command\s*\(',
+              r'new\s+Function\s*\(',
+              r'\beval\s*\(',
+              r'fetch\s*\([^\n]*getUpdates',
+              r'curl\s*\|\s*(?:sh|bash)',
           ):
               assert re.search(pattern, edge, re.IGNORECASE) is None, pattern
+          assert 'api.github.com/search/repositories' in edge
+          assert 'repository_content_downloaded: false' in edge
+          assert 'readme_executed: false' in edge
+          assert 'automatic_install: false' in edge
+          assert 'automatic_skill_activation: false' in edge
 
           workflow = Path('.github/workflows/pattern-skill-control-plane-validation.yml').read_text(encoding='utf-8')
           for marker in (
-              'supabase functions ' + 'deploy', 'vercel ' + '--prod',
-              'gh pr ' + 'merge', 'git push ' + 'origin main', 'contents: write',
+              'supabase functions ' + 'deploy',
+              'vercel ' + '--prod',
+              'gh pr ' + 'merge',
+              'git push ' + 'origin main',
+              'contents:' + ' write',
           ):
               assert marker not in workflow, marker
           assert 'contents: read' in workflow
