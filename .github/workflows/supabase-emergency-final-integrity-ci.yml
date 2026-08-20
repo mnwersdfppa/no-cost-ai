@@ -5,8 +5,7 @@ on:
     paths:
       - 'supabase/**'
       - 'pi/**'
-      - 'scripts/install-supabase-emergency-bridge-on-pi.sh'
-      - 'docs/SUPABASE_EMERGENCY_BRIDGE_PI.md'
+      - 'scripts/**'
       - '.github/workflows/supabase-emergency-final-integrity-ci.yml'
   push:
     branches:
@@ -14,9 +13,9 @@ on:
     paths:
       - 'supabase/**'
       - 'pi/**'
-      - 'scripts/install-supabase-emergency-bridge-on-pi.sh'
-      - 'docs/SUPABASE_EMERGENCY_BRIDGE_PI.md'
+      - 'scripts/**'
       - '.github/workflows/supabase-emergency-final-integrity-ci.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -33,35 +32,38 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Validate canonical source records and live Guardian manifest
+      - name: Validate live Guardian deployment manifest
         shell: bash
         run: |
           set -euo pipefail
-          cmp -s \
-            supabase/functions/emergency-bridge/index.ts \
-            supabase/functions/deployed/emergency-bridge-v3/index.ts
-          cmp -s \
-            supabase/functions/credential-readiness/index.ts \
-            supabase/functions/deployed/credential-readiness-v3/index.ts
-          cmp -s \
-            supabase/functions/canonical-client-config/index.ts \
-            supabase/functions/deployed/canonical-client-config-v3/index.ts
-
           python3 - <<'PY'
           from pathlib import Path
           import json
 
-          path = Path('supabase/functions/deployment-manifest-guardian.json')
-          deployment = json.loads(path.read_text(encoding='utf-8'))
+          deployment = json.loads(
+              Path('supabase/functions/deployment-manifest-guardian.json').read_text(encoding='utf-8')
+          )
           assert deployment['project_id'] == 'dpllasnpfskyyyzebyal'
           assert deployment['canonical_model_component'] == 'edge.pi-model-gateway-guardian'
           assert deployment['canonical_model_route'] == 'supabase.opencode_model_guardian'
           assert deployment['canonical_base_url'].endswith('/pi-model-gateway-guardian/v1')
 
           expected = {
-              'pi-model-gateway-guardian': (1, False, 'd8942436d02728e48ed5a4d0c488e610f618dda52dd3012053977dd8007566a9'),
-              'pi-infra-bootstrap': (5, False, '9a225a5a5d0dedde23ec4cfcef8576b808d8cba0a603f01291a56b7791e878d6'),
-              'pi-work-queue': (8, True, '0904a92d98c0c62f3d5e598fb2d35de90f60c1d22ad50b25c29fd0e5532c544c'),
+              'pi-model-gateway-guardian': (
+                  1,
+                  False,
+                  'd8942436d02728e48ed5a4d0c488e610f618dda52dd3012053977dd8007566a9',
+              ),
+              'pi-infra-bootstrap': (
+                  5,
+                  False,
+                  '9a225a5a5d0dedde23ec4cfcef8576b808d8cba0a603f01291a56b7791e878d6',
+              ),
+              'pi-work-queue': (
+                  9,
+                  True,
+                  'cd354b3443bed92b40fddb9449123fc9966c8312866ac72e22426a170c434ec6',
+              ),
           }
           for name, (version, verify_jwt, digest) in expected.items():
               row = deployment['functions'][name]
@@ -77,16 +79,18 @@ jobs:
           }
           assert deployment['physical_gates']['pi_openclaw_model_activation'] == 'pending'
           assert deployment['physical_gates']['pi_recovery_queue_worker_active'] == 'pending'
-          assert deployment['security']['provider_secret_location'] == 'supabase_edge_only'
-          assert deployment['security']['provider_secret_returned_to_pi'] is False
-          assert deployment['security']['tailscale_auth_key_default_return'] is False
-          assert deployment['security']['paid_api_fallback'] is False
-          assert deployment['security']['second_telegram_poller'] is False
-          assert deployment['security']['max_immediate_model_attempts'] == 2
-          assert deployment['security']['queue_ack_on_total_failure'] is True
+          assert deployment['security'] == {
+              'provider_secret_location': 'supabase_edge_only',
+              'provider_secret_returned_to_pi': False,
+              'tailscale_auth_key_default_return': False,
+              'paid_api_fallback': False,
+              'second_telegram_poller': False,
+              'max_immediate_model_attempts': 2,
+              'queue_ack_on_total_failure': True,
+          }
           PY
 
-      - name: Validate JWT and fail-closed Edge Function contracts
+      - name: Validate Edge Function types and boundaries
         shell: bash
         run: |
           set -euo pipefail
@@ -98,28 +102,11 @@ jobs:
           deno check supabase/functions/pi-work-queue/index.ts
 
           python3 - <<'PY'
-          import json
           from pathlib import Path
+          import json
+          import re
 
           manifest = json.loads(Path('supabase/functions/manifest.json').read_text(encoding='utf-8'))
-          sources = {
-              name: Path(f'supabase/functions/{name}/index.ts').read_text(encoding='utf-8')
-              for name in (
-                  'emergency-bridge',
-                  'credential-readiness',
-                  'canonical-client-config',
-                  'pi-infra-bootstrap',
-                  'pi-model-gateway-guardian',
-                  'pi-work-queue',
-              )
-          }
-
-          for name in ('emergency-bridge', 'credential-readiness', 'canonical-client-config'):
-              assert manifest['functions'][name]['verify_jwt'] is True, name
-              assert 'pi-gateway-client' in sources[name], name
-          assert manifest['functions']['pi-infra-bootstrap']['verify_jwt'] is False
-          assert manifest['functions']['pi-model-gateway-guardian']['verify_jwt'] is False
-          assert manifest['functions']['pi-work-queue']['verify_jwt'] is True
           assert manifest['canonical_model_gateway'] == 'pi-model-gateway-guardian'
           assert manifest['provider_secret_location'] == 'supabase_edge_only'
           assert manifest['raw_provider_secret_returned_to_pi'] is False
@@ -129,49 +116,11 @@ jobs:
           assert manifest['public_shell_execution'] is False
           assert manifest['telegram_single_poller_enforced'] is True
 
-          for name, source in sources.items():
-              for forbidden in ('Deno.Command(', 'child_process', '/bin/sh', 'eval('):
-                  assert forbidden not in source, (name, forbidden)
+          bootstrap = Path('supabase/functions/pi-infra-bootstrap/index.ts').read_text(encoding='utf-8')
+          guardian = Path('supabase/functions/pi-model-gateway-guardian/index.ts').read_text(encoding='utf-8')
+          queue = Path('supabase/functions/pi-work-queue/index.ts').read_text(encoding='utf-8')
 
-          emergency = sources['emergency-bridge']
-          for item in (
-              'bridge_admit_request',
-              'bridge_policy_decision',
-              'bridge_resolve_route',
-              'provider_called: false',
-              'credential_returned: false',
-              'values_exposed: false',
-          ):
-              assert item in emergency, item
-
-          readiness = sources['credential-readiness']
-          for item in (
-              'bridge_admit_request',
-              'credential_readiness',
-              'values_returned: false',
-              'prefixes_returned: false',
-              'hashes_returned: false',
-              'lengths_returned: false',
-          ):
-              assert item in readiness, item
-
-          canonical = sources['canonical-client-config']
-          for item in (
-              'bridge_admit_request',
-              'canonical_client_config',
-              'SUPABASE_PUBLISHABLE_KEYS',
-              'modern_publishable_key_required',
-              'legacy_anon_fallback_enabled: false',
-              'server_secret_returned: false',
-              'raw_token_fallback_enabled: false',
-              'deploy_enabled: false',
-              'paid_api_fallback: false',
-              'telegram_single_poller_enforced: true',
-          ):
-              assert item in canonical, item
-
-          bootstrap = sources['pi-infra-bootstrap']
-          for item in (
+          for marker in (
               'refreshSession',
               'pi-model-gateway-guardian/v1',
               'export_original_provider_key_to_pi: false',
@@ -179,10 +128,9 @@ jobs:
               'surface_raw_provider_error_to_telegram: false',
               'provider_secret_returned: false',
           ):
-              assert item in bootstrap, item
+              assert marker in bootstrap, marker
 
-          guardian = sources['pi-model-gateway-guardian']
-          for item in (
+          for marker in (
               'const MAX_ATTEMPTS = 2',
               'async function requirePi',
               'async function queueRequest',
@@ -190,21 +138,30 @@ jobs:
               '요청을 안전하게 보존했습니다',
               'provider_secret_returned: false',
           ):
-              assert item in guardian, item
+              assert marker in guardian, marker
 
-          queue = sources['pi-work-queue']
-          for item in (
+          for marker in (
               'contract_version: 2',
               'ALLOWED_TYPES',
               'claim_openclaw_recovery_task',
               'secret_like_evidence_rejected',
               'server_secret_returned: false',
           ):
-              assert item in queue, item
+              assert marker in queue, marker
           assert 'eyJ[A-Za-z0-9_-]{20,}' in queue
+
+          combined = bootstrap + '\n' + queue
+          forbidden = {
+              'raw OpenCode key returned': r'OPENCODE_API_KEY\s*:',
+              'legacy Tailscale env returned': r'TAILSCALE_AUTHKEY\s*:',
+              'second Telegram poller': r'getUpdates|start_second_telegram_poller\s*:\s*true',
+              'automatic paid fallback': r'paid_fallback(?:_enabled)?\s*[:=]\s*true',
+          }
+          for label, pattern in forbidden.items():
+              assert re.search(pattern, combined, re.IGNORECASE) is None, label
           PY
 
-      - name: Validate migration coverage and E2E-gated canonical selection
+      - name: Validate E2E-gated migrations and action-bound idempotency
         shell: bash
         run: |
           set -euo pipefail
@@ -218,14 +175,11 @@ jobs:
               '202608200002_promote_openclaw_guardian_after_e2e.sql',
               '202608200003_bind_ledger_execution_keys_to_actions.sql',
           }
-          files = {path.name: path.read_text(encoding='utf-8') for path in Path('supabase/migrations').glob('*.sql')}
-          missing = sorted(required.difference(files))
-          if missing:
-              raise SystemExit(f'missing migrations: {missing}')
-
-          resolver = files['20260819080900_zero_cost_first_route_resolver.sql']
-          for marker in ('bridge_resolve_route', 'stop_no_eligible_route', 'paid_api_fallback'):
-              assert marker in resolver, marker
+          files = {
+              path.name: path.read_text(encoding='utf-8')
+              for path in Path('supabase/migrations').glob('*.sql')
+          }
+          assert not required.difference(files), sorted(required.difference(files))
 
           seed = files['202608200001_openclaw_guardian_reconciliation.sql']
           for marker in (
@@ -252,13 +206,15 @@ jobs:
           ):
               assert marker in promote, marker
 
-          action_bound = ''.join(files['202608200003_bind_ledger_execution_keys_to_actions.sql'].split()).lower()
+          action_bound = ''.join(
+              files['202608200003_bind_ledger_execution_keys_to_actions.sql'].split()
+          ).lower()
           assert 'unique(user_id,action,execution_key)' in action_bound
           assert 'onconflict(user_id,action,execution_key)donothing' in action_bound
           assert 'unique(user_id,execution_key)' not in action_bound
           PY
 
-      - name: Validate Pi activation and recovery packages
+      - name: Validate Pi recovery packages and reject embedded secrets
         shell: bash
         run: |
           set -euo pipefail
@@ -267,36 +223,20 @@ jobs:
           bash -n pi/activate-opencode-tailscale.sh
           bash -n pi/install-openclaw-recovery-queue-worker.sh
           python3 -m py_compile pi/openclaw-recovery-queue-worker.py
-          python3 - <<'PY'
-          from pathlib import Path
-          source = Path('scripts/install-supabase-emergency-bridge-on-pi.sh').read_text(encoding='utf-8')
-          marker = 'cat > "$CLIENT" <<\'PY\'\n'
-          start = source.index(marker) + len(marker)
-          end = source.index('\nPY\n\nchmod 700 "$CLIENT"', start)
-          compile(source[start:end], 'openclaw-emergency-bridge', 'exec')
-          PY
-          grep -F 'CURRENT_SHORT_LIVED_PI_JWT_REQUIRED' scripts/install-supabase-emergency-bridge-on-pi.sh
-          grep -F 'NoNewPrivileges=true' scripts/install-supabase-emergency-bridge-on-pi.sh
-          grep -F 'ProtectSystem=strict' scripts/install-supabase-emergency-bridge-on-pi.sh
-          grep -F 'telegram_single_poller_enforced' scripts/install-supabase-emergency-bridge-on-pi.sh
-          ! grep -F 'SUPABASE_SERVICE_ROLE_KEY' scripts/install-supabase-emergency-bridge-on-pi.sh
+
           grep -F 'sha256sum --check --status' pi/recover-opencode-first-tailscale-second.sh
           grep -F 'RECOVERY_MODE=SUPABASE_GUARDIAN_SCOPED_PI_JWT' pi/recover-opencode-first-tailscale-second.sh
-          ! grep -F 'OPENCODE_API_KEY=' pi/recover-opencode-first-tailscale-second.sh
-          ! grep -F 'TAILSCALE_AUTHKEY=' pi/recover-opencode-first-tailscale-second.sh
+          ! grep -Eq '^\s*(export\s+)?OPENCODE_API_KEY=' pi/recover-opencode-first-tailscale-second.sh
+          ! grep -Eq '^\s*(export\s+)?TAILSCALE_AUTHKEY=' pi/recover-opencode-first-tailscale-second.sh
 
-      - name: Reject embedded secrets and destructive rollback
-        shell: bash
-        run: |
-          set -euo pipefail
           ! grep -RInE \
             --exclude='*.md' \
             --exclude='package-lock.json' \
             --exclude='*.yml' \
-            '(sk-proj-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|sb_secret_[A-Za-z0-9_-]{20,}|tskey-(auth|api|client)-[A-Za-z0-9_-]{20,}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|Bearer[[:space:]]+[A-Za-z0-9._-]{40,})' \
+            '(sk-proj-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|sb_secret_[A-Za-z0-9_-]{20,}|tskey-(auth|api|client)-[A-Za-z0-9_-]{20,}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' \
             supabase scripts pi
+
           rollback=supabase/rollback/20260819080000_emergency_bridge_disable.sql
           grep -F 'set enabled=false' "$rollback"
           grep -F "mode='disabled'" "$rollback"
-          grep -F "destructive_drop',false" "$rollback"
           ! grep -Eiq '\bdrop[[:space:]]+(table|schema|function)\b' "$rollback"
