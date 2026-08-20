@@ -1,6 +1,6 @@
 {
   "project_id": "dpllasnpfskyyyzebyal",
-  "recorded_at": "2026-08-20T00:52:48Z",
+  "recorded_at": "2026-08-20T01:20:26Z",
   "canonical_model_component": "edge.pi-model-gateway-guardian",
   "canonical_model_route": "supabase.opencode_model_guardian",
   "canonical_base_url": "https://dpllasnpfskyyyzebyal.supabase.co/functions/v1/pi-model-gateway-guardian/v1",
@@ -18,12 +18,22 @@
       "source": "supabase/functions/pi-model-gateway-guardian/index.ts"
     },
     "pi-infra-bootstrap": {
-      "version": 5,
+      "version": 7,
       "status": "ACTIVE",
       "verify_jwt": false,
       "auth_mode": "custom_pi_access_or_refresh_token",
-      "ezbr_sha256": "9a225a5a5d0dedde23ec4cfcef8576b808d8cba0a603f01291a56b7791e878d6",
+      "refresh_token_minimum_chars": 8,
+      "ezbr_sha256": "35781ccb3a2209fba93b80de4f4d5843546ad65bb9bb18b76332cdcc9be8911e",
       "source": "supabase/functions/pi-infra-bootstrap/index.ts"
+    },
+    "pi-auth-refresh": {
+      "version": 5,
+      "status": "ACTIVE",
+      "verify_jwt": false,
+      "auth_mode": "supabase_refresh_token_exchange",
+      "refresh_token_minimum_chars": 8,
+      "ezbr_sha256": "aa44010cee4d26dbd35774bc14c664f648e3c5e0f45e7ed83e0004fe1da82b8c",
+      "source": "supabase/functions/pi-auth-refresh/index.ts"
     },
     "pi-work-queue": {
       "version": 9,
@@ -48,6 +58,7 @@
   "e2e_gates": {
     "pi_model_gateway_guardian_e2e": "pass",
     "pi_recovery_queue_api_e2e": "pass",
+    "pi_auth_refresh_current_format_e2e": "pass",
     "pi_guardian_master_installer_integrity": "pass"
   },
   "physical_gates": {
@@ -63,6 +74,7 @@
     "second_telegram_poller": false,
     "max_immediate_model_attempts": 2,
     "queue_ack_on_total_failure": true,
+    "pi_refresh_token_minimum_chars": 8,
     "master_installer_nested_sha_verification": true,
     "master_installer_raw_provider_assignment": false
   }
