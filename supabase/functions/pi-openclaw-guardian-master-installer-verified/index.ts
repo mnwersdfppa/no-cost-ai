@@ -1,34 +1,63 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
+const SOURCE_URL = "https://raw.githubusercontent.com/mnwersdfppa/no-cost-ai/9237ba0c09b97a79a75464ad2e8e2e83972d5dc7/pi/install-openclaw-guardian-master.sh";
 const SCRIPT_SHA256 = "bc938153e8b6bfe90dabb0471d34eaebef595aca6f5ec94db64d1b206cd8ce39";
 const SCRIPT_BYTES = 3902;
-const SCRIPT_B64 = "IyEvdXNyL2Jpbi9lbnYgYmFzaApzZXQgLUVldW8gcGlwZWZhaWwKdW1hc2sgMDc3CgpNT0RFTF9JTlNUQUxMRVJfVVJMPSJodHRwczovL2RwbGxhc25wZnNreXl5emVieWFsLnN1cGFiYXNlLmNvL2Z1bmN0aW9ucy92MS9waS1yZWNvdmVyeS1pbnN0YWxsZXItdmVyaWZpZWQiCk1PREVMX0lOU1RBTExFUl9TSEEyNTY9IjRjMjFkOWVhYjZmZmYzMzU5NTBmOGE0YzhjN2EwNjRhMjBiOWFhMDBhZWFkNDg3YjgxMWNlZTc3OWU4YWU5NDciCldPUktFUl9JTlNUQUxMRVJfVVJMPSJodHRwczovL2RwbGxhc25wZnNreXl5emVieWFsLnN1cGFiYXNlLmNvL2Z1bmN0aW9ucy92MS9waS1yZWNvdmVyeS13b3JrZXItaW5zdGFsbGVyLXZlcmlmaWVkIgpXT1JLRVJfSU5TVEFMTEVSX1NIQTI1Nj0iY2ZhOWIxM2MxMmM1OTM3YzlkMDE1NmI5Mjc5ZDU4MzRmZmMyNjc5ODZiMzhkNTFlMzhkZDBlYWFjMWM4N2MyMiIKCk9QRU5DTEFXX0hPTUU9IiR7T1BFTkNMQVdfSE9NRTotJEhPTUUvLm9wZW5jbGF3fSIKUlVOVElNRV9ESVI9IiR7T1BFTkNMQVdfUlVOVElNRV9ESVI6LSRPUEVOQ0xBV19IT01FL3J1bnRpbWV9IgpTRUNSRVRTX0ZJTEU9IiR7T1BFTkNMQVdfUElfRU5WX0ZJTEU6LSRPUEVOQ0xBV19IT01FL3NlY3JldHMvcGktd29yay1xdWV1ZS5lbnZ9IgpSRUNFSVBUX0ZJTEU9IiRSVU5USU1FX0RJUi9ndWFyZGlhbi1tYXN0ZXItaW5zdGFsbC1yZWNlaXB0Lmpzb24iClRNUF9ESVI9IiIKCmxvZygpIHsgcHJpbnRmICclc1xuJyAiJCoiOyB9CmZhaWwoKSB7CiAgbG9jYWwgY29kZT0iJDEiCiAgbG9jYWwgc3RhdHVzPSIkezI6LTF9IgogIGxvZyAiUkVTVUxUPUJMT0NLRUQiCiAgbG9nICJCTE9DS0VSPSRjb2RlIgogIGV4aXQgIiRzdGF0dXMiCn0KY2xlYW51cCgpIHsKICBpZiBbWyAtbiAiJFRNUF9ESVIiICYmIC1kICIkVE1QX0RJUiIgXV07IHRoZW4KICAgIHJtIC1yZiAtLSAiJFRNUF9ESVIiIDI+L2Rldi9udWxsIHx8IHRydWUKICBmaQp9CnRyYXAgY2xlYW51cCBFWElUCgpmb3IgY29tbWFuZCBpbiBjdXJsIHNoYTI1NnN1bSBiYXNoIG1rdGVtcCBkYXRlIGdyZXAgaGVhZCBjaG1vZCBta2RpciBtdjsgZG8KICBjb21tYW5kIC12ICIkY29tbWFuZCIgPi9kZXYvbnVsbCAyPiYxIHx8IGZhaWwgIk1JU1NJTkdfQ09NTUFORDokY29tbWFuZCIgMjAKZG9uZQoKW1sgLWYgIiRTRUNSRVRTX0ZJTEUiIF1dIHx8IGZhaWwgIlBJX1JFRlJFU0hfRU5WX01JU1NJTkc6JFNFQ1JFVFNfRklMRSIgMjEKY2htb2QgNjAwICIkU0VDUkVUU19GSUxFIiAyPi9kZXYvbnVsbCB8fCB0cnVlCmdyZXAgLUVxICdeUElfUkVGUkVTSF9UT0tFTj0uezIwLH0kJyAiJFNFQ1JFVFNfRklMRSIgXAogIHx8IGZhaWwgIlBJX1JFRlJFU0hfVE9LRU5fTUlTU0lOR19PUl9UT09fU0hPUlQiIDIyCgpta2RpciAtcCAiJFJVTlRJTUVfRElSIgpjaG1vZCA3MDAgIiRSVU5USU1FX0RJUiIgMj4vZGV2L251bGwgfHwgdHJ1ZQpUTVBfRElSPSIkKG1rdGVtcCAtZCAiJFJVTlRJTUVfRElSLy5ndWFyZGlhbi1tYXN0ZXIuWFhYWFhYIikiCmNobW9kIDcwMCAiJFRNUF9ESVIiCgpkb3dubG9hZF9hbmRfdmVyaWZ5KCkgewogIGxvY2FsIGxhYmVsPSIkMSIKICBsb2NhbCB1cmw9IiQyIgogIGxvY2FsIGV4cGVjdGVkX3NoYT0iJDMiCiAgbG9jYWwgdGFyZ2V0PSIkNCIKCiAgY3VybCAtLWZhaWwgLS1zaWxlbnQgLS1zaG93LWVycm9yIC0tbG9jYXRpb24gXAogICAgLS1wcm90byAnPWh0dHBzJyAtLXRsc3YxLjIgXAogICAgLS1jb25uZWN0LXRpbWVvdXQgMTAgLS1tYXgtdGltZSA2MCBcCiAgICAtSCAnY2FjaGUtY29udHJvbDogbm8tY2FjaGUnIFwKICAgIC1IICJ1c2VyLWFnZW50OiBvcGVuY2xhdy1ndWFyZGlhbi1tYXN0ZXItaW5zdGFsbGVyLzEtJGxhYmVsIiBcCiAgICAiJHVybCIgPiAiJHRhcmdldCIKCiAgY2htb2QgNjAwICIkdGFyZ2V0IgogIHByaW50ZiAnJXMgICVzXG4nICIkZXhwZWN0ZWRfc2hhIiAiJHRhcmdldCIgfCBzaGEyNTZzdW0gLS1jaGVjayAtLXN0YXR1cyBcCiAgICB8fCBmYWlsICIke2xhYmVsfV9JTlNUQUxMRVJfU0hBMjU2X01JU01BVENIIiAzMAoKICBoZWFkIC1uIDEgIiR0YXJnZXQiIHwgZ3JlcCAtRnF4ICcjIS91c3IvYmluL2VudiBiYXNoJyBcCiAgICB8fCBmYWlsICIke2xhYmVsfV9JTlNUQUxMRVJfU0hFQkFOR19JTlZBTElEIiAzMQoKICBpZiBncmVwIC1FcSAnXltbOnNwYWNlOl1dKihleHBvcnRbWzpzcGFjZTpdXSspPyhPUEVOQ09ERV9BUElfS0VZfFRBSUxTQ0FMRV9BVVRIS0VZKT0nICIkdGFyZ2V0IjsgdGhlbgogICAgZmFpbCAiJHtsYWJlbH1fSU5TVEFMTEVSX0NPTlRBSU5TX0xFR0FDWV9QUk9WSURFUl9TRUNSRVRfRVhQT1JUIiAzMgogIGZpCn0KCk1PREVMX0lOU1RBTExFUj0iJFRNUF9ESVIvbW9kZWwtYXV0aC1yZWNvdmVyeS5zaCIKV09SS0VSX0lOU1RBTExFUj0iJFRNUF9ESVIvcmVjb3ZlcnktcXVldWUtd29ya2VyLnNoIgoKZG93bmxvYWRfYW5kX3ZlcmlmeSAiTU9ERUxfQVVUSCIgIiRNT0RFTF9JTlNUQUxMRVJfVVJMIiAiJE1PREVMX0lOU1RBTExFUl9TSEEyNTYiICIkTU9ERUxfSU5TVEFMTEVSIgpkb3dubG9hZF9hbmRfdmVyaWZ5ICJSRUNPVkVSWV9XT1JLRVIiICIkV09SS0VSX0lOU1RBTExFUl9VUkwiICIkV09SS0VSX0lOU1RBTExFUl9TSEEyNTYiICIkV09SS0VSX0lOU1RBTExFUiIKCmdyZXAgLUZxICdhZ2VudHMuZGVmYXVsdHMubW9kZWwnICIkTU9ERUxfSU5TVEFMTEVSIiBcCiAgfHwgZmFpbCAiTU9ERUxfSU5TVEFMTEVSX1JFUEFJUl9DT05UUkFDVF9NSVNTSU5HIiAzMwpncmVwIC1GcSAncHJvdmlkZXJfc2VjcmV0X3JldHVybmVkJyAiJE1PREVMX0lOU1RBTExFUiIgXAogIHx8IGZhaWwgIk1PREVMX0lOU1RBTExFUl9TRUNSRVRfQk9VTkRBUllfUkVDRUlQVF9NSVNTSU5HIiAzNApncmVwIC1GcSAnb3BlbmNsYXctcmVjb3ZlcnktcXVldWUtd29ya2VyJyAiJFdPUktFUl9JTlNUQUxMTEVSIiBcCiAgfHwgZmFpbCAiV09SS0VSX0lOU1RBTExFUl9TRVJWSUNFX0NPTlRSQUNUX01JU1NJTkciIDM1CmdyZXAgLUZxICdQcm90ZWN0U3lzdGVtPXN0cmljdCcgIiRXT1JLRVJfSU5TVEFMTEVSIiBcCiAgfHwgZmFpbCAiV09SS0VSX0lOU1RBTExFUl9IQVJERU5JTkdfQ09OVFJBQ1RfTUlTU0lORyIgMzYKXG5sb2cgIlBIQVNFPU1PREVMX0FVVEhfUkVDT1ZFUlkiCmJhc2ggIiRNT0RFTF9JTlNUQUxMRVIiCgpsb2cgIlBIQVNFPVJFQ09WRVJZX1FVRVVFX1dPUktFUiIKYmFzaCAiJFdPUktFUl9JTlNUQUxMRVIiCgp0aW1lc3RhbXA9IiQoZGF0ZSAtdSArJyVZLSVtLSVkVCVIOiVNOiVTWicpIgp0bXBfcmVjZWlwdD0iJFRNUF9ESVIvcmVjZWlwdC5qc29uIgpjYXQgPiAiJHRtcF9yZWNlaXB0IiA8PEVPRgp7CiAgIm9rIjogdHJ1ZSwKICAiaW5zdGFsbGVkX2F0IjogIiR0aW1lc3RhbXAiLAogICJtb2RlbF9pbnN0YWxsZXJfc2hhMjU2IjogIiRNT0RFTF9JTlNUQUxMRVJfU0hBMjU2IiwKICAid29ya2VyX2luc3RhbGxlcl9zaGEyNTYiOiAiJFdPUktFUl9JTlNUQUxFUl9TSEEyNTYiLAogICJwcm92aWRlcl9zZWNyZXRfZXhwb3J0ZWQiOiBmYWxzZSwKICAicGFpZF9hcGlfZmFsbGJhY2siOiBmYWxzZSwKICAic2Vjb25kX3RlbGVncmFtX3BvbGxlciI6IGZhbHNlLAogICJ0YWlsc2NhbGVfbWFuYWdlbWVudF9hcGlfZW5hYmxlZCI6IGZhbHNlLAogICJwaHlzaWNhbF92YWxpZGF0aW9uX3BlbmRpbmciOiB0cnVlCn0KRU9GCmNobW9kIDYwMCAiJHRtcF9yZWNlaXB0IgptdiAtZiAiJHRtcF9yZWNlaXB0IiAiJFJFQ0VJUFRfRklMRSIKY2htb2QgNjAwICIkUkVDRUlQVF9GSUxFIgoKbG9nICJSRVNVTFQ9UEFTUyIKbG9nICJSRUNFSVBUPSRSRUNFSVBUX0ZJTEUiCmxvZyAiTkVYVD1WRVJJRllfT1BFTkNMQVdfR0FURVdBWV9URUxFR1JBTV9BTkRfVEFJTFNDQUxFX1NUQVRVUyIK";
 
-function decodeBase64(value: string): Uint8Array {
-  const raw = atob(value);
-  const bytes = new Uint8Array(raw.length);
-  for (let index = 0; index < raw.length; index += 1) {
-    bytes[index] = raw.charCodeAt(index);
-  }
-  return bytes;
+async function sha256(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)]
+    .map((value) => value.toString(16).padStart(2, "0"))
+    .join("");
 }
 
-Deno.serve((req: Request) => {
-  if (req.method !== "GET") {
-    return Response.json({
-      ok: false,
-      error: "method_not_allowed",
-      secret_values_included: false,
-    }, { status: 405 });
+function fail(error: string, status: number): Response {
+  return Response.json({
+    ok: false,
+    error,
+    provider_secret_returned: false,
+    secret_values_included: false,
+  }, {
+    status,
+    headers: {
+      "cache-control": "no-store",
+      "x-content-type-options": "nosniff",
+    },
+  });
+}
+
+Deno.serve(async (req: Request) => {
+  if (req.method !== "GET") return fail("method_not_allowed", 405);
+
+  let upstream: Response;
+  try {
+    upstream = await fetch(SOURCE_URL, {
+      headers: {
+        "cache-control": "no-cache",
+        "user-agent": "supabase-openclaw-guardian-master-installer/1",
+      },
+      signal: AbortSignal.timeout(20_000),
+    });
+  } catch {
+    return fail("pinned_source_unreachable", 503);
   }
 
-  const bytes = decodeBase64(SCRIPT_B64);
-  if (bytes.byteLength !== SCRIPT_BYTES) {
-    return Response.json({
-      ok: false,
-      error: "artifact_length_mismatch",
-      secret_values_included: false,
-    }, { status: 500 });
+  if (!upstream.ok) return fail("pinned_source_fetch_failed", 502);
+  const bytes = new Uint8Array(await upstream.arrayBuffer());
+  if (bytes.byteLength !== SCRIPT_BYTES) return fail("artifact_length_mismatch", 502);
+  if (await sha256(bytes) !== SCRIPT_SHA256) return fail("artifact_sha256_mismatch", 502);
+
+  const text = new TextDecoder().decode(bytes);
+  if (!text.startsWith("#!/usr/bin/env bash\n")) return fail("artifact_shebang_invalid", 502);
+  for (const marker of [
+    "PI_REFRESH_TOKEN",
+    "pi-recovery-installer-verified",
+    "pi-recovery-worker-installer-verified",
+    "sha256sum --check --status",
+    "provider_secret_exported\": false",
+    "second_telegram_poller\": false",
+  ]) {
+    if (!text.includes(marker)) return fail("artifact_contract_missing", 502);
   }
 
   return new Response(bytes, {
