@@ -5,7 +5,7 @@ on:
     branches:
       - main
     paths:
-      - 'supabase/migrations/20260820050000_openclaw_pattern_evolution_control_plane.sql'
+      - 'supabase/migrations/20260820050300_openclaw_pattern_evolution_control_plane.sql'
       - 'docs/openclaw-pattern-evolution-system.md'
       - 'skills/pattern-promotion-engine/**'
       - 'evidence/openclaw-pattern-evolution-state-20260820.json'
@@ -14,7 +14,7 @@ on:
     branches:
       - feat/supabase-emergency-bridge-20260819
     paths:
-      - 'supabase/migrations/20260820050000_openclaw_pattern_evolution_control_plane.sql'
+      - 'supabase/migrations/20260820050300_openclaw_pattern_evolution_control_plane.sql'
       - 'docs/openclaw-pattern-evolution-system.md'
       - 'skills/pattern-promotion-engine/**'
       - 'evidence/openclaw-pattern-evolution-state-20260820.json'
@@ -49,7 +49,7 @@ jobs:
           import re
           from pathlib import Path
 
-          migration_path = Path('supabase/migrations/20260820050000_openclaw_pattern_evolution_control_plane.sql')
+          migration_path = Path('supabase/migrations/20260820050300_openclaw_pattern_evolution_control_plane.sql')
           docs_path = Path('docs/openclaw-pattern-evolution-system.md')
           skill_path = Path('skills/pattern-promotion-engine/SKILL.md')
           evidence_path = Path('evidence/openclaw-pattern-evolution-state-20260820.json')
@@ -123,7 +123,6 @@ jobs:
           if sorted(docker.get('platforms', [])) != ['linux/amd64', 'linux/arm64']:
               raise SystemExit('required multiarchitecture platforms missing')
 
-          # Secret-like literals are prohibited across source, docs, skills and evidence.
           combined = '\n'.join([migration, docs, skill, json.dumps(evidence, sort_keys=True)])
           secret_patterns = [
               r'sk-proj-[A-Za-z0-9_-]{12,}',
@@ -138,8 +137,6 @@ jobs:
           if matches:
               raise SystemExit(f'secret-like literal detected: {matches}')
 
-          # Runtime constructs are checked only on executable migration/source surfaces.
-          # Narrative documentation may describe a forbidden construct without executing it.
           runtime_surface = migration
           forbidden_runtime = [
               r'shell\s*=\s*True',
