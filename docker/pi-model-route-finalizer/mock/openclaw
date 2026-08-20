@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import json
+import os
+import pathlib
+import sys
+from typing import Any
+
+CONFIG = pathlib.Path(
+    os.environ.get(
+        "OPENCLAW_CONFIG_PATH",
+        str(pathlib.Path.home() / ".openclaw" / "openclaw.json"),
+    )
+)
+
+
+def load_config() -> dict[str, Any]:
+    if not CONFIG.exists():
+        return {}
+    value = json.loads(CONFIG.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise SystemExit("config root must be an object")
+    return value
+
+
+def save_config(value: dict[str, Any]) -> None:
+    CONFIG.parent.mkdir(parents=True, exist_ok=True)
+    temporary = CONFIG.with_suffix(CONFIG.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(value, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, CONFIG)
+
+
+def get_path(value: dict[str, Any], path: str) -> Any:
+    current: Any = value
+    for part in path.split("."):
+        if not isinstance(current, dict) or part not in current:
+            raise KeyError(path)
+        current = current[part]
+    return current
+
+
+def set_path(value: dict[str, Any], path: str, replacement: Any, merge: bool) -> None:
+    parts = path.split(".")
+    current: dict[str, Any] = value
+    for part in parts[:-1]:
+        child = current.get(part)
+        if not isinstance(child, dict):
+            child = {}
+            current[part] = child
+        current = child
+    leaf = parts[-1]
+    if merge and isinstance(current.get(leaf), dict) and isinstance(replacement, dict):
+        merged = dict(current[leaf])
+        merged.update(replacement)
+        current[leaf] = merged
+    else:
+        current[leaf] = replacement
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    if len(args) >= 3 and args[:2] == ["config", "get"]:
+        try:
+            result = get_path(load_config(), args[2])
+        except KeyError:
+            return 1
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+
+    if len(args) >= 4 and args[:2] == ["config", "set"]:
+        path = args[2]
+        replacement = json.loads(args[3])
+        value = load_config()
+        set_path(value, path, replacement, "--merge" in args[4:])
+        save_config(value)
+        return 0
+
+    if args[:2] == ["config", "validate"]:
+        load_config()
+        return 0
+
+    if args[:2] == ["models", "list"]:
+        print("supabase-opencode/nemotron-3-ultra-free")
+        print("supabase-opencode/laguna-s-2.1-free")
+        return 0
+
+    if args[:2] == ["gateway", "restart"]:
+        return 0
+
+    if args[:2] == ["gateway", "status"]:
+        print("RPC probe: ok")
+        return 0
+
+    print(f"unsupported mock openclaw invocation: {args!r}", file=sys.stderr)
+    return 64
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
