@@ -1,0 +1,51 @@
+{
+  "project_id": "dpllasnpfskyyyzebyal",
+  "recorded_at": "2026-08-20T00:24:00Z",
+  "canonical_model_component": "edge.pi-model-gateway-guardian",
+  "canonical_model_route": "supabase.opencode_model_guardian",
+  "canonical_base_url": "https://dpllasnpfskyyyzebyal.supabase.co/functions/v1/pi-model-gateway-guardian/v1",
+  "functions": {
+    "pi-model-gateway-guardian": {
+      "version": 1,
+      "status": "ACTIVE",
+      "verify_jwt": false,
+      "auth_mode": "custom_pi_gateway_client_role",
+      "ezbr_sha256": "d8942436d02728e48ed5a4d0c488e610f618dda52dd3012053977dd8007566a9",
+      "source": "supabase/functions/pi-model-gateway-guardian/index.ts"
+    },
+    "pi-infra-bootstrap": {
+      "version": 5,
+      "status": "ACTIVE",
+      "verify_jwt": false,
+      "auth_mode": "custom_pi_access_or_refresh_token",
+      "ezbr_sha256": "9a225a5a5d0dedde23ec4cfcef8576b808d8cba0a603f01291a56b7791e878d6",
+      "source": "supabase/functions/pi-infra-bootstrap/index.ts"
+    },
+    "pi-work-queue": {
+      "version": 8,
+      "status": "ACTIVE",
+      "verify_jwt": true,
+      "auth_mode": "platform_jwt_plus_pi_gateway_client_role",
+      "ezbr_sha256": "0904a92d98c0c62f3d5e598fb2d35de90f60c1d22ad50b25c29fd0e5532c544c",
+      "source": "supabase/functions/pi-work-queue/index.ts"
+    }
+  },
+  "e2e_gates": {
+    "pi_model_gateway_guardian_e2e": "pass",
+    "pi_recovery_queue_api_e2e": "pass"
+  },
+  "physical_gates": {
+    "pi_openclaw_model_activation": "pending",
+    "pi_recovery_queue_worker_active": "pending",
+    "tailscale_pi_enrollment": "pending_optional"
+  },
+  "security": {
+    "provider_secret_location": "supabase_edge_only",
+    "provider_secret_returned_to_pi": false,
+    "tailscale_auth_key_default_return": false,
+    "paid_api_fallback": false,
+    "second_telegram_poller": false,
+    "max_immediate_model_attempts": 2,
+    "queue_ack_on_total_failure": true
+  }
+}
