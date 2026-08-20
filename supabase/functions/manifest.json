@@ -15,10 +15,49 @@
       "verify_jwt": true,
       "entrypoint": "supabase/functions/canonical-client-config/index.ts",
       "purpose": "Single modern Supabase client configuration and canonical Vercel management metadata"
+    },
+    "pi-infra-bootstrap": {
+      "verify_jwt": false,
+      "auth_mode": "custom_pi_access_or_refresh_token",
+      "entrypoint": "supabase/functions/pi-infra-bootstrap/index.ts",
+      "purpose": "Refresh scoped Pi sessions and return Guardian routing metadata without returning the OpenCode provider secret"
+    },
+    "pi-model-gateway-guardian": {
+      "verify_jwt": false,
+      "auth_mode": "custom_pi_gateway_client_role",
+      "entrypoint": "supabase/functions/pi-model-gateway-guardian/index.ts",
+      "purpose": "Canonical OpenAI Responses-compatible model proxy with bounded fallback, per-model quarantine and durable queue acknowledgement"
+    },
+    "pi-work-queue": {
+      "verify_jwt": true,
+      "auth_mode": "platform_jwt_plus_pi_gateway_client_role",
+      "entrypoint": "supabase/functions/pi-work-queue/index.ts",
+      "purpose": "Secret-safe work queue with deterministic recovery-task claims and bounded leases"
+    },
+    "pi-auth-refresh": {
+      "verify_jwt": false,
+      "auth_mode": "supabase_refresh_token_exchange",
+      "purpose": "Rotate the short-lived Pi access token without exposing server credentials"
+    },
+    "pi-recovery-installer-verified": {
+      "verify_jwt": false,
+      "auth_mode": "public_integrity_pinned_artifact",
+      "purpose": "Serve the SHA-pinned model/auth recovery installer; the installer contains no provider secret"
+    },
+    "pi-recovery-worker-installer-verified": {
+      "verify_jwt": false,
+      "auth_mode": "public_integrity_pinned_artifact",
+      "purpose": "Serve the SHA-pinned deterministic recovery queue worker installer"
     }
   },
   "canonical_supabase_client_key": "SUPABASE_PUBLISHABLE_KEYS.default",
   "canonical_supabase_server_key": "SUPABASE_SECRET_KEYS.default",
+  "canonical_model_gateway": "pi-model-gateway-guardian",
+  "canonical_model_provider": "supabase-opencode",
+  "provider_secret_location": "supabase_edge_only",
+  "raw_provider_secret_returned_to_pi": false,
+  "queue_on_provider_failure": true,
+  "max_immediate_provider_attempts": 2,
   "legacy_anon_fallback": false,
   "vercel_canonical_auth": "connected_connector",
   "vercel_raw_token_fallback": false,
