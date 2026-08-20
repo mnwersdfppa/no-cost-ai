@@ -59,9 +59,14 @@ jobs:
                   'd8942436d02728e48ed5a4d0c488e610f618dda52dd3012053977dd8007566a9',
               ),
               'pi-infra-bootstrap': (
+                  7,
+                  False,
+                  '35781ccb3a2209fba93b80de4f4d5843546ad65bb9bb18b76332cdcc9be8911e',
+              ),
+              'pi-auth-refresh': (
                   5,
                   False,
-                  '9a225a5a5d0dedde23ec4cfcef8576b808d8cba0a603f01291a56b7791e878d6',
+                  'aa44010cee4d26dbd35774bc14c664f648e3c5e0f45e7ed83e0004fe1da82b8c',
               ),
               'pi-work-queue': (
                   9,
@@ -82,6 +87,9 @@ jobs:
               assert row['ezbr_sha256'] == digest, name
               assert Path(row['source']).is_file(), row['source']
 
+          assert deployment['functions']['pi-infra-bootstrap']['refresh_token_minimum_chars'] == 8
+          assert deployment['functions']['pi-auth-refresh']['refresh_token_minimum_chars'] == 8
+
           master = deployment['functions']['pi-openclaw-guardian-master-installer-verified']
           assert master['artifact_sha256'] == deployment['canonical_pi_installer_sha256']
           assert master['artifact_bytes'] == deployment['canonical_pi_installer_bytes']
@@ -89,6 +97,7 @@ jobs:
 
           assert deployment['e2e_gates']['pi_model_gateway_guardian_e2e'] == 'pass'
           assert deployment['e2e_gates']['pi_recovery_queue_api_e2e'] == 'pass'
+          assert deployment['e2e_gates']['pi_auth_refresh_current_format_e2e'] == 'pass'
           assert deployment['e2e_gates']['pi_guardian_master_installer_integrity'] == 'pass'
           assert deployment['physical_gates']['pi_openclaw_model_activation'] == 'pending'
           assert deployment['physical_gates']['pi_recovery_queue_worker_active'] == 'pending'
@@ -101,6 +110,7 @@ jobs:
           assert security['second_telegram_poller'] is False
           assert security['max_immediate_model_attempts'] == 2
           assert security['queue_ack_on_total_failure'] is True
+          assert security['pi_refresh_token_minimum_chars'] == 8
           assert security['master_installer_nested_sha_verification'] is True
           assert security['master_installer_raw_provider_assignment'] is False
           PY
@@ -113,6 +123,7 @@ jobs:
           deno check supabase/functions/credential-readiness/index.ts
           deno check supabase/functions/canonical-client-config/index.ts
           deno check supabase/functions/pi-infra-bootstrap/index.ts
+          deno check supabase/functions/pi-auth-refresh/index.ts
           deno check supabase/functions/pi-model-gateway-guardian/index.ts
           deno check supabase/functions/pi-work-queue/index.ts
           deno check supabase/functions/pi-openclaw-guardian-master-installer-verified/index.ts
@@ -128,6 +139,11 @@ jobs:
           assert manifest['raw_provider_secret_returned_to_pi'] is False
           assert manifest['queue_on_provider_failure'] is True
           assert manifest['max_immediate_provider_attempts'] == 2
+          assert manifest['pi_refresh_token_minimum_chars'] == 8
+          assert manifest['pi_refresh_current_format_e2e'] is True
+          assert manifest['functions']['pi-auth-refresh']['entrypoint'] == 'supabase/functions/pi-auth-refresh/index.ts'
+          assert manifest['functions']['pi-auth-refresh']['refresh_token_minimum_chars'] == 8
+          assert manifest['functions']['pi-infra-bootstrap']['refresh_token_minimum_chars'] == 8
           assert manifest['canonical_pi_installer'] == 'pi-openclaw-guardian-master-installer-verified'
           assert manifest['canonical_pi_installer_sha256'] == 'bc938153e8b6bfe90dabb0471d34eaebef595aca6f5ec94db64d1b206cd8ce39'
           assert manifest['paid_provider_calls'] is False
@@ -135,11 +151,13 @@ jobs:
           assert manifest['telegram_single_poller_enforced'] is True
 
           bootstrap = Path('supabase/functions/pi-infra-bootstrap/index.ts').read_text(encoding='utf-8')
+          auth_refresh = Path('supabase/functions/pi-auth-refresh/index.ts').read_text(encoding='utf-8')
           guardian = Path('supabase/functions/pi-model-gateway-guardian/index.ts').read_text(encoding='utf-8')
           queue = Path('supabase/functions/pi-work-queue/index.ts').read_text(encoding='utf-8')
           master_edge = Path('supabase/functions/pi-openclaw-guardian-master-installer-verified/index.ts').read_text(encoding='utf-8')
 
           for marker in (
+              'const MIN_REFRESH_TOKEN_CHARS = 8',
               'refreshSession',
               'pi-model-gateway-guardian/v1',
               'export_original_provider_key_to_pi: false',
@@ -148,6 +166,15 @@ jobs:
               'provider_secret_returned: false',
           ):
               assert marker in bootstrap, marker
+
+          for marker in (
+              'const MIN_REFRESH_TOKEN_CHARS = 8',
+              'grant_type=refresh_token',
+              'pi-gateway-client',
+              'token_values_logged: false',
+              'server_secret_returned: false',
+          ):
+              assert marker in auth_refresh, marker
 
           for marker in (
               'const MAX_ATTEMPTS = 2',
@@ -181,7 +208,7 @@ jobs:
           ):
               assert marker in master_edge, marker
 
-          combined = bootstrap + '\n' + queue
+          combined = bootstrap + '\n' + auth_refresh + '\n' + queue
           forbidden = {
               'raw OpenCode key returned': r'OPENCODE_API_KEY\s*:',
               'legacy Tailscale env returned': r'TAILSCALE_AUTHKEY\s*:',
