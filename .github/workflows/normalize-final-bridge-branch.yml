@@ -44,17 +44,58 @@ jobs:
           import json
           import re
 
-          migration_files = sorted(Path('supabase/migrations').glob('*.sql'))
-          versions = []
+          migration_dir = Path('supabase/migrations')
+          migration_files = sorted(migration_dir.glob('*.sql'))
+          alias_path = migration_dir / 'migration-version-aliases.json'
+          alias_doc = json.loads(alias_path.read_text(encoding='utf-8'))
+          aliases = alias_doc.get('aliases', {})
+
+          assert alias_doc.get('schema_version') == 1
+          assert alias_doc.get('project_id') == 'dpllasnpfskyyyzebyal'
+          assert isinstance(aliases, dict)
+          security = alias_doc.get('security', {})
+          assert security.get('changes_sql_content') is False
+          assert security.get('automatic_database_mutation') is False
+          assert security.get('automatic_migration_replay') is False
+          assert security.get('automatic_merge') is False
+          assert security.get('production_deployment') is False
+          assert security.get('secret_values_included') is False
+
+          effective_versions = []
+          aliased_files = set()
           for path in migration_files:
-              match = re.match(r'^(\d+)_', path.name)
-              if match:
-                  versions.append(match.group(1))
+              match = re.match(r'^(\d{14})_', path.name)
+              if not match:
+                  continue
+              raw_version = match.group(1)
+              alias = aliases.get(path.name)
+              if alias is None:
+                  effective_version = raw_version
+              else:
+                  assert isinstance(alias, dict), path.name
+                  effective_version = alias.get('effective_version', '')
+                  assert re.fullmatch(r'\d{14}', effective_version), path.name
+                  assert alias.get('supabase_migration_name', '').strip(), path.name
+                  assert alias.get('reason', '').strip(), path.name
+                  assert effective_version != raw_version, path.name
+                  aliased_files.add(path.name)
+              effective_versions.append(effective_version)
+
+          for filename, alias in aliases.items():
+              target = migration_dir / filename
+              assert target.is_file(), f'alias target missing: {filename}'
+              assert filename in aliased_files, f'alias not consumed: {filename}'
+              assert re.fullmatch(r'\d{14}', alias['effective_version'])
+
           duplicates = sorted(
-              version for version, count in Counter(versions).items() if count > 1
+              version
+              for version, count in Counter(effective_versions).items()
+              if count > 1
           )
           if duplicates:
-              raise SystemExit(f'duplicate migration version prefixes: {duplicates}')
+              raise SystemExit(
+                  f'duplicate effective migration versions: {duplicates}'
+              )
 
           manifest = json.loads(
               Path('supabase/functions/manifest.json').read_text(encoding='utf-8')
@@ -137,7 +178,11 @@ jobs:
 
           # Historical deployed snapshots remain rollback evidence only.
           assert Path('supabase/functions/deployed/final-v1').is_dir()
-          print('FINAL_BRANCH_VALIDATION=PASS repository_mutation=false')
+          print(
+              'FINAL_BRANCH_VALIDATION=PASS '
+              f'migrations={len(effective_versions)} aliases={len(aliases)} '
+              'repository_mutation=false'
+          )
           PY
 
       - name: Confirm workflow is read-only
