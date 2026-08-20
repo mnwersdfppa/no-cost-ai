@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: denoland/setup-deno@v2
         with:
@@ -66,7 +66,6 @@ jobs:
               'bridge_verify_model_retry_worker_token',
               'bridge_claim_model_retry_task',
               'Opencode-api-key',
-              'model_request_retry',
               'telegram_result_delivery',
               'BACKOFF_SECONDS = [120, 300, 900, 2700, 7200]',
               'provider_secret_returned: false',
@@ -95,7 +94,8 @@ jobs:
               'bridge_invoke_model_retry_worker',
               "'*/5 * * * *'",
               'for update skip locked',
-              "task_type = 'telegram_result_delivery'",
+              "q.task_type = 'model_request_retry'",
+              "q.task_type = 'telegram_result_delivery'",
           ]
           for marker in migration_required:
               haystack = migration.lower() if marker == 'for update skip locked' else migration
