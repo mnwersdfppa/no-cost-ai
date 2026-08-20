@@ -1,72 +1,110 @@
 {
   "project_id": "dpllasnpfskyyyzebyal",
-  "recorded_at": "2026-08-20T03:00:00Z",
-  "state": "CLOUD_ACTIVE_EXTERNAL_RESEARCH_AND_PHYSICAL_PI_PENDING",
+  "recorded_at": "2026-08-20T05:20:00Z",
+  "state": "CLOUD_ACTIVE_REUSE_FIRST_COMPLETE_PHYSICAL_PI_PENDING",
   "canonical_storage": "supabase",
   "human_knowledge_layer": "notion",
+  "canonical_pattern_architecture": {
+    "operational_observations": "openclaw_pattern_observations",
+    "operational_candidates": "openclaw_pattern_candidates",
+    "operational_feedback": "openclaw_pattern_feedback",
+    "canonical_api": "openclaw-pattern-engine",
+    "canonical_api_actions": [
+      "status",
+      "candidates",
+      "resolve",
+      "observe",
+      "feedback"
+    ],
+    "research_projection": "bridge_pattern_candidates",
+    "research_queue": "bridge_research_queue",
+    "solution_catalog": "openclaw_solution_sources",
+    "source_matches": "openclaw_pattern_source_matches",
+    "gated_skill_registry": "bridge_skill_registry",
+    "single_candidate_authority": true
+  },
   "functions": {
-    "pattern-observation-intake": {
+    "openclaw-pattern-engine": {
       "version": 1,
       "status": "ACTIVE",
-      "verify_jwt": true,
-      "auth_roles": [
-        "pi-gateway-client",
-        "pattern-observer"
-      ],
-      "body_limit_bytes": 16384,
-      "context_limit_bytes": 8192,
-      "rate_limit_per_user_hour": 120,
-      "execution_key_required": true,
+      "verify_jwt": false,
+      "auth_mode": "custom_pi_gateway_client_jwt",
+      "execution_key_required_for_mutations": true,
       "secret_like_content_rejected": true,
-      "raw_logs_accepted": false,
+      "forbidden_execution_fields_rejected": true,
+      "arbitrary_execution_allowed": false
+    },
+    "pattern-observation-intake": {
+      "version": 2,
+      "status": "RETIRED_410",
+      "verify_jwt": true,
+      "replacement": "openclaw-pattern-engine:observe",
       "source": "supabase/functions/pattern-observation-intake/index.ts"
     },
     "pattern-skill-readiness": {
-      "version": 1,
-      "status": "ACTIVE",
+      "version": 2,
+      "status": "RETIRED_410",
       "verify_jwt": true,
-      "read_only": true,
-      "provider_secret_returned": false,
+      "replacement": "openclaw-pattern-engine:status,candidates,resolve",
       "source": "supabase/functions/pattern-skill-readiness/index.ts"
     }
   },
   "database_contracts": {
-    "observations": "bridge_pattern_observations",
-    "candidates": "bridge_pattern_candidates",
+    "research_observations": "bridge_pattern_observations",
+    "research_candidates": "bridge_pattern_candidates",
     "research_queue": "bridge_research_queue",
-    "solution_catalog": "bridge_solution_catalog",
+    "derived_solution_catalog": "bridge_solution_catalog",
     "skill_registry": "bridge_skill_registry",
     "skill_versions": "bridge_skill_versions",
     "skill_evaluations": "bridge_skill_evaluations",
     "automation_runs": "bridge_automation_runs",
     "source_bindings": "bridge_source_bindings",
     "capability_registry": "bridge_capability_registry",
-    "record_rpc": "bridge_record_pattern_observation",
-    "score_rpc": "bridge_score_pattern_candidates",
-    "research_enqueue_rpc": "bridge_enqueue_pattern_research",
-    "research_claim_rpc": "bridge_claim_research_task",
-    "skill_gate_rpc": "bridge_skill_gate_status",
-    "skill_promote_rpc": "bridge_promote_skill_candidate",
-    "sweep_rpc": "bridge_pattern_skill_sweep",
-    "readiness_rpc": "bridge_pattern_skill_readiness"
+    "canonical_sweep_rpc": "bridge_pattern_skill_sweep",
+    "internal_reuse_rpc": "bridge_process_internal_research_tasks",
+    "research_deduplication_rpc": "bridge_suppress_redundant_external_research_tasks"
   },
   "scheduler": {
-    "job": "openclaw-pattern-skill-sweeper-v1",
-    "schedule": "*/30 * * * *",
-    "execution_key_bucket_seconds": 1800,
-    "metadata_only_promotion": true,
-    "external_fetch": false
+    "harvest_job": {
+      "name": "openclaw-pattern-harvest-v1",
+      "schedule": "*/15 * * * *"
+    },
+    "score_job": {
+      "name": "openclaw-pattern-score-v1",
+      "schedule": "7 * * * *"
+    },
+    "projection_job": {
+      "name": "openclaw-pattern-bridge-sync-v1",
+      "schedule": "11 * * * *"
+    },
+    "canonical_sweep_job": {
+      "name": "openclaw-pattern-skill-sweep-v1",
+      "schedule": "19 * * * *",
+      "execution_key_bucket_seconds": 3600,
+      "metadata_only_promotion": true,
+      "external_fetch": false
+    },
+    "research_housekeeping_job": {
+      "name": "openclaw-pattern-research-housekeeping-v1",
+      "schedule": "24 * * * *",
+      "external_fetch": false,
+      "paid_api": false
+    }
   },
-  "scoring": {
-    "version": 1,
-    "frequency_weight": 0.24,
-    "recency_weight": 0.08,
-    "impact_weight": 0.22,
-    "reasoning_cost_weight": 0.16,
-    "automation_fit_weight": 0.14,
-    "reversibility_weight": 0.06,
-    "confidence_weight": 0.10,
-    "risk_penalty_weight": 0.18
+  "verified_state": {
+    "operational_patterns": 15,
+    "operational_observations": 183,
+    "projected_patterns": 15,
+    "canonical_sweep": "PASS",
+    "patterns_synced": 15,
+    "skills_synced": 15,
+    "internal_catalog_tasks_completed": 13,
+    "redundant_external_tasks_suppressed": 52,
+    "research_tasks_queued": 0,
+    "research_tasks_failed": 0,
+    "derived_solutions": 54,
+    "external_api_calls_for_research": 0,
+    "paid_api_calls_for_research": 0
   },
   "promotion": {
     "states": [
@@ -87,68 +125,100 @@
     "minimum_canary_minutes": 30,
     "minimum_canary_successes": 3,
     "maximum_canary_failures": 0,
-    "arbitrary_code_execution": false
+    "metadata_only_promotion": true,
+    "arbitrary_code_execution": false,
+    "automatic_high_risk_promotion": false
   },
   "research": {
     "search_before_build": true,
     "english_query_cached_by_fingerprint": true,
     "providers": [
+      "internal_catalog",
       "official_docs",
       "github",
       "mcp_registry",
-      "n8n_templates",
-      "internal_catalog"
+      "n8n_templates"
     ],
-    "read_only_fetch_worker": "PENDING_GATE",
+    "internal_catalog_first": true,
+    "official_or_verified_integrated_results_suppress_duplicate_external_search": true,
+    "read_only_external_fetch_worker": "GATED_FOR_FUTURE_UNRESOLVED_PATTERNS",
     "automatic_code_execution": false
   },
   "notion_migration": {
     "operational_ssot": "supabase",
     "source_system": "notion",
+    "source_page_id": "379011bcb000803cb7f1d4a148c97910",
+    "source_page_title": "✅투두리스트",
+    "active_items_copied": 7,
+    "completed_items_retained": 3,
+    "destination": "command_intents",
+    "migration_state": "verified",
+    "source_retained": true,
     "automatic_source_delete": false,
-    "secret_migration": false,
-    "states": [
-      "discovered",
-      "classified",
-      "staged",
-      "copied",
-      "verified",
-      "archived",
-      "blocked",
-      "ignored"
-    ]
+    "automatic_source_archive": false,
+    "secret_migration": false
   },
   "docker_compatibility": {
-    "repository": "docker.io/odifool/openclaw-compat",
-    "target_platforms": [
-      "linux/arm64",
-      "linux/amd64"
+    "release_ref": "docker.io/odifool/openclaw-compat:2026.08.20",
+    "digest_ref": "docker.io/odifool/openclaw-compat@sha256:6c6df789c26cb0400171818fb0903d27ff799f9642d6e8c2eaf2b1c8e2e2894b",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
     ],
-    "activation_gate": "docker_openclaw_multiarch_public_pull",
-    "repository_creation_is_not_publication": true,
-    "publisher_credential_location": "supabase_edge_only",
+    "anonymous_public_pull": true,
+    "digest_verified": true,
+    "non_root_verified": true,
+    "entrypoint_verified": true,
+    "labels_secret_safe": true,
     "image_contains_credentials": false,
     "docker_socket_default": false,
     "privileged_default": false,
-    "host_network_default": false
+    "host_network_default": false,
+    "activation_gate": "PASS"
+  },
+  "credential_selection": {
+    "github": {
+      "preferred_runtime": "connected_connector",
+      "edge_fallback_alias": "Github-api-delicate-key",
+      "read_contract": "PASS",
+      "broad_alias": "GitHub-Classi-api-key",
+      "broad_alias_selected": false,
+      "broad_alias_manual_review": "PENDING"
+    },
+    "notion": {
+      "preferred_runtime": "connected_connector",
+      "edge_fallback_alias": "Notion-api-key",
+      "users_me_read_contract": "PASS"
+    },
+    "n8n": {
+      "key_alias_present": true,
+      "base_url_present": false,
+      "live_validation": "BLOCKED_BASE_URL_REQUIRED"
+    },
+    "perplexity": {
+      "aliases_present": true,
+      "automatic_paid_use": false,
+      "live_validation": "PENDING_ZERO_COST_METADATA_ENDPOINT"
+    }
   },
   "e2e_gates": {
-    "pattern_skill_schema": "pass",
-    "pattern_skill_scoring_e2e": "pass",
-    "pattern_skill_promotion_boundary": "pass",
-    "pattern_skill_run_receipts": "pass",
-    "pattern_observation_intake_e2e": "pass",
-    "pattern_skill_readiness_e2e": "pass",
+    "pattern_endpoint_single_authority": "pass",
+    "canonical_pattern_sweep_contract": "pass",
+    "pattern_research_deduplication": "pass",
+    "pattern_observation_intake_e2e": "pass_then_endpoint_retired",
+    "pattern_skill_readiness_e2e": "pass_then_endpoint_retired",
     "pattern_skill_secret_rejection_e2e": "pass",
-    "capability_secret_alias_inventory": "pass"
+    "docker_openclaw_multiarch_public_pull": "pass",
+    "github_edge_credential_readonly_validation": "pass",
+    "notion_edge_credential_readonly_validation": "pass"
   },
   "pending_gates": {
-    "pattern_skill_research_worker": "RESEARCH_FETCH_WORKER_NOT_CONNECTED",
-    "notion_record_migration": "SOURCE_CLASSIFICATION_AND_CHECKSUM_REQUIRED",
-    "docker_openclaw_multiarch_public_pull": "REQUIRES_PUBLIC_MANIFEST_AND_DIGEST_EVIDENCE",
     "physical_pi_application": "CURRENT_MASTER_INSTALLER_EXECUTION_REQUIRED",
     "openclaw_gateway_api_e2e": "PHYSICAL_PI_REQUIRED",
-    "telegram_round_trip": "PHYSICAL_PI_REQUIRED"
+    "telegram_round_trip": "PHYSICAL_PI_REQUIRED",
+    "tailscale_pi_enrollment": "PHYSICAL_PI_REQUIRED",
+    "n8n_endpoint_and_credential_validation": "N8N_BASE_URL_REQUIRED",
+    "github_overprivileged_alias_review": "MANUAL_DEPENDENCY_REVIEW_REQUIRED"
   },
   "security": {
     "rls_enabled": true,
