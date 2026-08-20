@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Deliver completed Supabase retry results through the existing OpenClaw Telegram channel.
 
-This worker is outbound-only. It never calls Telegram getUpdates, never reads a bot
-token, and never starts another Telegram poller. It claims only the dedicated
-``telegram_result_delivery`` contract from Supabase and invokes the fixed
-``openclaw message send`` command.
+This worker is outbound-only. It never invokes Telegram's inbound update API,
+never reads a bot credential, and never starts another Telegram poller. It claims
+only the dedicated ``telegram_result_delivery`` contract from Supabase and
+invokes the fixed ``openclaw message send`` command.
 """
 
 from __future__ import annotations
@@ -393,13 +393,16 @@ def run_once() -> int:
 
 def self_test() -> int:
     source = pathlib.Path(__file__).read_text(encoding="utf-8")
-    forbidden = {
-        "subprocess_shell_true": "shell=True" in source,
-        "payload_eval": "eval(task" in source or "exec(task" in source,
-        "telegram_long_poll": ("get" + "Updates") in source,
-        "telegram_bot_secret": ("TELEGRAM_" + "BOT_TOKEN") in source,
-        "unknown_process_kill": "kill -9" in source or "pkill" in source,
+    markers = {
+        "subprocess_shell_true": "shell" + "=True",
+        "payload_eval": "eval" + "(task",
+        "payload_exec": "exec" + "(task",
+        "telegram_long_poll": "get" + "Updates",
+        "telegram_bot_secret": "TELEGRAM_" + "BOT_TOKEN",
+        "unknown_process_kill": "kill" + " -9",
+        "unknown_process_pattern_kill": "p" + "kill",
     }
+    forbidden = {name: marker in source for name, marker in markers.items()}
     ok = not any(forbidden.values()) and EXPECTED_TASK_TYPE in source
     print(
         json.dumps(
