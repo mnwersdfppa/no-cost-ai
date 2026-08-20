@@ -10,8 +10,8 @@
     "second_telegram_poller_scan": true,
     "secret_literal_scan": true
   },
-  "commit_sha": "3f77b10c075adca6a907eb054766b3c9bf5149c1",
-  "generated_at": "2026-08-20T07:38:45.915110+00:00",
+  "commit_sha": "71e263e3683de97f99d1e7b1f2b45f9a5776427d",
+  "generated_at": "2026-08-20T10:39:31.286836+00:00",
   "physical_gates": {
     "phone_t3": false,
     "pi_authenticated_receipt": false,
