@@ -139,7 +139,7 @@ jobs:
               'openclaw_resolve_capability',
               'duplicate_execution_key',
               'secret_like_payload_rejected',
-              'executable_fields_rejected',
+              'executable_payload_field_rejected',
               'arbitrary_execution_allowed: false',
               'provider_secret_returned: false',
               'server_secret_returned: false',
