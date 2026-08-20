@@ -7,6 +7,8 @@ on:
     paths:
       - 'container/openclaw-compat-guardian/**'
       - 'pi/install-openclaw-container-guardian.sh'
+      - 'pi/install-openclaw-docker-compat.sh'
+      - 'supabase/functions/pi-container-bootstrap/**'
       - '.github/workflows/openclaw-container-guardian.yml'
   push:
     branches:
@@ -14,8 +16,16 @@ on:
     paths:
       - 'container/openclaw-compat-guardian/**'
       - 'pi/install-openclaw-container-guardian.sh'
+      - 'pi/install-openclaw-docker-compat.sh'
+      - 'supabase/functions/pi-container-bootstrap/**'
       - '.github/workflows/openclaw-container-guardian.yml'
   workflow_dispatch:
+    inputs:
+      publish_candidate:
+        description: 'Publish mutable edge and commit candidate tags after all validation jobs pass'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -29,13 +39,16 @@ concurrency:
 
 env:
   DOCKER_IMAGE: docker.io/odifool/openclaw-compat
+  RELEASE_TAG: '2026.08.20'
+  RELEASE_DIGEST: sha256:6c6df789c26cb0400171818fb0903d27ff799f9642d6e8c2eaf2b1c8e2e2894b
+  RELEASE_IMAGE: docker.io/odifool/openclaw-compat@sha256:6c6df789c26cb0400171818fb0903d27ff799f9642d6e8c2eaf2b1c8e2e2894b
   GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/openclaw-compat-guardian
   CONTEXT: container/openclaw-compat-guardian
   BROKER_URL: https://dpllasnpfskyyyzebyal.supabase.co/functions/v1/docker-publisher-broker
   BROKER_AUDIENCE: supabase-openclaw-docker-publisher
 
 jobs:
-  validate:
+  validate-source:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -79,7 +92,7 @@ jobs:
           python3 "$CONTEXT/self_test.py"
           docker buildx build --check "$CONTEXT"
 
-      - name: Build and execute native image
+      - name: Build and execute native source image
         shell: bash
         run: |
           set -euo pipefail
@@ -115,19 +128,152 @@ jobs:
             --max-compressed-mb 180 \
             --receipt /tmp/oci-compatibility-receipt.json
 
-      - name: Upload compatibility receipt
+      - name: Upload source compatibility receipt
         uses: actions/upload-artifact@v4
         with:
-          name: openclaw-container-compatibility-${{ github.sha }}
+          name: openclaw-container-source-compatibility-${{ github.sha }}
           path: |
             /tmp/source-sha256.txt
             /tmp/oci-compatibility-receipt.json
           if-no-files-found: error
           retention-days: 14
 
-  publish:
-    if: github.event_name != 'pull_request'
-    needs: validate
+  verify-published-image:
+    name: Verify published ${{ matrix.platform }} image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            expected_uname: x86_64
+          - platform: linux/arm64
+            expected_uname: aarch64
+    steps:
+      - name: Set up QEMU for foreign architecture execution
+        uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm64
+
+      - name: Pull immutable release digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull --platform "${{ matrix.platform }}" "$RELEASE_IMAGE"
+
+      - name: Execute hardened status probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --pull never \
+            --platform "${{ matrix.platform }}" \
+            --read-only \
+            --network none \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --pids-limit 64 \
+            --memory 128m \
+            --cpus 0.5 \
+            "$RELEASE_IMAGE" status \
+            | tee /tmp/openclaw-compat-status.json
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          data = json.loads(Path('/tmp/openclaw-compat-status.json').read_text(encoding='utf-8'))
+          assert data.get('ok') is True
+          assert data.get('container_arch') == os.environ['EXPECTED_UNAME']
+          assert data.get('container_os') == 'alpine'
+          assert data.get('network_required') is False
+          assert data.get('docker_socket_required') is False
+          assert data.get('secret_values_included') is False
+          PY
+        env:
+          EXPECTED_UNAME: ${{ matrix.expected_uname }}
+
+      - name: Verify non-root and read-only isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          user_value="$(docker image inspect --format '{{.Config.User}}' "$RELEASE_IMAGE")"
+          test "$user_value" = '65532:65532'
+          docker run --rm \
+            --pull never \
+            --platform "${{ matrix.platform }}" \
+            --read-only \
+            --network none \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --pids-limit 64 \
+            --memory 128m \
+            --entrypoint /bin/sh \
+            "$RELEASE_IMAGE" \
+            -ec 'test "$(id -u)" != 0; if touch /rootfs-write-test 2>/dev/null; then exit 41; fi'
+
+      - name: Reject credential material in runtime environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --pull never \
+            --platform "${{ matrix.platform }}" \
+            --read-only \
+            --network none \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --entrypoint /bin/sh \
+            "$RELEASE_IMAGE" \
+            -ec 'if env | grep -E "^(OPENAI|OPENROUTER|OPENCODE|TELEGRAM|TAILSCALE|DOCKER.*TOKEN|SUPABASE_SERVICE_ROLE)="; then exit 42; fi'
+
+      - name: Record immutable execution receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          receipt = {
+              'image': os.environ['RELEASE_IMAGE'],
+              'release_tag': os.environ['RELEASE_TAG'],
+              'digest': os.environ['RELEASE_DIGEST'],
+              'platform': os.environ['PLATFORM'],
+              'expected_uname': os.environ['EXPECTED_UNAME'],
+              'status_probe': 'pass',
+              'non_root': True,
+              'read_only_rootfs': True,
+              'network': 'none',
+              'docker_socket_mounted': False,
+              'provider_secret_present': False,
+              'telegram_poller_present': False,
+              'secret_values_included': False,
+          }
+          Path('/tmp/published-image-receipt.json').write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          PY
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          EXPECTED_UNAME: ${{ matrix.expected_uname }}
+
+      - name: Upload published-image receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-published-image-${{ matrix.expected_uname }}-${{ github.sha }}
+          path: /tmp/published-image-receipt.json
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-candidate:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_candidate == true
+    needs:
+      - validate-source
+      - verify-published-image
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -203,13 +349,12 @@ jobs:
           curl -fsS \
             -H "Authorization: Bearer $oidc_token" \
             -H 'content-type: application/json' \
-            -H 'user-agent: github-openclaw-container-publisher/1' \
+            -H 'user-agent: github-openclaw-container-publisher/2' \
             --data '{"action":"issue_repository_token"}' \
             "$BROKER_URL" \
             -o /tmp/docker-publisher-response.json
           python3 - <<'PY'
           import json
-          import os
           import pathlib
 
           response_path = pathlib.Path('/tmp/docker-publisher-response.json')
@@ -224,39 +369,31 @@ jobs:
           token = data.get('identity_token')
           assert isinstance(token, str) and len(token) > 20
           print(f'::add-mask::{token}')
-
           config_path = pathlib.Path.home() / '.docker' / 'config.json'
           config_path.parent.mkdir(parents=True, exist_ok=True)
           try:
               config = json.loads(config_path.read_text(encoding='utf-8'))
           except (FileNotFoundError, json.JSONDecodeError):
               config = {}
-          auths = config.setdefault('auths', {})
-          auths['https://index.docker.io/v1/'] = {
+          config.setdefault('auths', {})['https://index.docker.io/v1/'] = {
               'username': data['username'],
               'identitytoken': token,
           }
-          config_path.write_text(
-              json.dumps(config, separators=(',', ':')) + '\n',
-              encoding='utf-8',
-          )
+          config_path.write_text(json.dumps(config, separators=(',', ':')) + '\n', encoding='utf-8')
           config_path.chmod(0o600)
-          response_path.write_text(
-              json.dumps({
-                  'ok': True,
-                  'image': data['image'],
-                  'expires_at': data['expires_at'],
-                  'actions': data['actions'],
-                  'identity_token_removed': True,
-                  'docker_pat_returned': False,
-                  'secret_values_included': False,
-              }, sort_keys=True) + '\n',
-              encoding='utf-8',
-          )
+          response_path.write_text(json.dumps({
+              'ok': True,
+              'image': data['image'],
+              'expires_at': data['expires_at'],
+              'actions': data['actions'],
+              'identity_token_removed': True,
+              'docker_pat_returned': False,
+              'secret_values_included': False,
+          }, sort_keys=True) + '\n', encoding='utf-8')
           PY
           rm -f /tmp/github-oidc-url /tmp/github-oidc-response.json
 
-      - name: Build and push identical Docker Hub and GHCR manifests
+      - name: Build and push mutable candidate tags
         id: build
         uses: docker/build-push-action@v7
         with:
@@ -282,7 +419,7 @@ jobs:
           provenance: mode=max
           sbom: true
 
-      - name: Inspect both pushed platform manifests
+      - name: Inspect pushed candidate manifests
         shell: bash
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
@@ -295,18 +432,6 @@ jobs:
             grep -Fq 'linux/amd64' "$manifest"
             grep -Fq 'linux/arm64' "$manifest"
           done
-          {
-            echo '## OpenClaw container guardian'
-            echo
-            echo "- Digest: \`$DIGEST\`"
-            echo '- Docker Hub: docker.io/odifool/openclaw-compat'
-            echo '- GHCR fallback: ghcr.io/mnwersdfppa/openclaw-compat-guardian'
-            echo '- Platforms: linux/amd64, linux/arm64'
-            echo '- Docker Hub credential path: Supabase OIDC broker → short-lived scoped registry token'
-            echo '- Docker Hub PAT returned by broker: no'
-            echo '- Provider secrets in image: no'
-            echo '- Docker socket required at runtime: no'
-          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Remove short-lived Docker Hub token material
         if: always()
