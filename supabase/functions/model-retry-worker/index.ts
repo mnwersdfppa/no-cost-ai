@@ -3,9 +3,11 @@ import { createClient } from "npm:@supabase/supabase-js@2.56.0";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const OPENCODE_KEY = Deno.env.get("Opencode-api-key")?.trim() ?? "";
-const WORKER_NAME = "supabase-model-retry-worker-v1";
+const WORKER_NAME = "supabase-model-retry-worker-v2";
+const MAX_TASKS_PER_RUN = 2;
+const MAX_RESULT_CHARS = 4000;
 const BACKOFF_SECONDS = [120, 300, 900, 2700, 7200] as const;
-const MAX_OUTPUT_CHARS = 4000;
+const SECRET_LIKE = /(sk-proj-[A-Za-z0-9_-]+|sk-[A-Za-z0-9_-]{20,}|(?:ghp_|github_pat_)[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]+|tskey-(?:auth|api|client)-[A-Za-z0-9_-]+|Bearer\s+[A-Za-z0-9._~+\/-]{16,}|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{8,}|-----BEGIN\s+(?:[A-Z]+\s+)?PRIVATE\s+KEY-----)/gi;
 
 type JsonRecord = Record<string, unknown>;
 type QueueTask = {
@@ -44,16 +46,19 @@ function parseNamed(raw: string | undefined): Record<string, string> {
   }
 }
 
-function resolveAdminKey(): string {
+function resolveAdminKey(): { value: string; type: string } {
   const modern = parseNamed(Deno.env.get("SUPABASE_SECRET_KEYS"));
-  if (modern.default) return modern.default;
+  if (modern.default) return { value: modern.default, type: "modern_secret_default" };
   const first = Object.values(modern)[0];
-  if (first) return first;
-  return Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  if (first) return { value: first, type: "modern_secret_named" };
+  const legacy = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  return legacy
+    ? { value: legacy, type: "legacy_service_role_compatibility" }
+    : { value: "", type: "missing" };
 }
 
-const ADMIN_KEY = resolveAdminKey();
-const admin = createClient(SUPABASE_URL, ADMIN_KEY, {
+const adminKey = resolveAdminKey();
+const admin = createClient(SUPABASE_URL, adminKey.value, {
   auth: { persistSession: false, autoRefreshToken: false },
 });
 
@@ -69,18 +74,23 @@ function reply(body: unknown, status = 200): Response {
 }
 
 async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  const bytes = new TextEncoder().encode(value);
+  const digestInput = bytes.buffer.slice(
+    bytes.byteOffset,
+    bytes.byteOffset + bytes.byteLength,
+  ) as ArrayBuffer;
+  const digest = await crypto.subtle.digest("SHA-256", digestInput);
   return [...new Uint8Array(digest)]
     .map((item) => item.toString(16).padStart(2, "0"))
     .join("");
 }
 
 async function authorized(req: Request): Promise<boolean> {
-  const token = req.headers.get("x-openclaw-worker-token")?.trim() ?? "";
+  const token = req.headers.get("x-openclaw-scheduler-token")?.trim() ?? "";
   if (token.length < 32 || token.length > 256) return false;
-  const hash = await sha256Hex(token);
+  const tokenHash = await sha256Hex(token);
   const { data, error } = await admin.rpc("bridge_verify_model_retry_worker_token", {
-    p_token_hash: hash,
+    p_token_hash: tokenHash,
   });
   return !error && data === true;
 }
@@ -105,11 +115,15 @@ function isQuarantined(row: HealthRow | undefined): boolean {
   return new Date(row.quarantined_until).getTime() > Date.now();
 }
 
+function redactText(value: string): string {
+  return value.replace(SECRET_LIKE, "[REDACTED]").slice(0, MAX_RESULT_CHARS);
+}
+
 function extractText(data: unknown): string {
   if (!data || typeof data !== "object") return "";
   const record = data as Record<string, any>;
   if (typeof record.output_text === "string" && record.output_text.trim()) {
-    return record.output_text.trim().slice(0, MAX_OUTPUT_CHARS);
+    return redactText(record.output_text.trim());
   }
   if (Array.isArray(record.output)) {
     const parts: string[] = [];
@@ -119,11 +133,11 @@ function extractText(data: unknown): string {
         if (typeof content?.text === "string") parts.push(content.text);
       }
     }
-    if (parts.length) return parts.join("\n").trim().slice(0, MAX_OUTPUT_CHARS);
+    if (parts.length) return redactText(parts.join("\n").trim());
   }
   if (Array.isArray(record.choices)) {
     const text = record.choices[0]?.message?.content;
-    if (typeof text === "string") return text.trim().slice(0, MAX_OUTPUT_CHARS);
+    if (typeof text === "string") return redactText(text.trim());
   }
   return "";
 }
@@ -189,7 +203,7 @@ async function invokeModel(model: string, requestBody: JsonRecord): Promise<Atte
       headers: {
         authorization: `Bearer ${OPENCODE_KEY}`,
         "content-type": "application/json",
-        "user-agent": "openclaw-supabase-model-retry-worker/1",
+        "user-agent": "openclaw-supabase-model-retry-worker/4",
       },
       body: JSON.stringify({ ...requestBody, model }),
       signal: AbortSignal.timeout(35_000),
@@ -253,7 +267,7 @@ async function releaseUntil(task: QueueTask, notBefore: Date): Promise<void> {
     .eq("status", "claimed");
 }
 
-async function completeTask(task: QueueTask, text: string, attempts: Attempt[]): Promise<void> {
+async function completeTask(task: QueueTask, text: string, attempts: Attempt[]): Promise<boolean> {
   const deliveryKey = `telegram-delivery-${task.id}`;
   const correlationId = typeof task.payload?.correlation_id === "string"
     ? task.payload.correlation_id.slice(0, 128)
@@ -263,8 +277,9 @@ async function completeTask(task: QueueTask, text: string, attempts: Attempt[]):
     .select("id")
     .eq("task_key", deliveryKey)
     .maybeSingle();
+  let deliveryCreated = Boolean(existing);
   if (!existing) {
-    await admin.from("openclaw_work_queue").insert({
+    const { error } = await admin.from("openclaw_work_queue").insert({
       task_key: deliveryKey,
       task_type: "telegram_result_delivery",
       payload: {
@@ -273,18 +288,20 @@ async function completeTask(task: QueueTask, text: string, attempts: Attempt[]):
         correlation_id: correlationId,
         channel: "telegram",
         delivery_mode: "openclaw_message_send",
+        existing_single_poller_only: true,
         provider_secret_included: false,
         secret_values_included: false,
       },
       priority: 90,
       status: "queued",
       attempts: 0,
-      max_attempts: 10,
+      max_attempts: 20,
       not_before: new Date().toISOString(),
       evidence: {},
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
+    deliveryCreated = !error;
   }
 
   await admin
@@ -301,6 +318,7 @@ async function completeTask(task: QueueTask, text: string, attempts: Attempt[]):
         output_present: true,
         output_chars: text.length,
         delivery_task_key: deliveryKey,
+        delivery_task_created: deliveryCreated,
         models_attempted: attempts.map((item) => item.model),
         statuses: attempts.map((item) => item.status),
         raw_provider_error_stored: false,
@@ -311,6 +329,7 @@ async function completeTask(task: QueueTask, text: string, attempts: Attempt[]):
     })
     .eq("id", task.id)
     .eq("status", "claimed");
+  return deliveryCreated;
 }
 
 async function failTask(task: QueueTask, attempts: Attempt[]): Promise<boolean> {
@@ -342,97 +361,86 @@ async function failTask(task: QueueTask, attempts: Attempt[]): Promise<boolean> 
 
 Deno.serve(async (req: Request) => {
   if (req.method !== "POST") return reply({ ok: false, error: "method_not_allowed" }, 405);
-  if (!SUPABASE_URL || !ADMIN_KEY || !OPENCODE_KEY) {
+  if (!SUPABASE_URL || !adminKey.value || !OPENCODE_KEY) {
     return reply({ ok: false, error: "worker_not_configured", secret_values_included: false }, 503);
   }
   if (!(await authorized(req))) {
-    return reply({ ok: false, error: "unauthorized", secret_values_included: false }, 401);
-  }
-
-  const task = await claimTask();
-  if (!task) {
     return reply({
-      ok: true,
-      claimed: 0,
-      completed: 0,
-      requeued: 0,
-      failed: 0,
-      delivery_tasks_created: 0,
+      ok: false,
+      error: "unauthorized",
+      vault_auth_verified: false,
       provider_secret_returned: false,
       secret_values_included: false,
-    });
+    }, 401);
   }
 
-  const requestBody = task.payload?.request && typeof task.payload.request === "object"
-    ? task.payload.request as JsonRecord
-    : {};
-  const route = await loadRoute();
-  const configured = unique([route.primary ?? "", ...route.fallbacks]);
-  const health = await loadHealth(configured);
-  const active = configured.filter((model) => !isQuarantined(health.get(model))).slice(0, 2);
-
-  if (!active.length) {
-    const nextProbe = [...health.values()]
-      .map((item) => item.quarantined_until ? new Date(item.quarantined_until).getTime() : Number.NaN)
-      .filter(Number.isFinite)
-      .sort((a, b) => a - b)[0];
-    await releaseUntil(task, new Date(Math.max(Date.now() + 300_000, nextProbe || 0)));
-    return reply({
-      ok: true,
-      claimed: 1,
-      completed: 0,
-      requeued: 1,
-      failed: 0,
-      delivery_tasks_created: 0,
-      reason: "all_models_temporarily_quarantined",
-      provider_secret_returned: false,
-      secret_values_included: false,
-    });
-  }
-
-  const attempts: Attempt[] = [];
-  let success: Attempt | null = null;
-  for (const model of active) {
-    const attempt = await invokeModel(model, requestBody);
-    attempts.push(attempt);
-    await recordAttempt(attempt);
-    if (attempt.ok) {
-      success = attempt;
-      break;
-    }
-  }
-
+  let claimed = 0;
   let completed = 0;
   let requeued = 0;
   let failed = 0;
   let deliveryTasks = 0;
-  if (success) {
-    const text = extractText(success.data);
-    await completeTask(task, text, attempts);
-    completed = 1;
-    deliveryTasks = 1;
-  } else {
-    const terminal = await failTask(task, attempts);
-    if (terminal) failed = 1;
-    else requeued = 1;
+
+  for (let index = 0; index < MAX_TASKS_PER_RUN; index++) {
+    const task = await claimTask();
+    if (!task) break;
+    claimed++;
+
+    const requestBody = task.payload?.request && typeof task.payload.request === "object"
+      ? task.payload.request as JsonRecord
+      : {};
+    const route = await loadRoute();
+    const configured = unique([route.primary ?? "", ...route.fallbacks]);
+    const health = await loadHealth(configured);
+    const active = configured.filter((model) => !isQuarantined(health.get(model))).slice(0, 2);
+
+    if (!active.length) {
+      const nextProbe = [...health.values()]
+        .map((item) => item.quarantined_until ? new Date(item.quarantined_until).getTime() : Number.NaN)
+        .filter(Number.isFinite)
+        .sort((a, b) => a - b)[0];
+      await releaseUntil(task, new Date(Math.max(Date.now() + 300_000, nextProbe || 0)));
+      requeued++;
+      continue;
+    }
+
+    const attempts: Attempt[] = [];
+    let success: Attempt | null = null;
+    for (const model of active) {
+      const attempt = await invokeModel(model, requestBody);
+      attempts.push(attempt);
+      await recordAttempt(attempt);
+      if (attempt.ok) {
+        success = attempt;
+        break;
+      }
+    }
+
+    if (success) {
+      const text = extractText(success.data);
+      if (await completeTask(task, text, attempts)) deliveryTasks++;
+      completed++;
+    } else {
+      const terminal = await failTask(task, attempts);
+      if (terminal) failed++;
+      else requeued++;
+    }
   }
 
   await admin.from("bridge_events").insert({
-    event_type: "server_model_retry_worker_run",
+    event_type: "server_model_retry_worker_run_v4",
     node_name: "supabase",
-    correlation_id: typeof task.payload?.correlation_id === "string"
-      ? task.payload.correlation_id.slice(0, 128)
-      : null,
+    correlation_id: crypto.randomUUID(),
     severity: failed ? "warning" : "info",
-    outcome: failed ? "failed" : completed ? "succeeded" : "queued",
+    outcome: failed ? "failed" : "succeeded",
     detail: {
-      task_key: task.task_key,
+      claimed,
       completed,
       requeued,
       failed,
-      delivery_tasks_created: deliveryTasks,
-      attempted_models: attempts.map((item) => item.model),
-      statuses: attempts.map((item) => item.status),
+      telegram_delivery_tasks_created: deliveryTasks,
+      vault_auth_verified: true,
+      runtime_server_key_type: adminKey.type,
+      direct_telegram_get_updates: false,
       raw_provider_error_stored: false,
       provider_secret_returned: false,
       secret_values_included: false,
@@ -442,13 +450,14 @@ Deno.serve(async (req: Request) => {
 
   return reply({
     ok: true,
-    claimed: 1,
+    claimed,
     completed,
     requeued,
     failed,
-    delivery_tasks_created: deliveryTasks,
-    attempted_models: attempts.map((item) => item.model),
-    statuses: attempts.map((item) => item.status),
+    telegram_delivery_tasks_created: deliveryTasks,
+    vault_auth_verified: true,
+    runtime_server_key_type: adminKey.type,
+    direct_telegram_get_updates: false,
     provider_secret_returned: false,
     secret_values_included: false,
   });
