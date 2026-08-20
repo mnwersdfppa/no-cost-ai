@@ -1,0 +1,128 @@
+name: Validate recovery execution chain
+
+on:
+  pull_request:
+    paths:
+      - "supabase/migrations/20260820114135_record_recovery_execution_chain_v1.sql"
+      - "supabase/deployed/openclaw-recovery-execution-chain-v1.json"
+      - ".github/workflows/recovery-execution-chain-validate.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recovery-execution-chain-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGPASSWORD: postgres
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Validate static safety contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          import re
+
+          sql_path = Path("supabase/migrations/20260820114135_record_recovery_execution_chain_v1.sql")
+          receipt_path = Path("supabase/deployed/openclaw-recovery-execution-chain-v1.json")
+          sql = sql_path.read_text(encoding="utf-8")
+          receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+
+          required = (
+              "bridge_recovery_execution_chain",
+              "bridge_recovery_execution_chain_readiness",
+              "enable row level security",
+              "secret_values_included",
+              "docker_scratch",
+              "supabase_apply",
+              "telegram_t4",
+              "production",
+          )
+          for marker in required:
+              assert marker in sql.lower(), marker
+
+          forbidden = {
+              "destructive table drop": r"\bdrop\s+table\b",
+              "destructive delete": r"\bdelete\s+from\b",
+              "arbitrary shell pipe": r"curl[^\n]*\|\s*(?:ba)?sh",
+              "secret literal": r"(?:sk-proj-|sk-or-v1-|ghp_|github_pat_|xox[baprs]-|tskey-(?:auth|api|client)-|dckr_(?:pat|oat)_)",
+          }
+          for label, pattern in forbidden.items():
+              assert re.search(pattern, sql, re.IGNORECASE) is None, label
+
+          assert receipt["cloud_chain"]["read_only_preflight"] == "pass"
+          assert receipt["cloud_chain"]["docker_scratch"] == "pass"
+          assert receipt["cloud_chain"]["supabase_live_migration"] == "pass"
+          assert receipt["cloud_chain"]["post_migration_verify"] == "pass"
+          assert receipt["remaining_receipt_gates"]["physical_pi"].startswith("pending_")
+          assert receipt["remaining_receipt_gates"]["telegram_t4"].startswith("pending_")
+          assert receipt["safety"]["second_telegram_poller_created"] is False
+          assert receipt["safety"]["secret_values_included"] is False
+          assert receipt["completion_claim"] is False
+          print("STATIC_CONTRACT_PASS")
+          PY
+
+      - name: Apply migration to PostgreSQL 17 scratch
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 \
+            -f supabase/migrations/20260820114135_record_recovery_execution_chain_v1.sql
+
+      - name: Verify scratch receipt chain
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage_count="$(psql -At -h 127.0.0.1 -U postgres -d postgres -c \
+            "select count(*) from public.bridge_recovery_execution_chain where release_name='openclaw-recovery-20260820-v1';")"
+          test "$stage_count" = "9"
+
+          cloud_complete="$(psql -At -h 127.0.0.1 -U postgres -d postgres -c \
+            "select public.bridge_recovery_execution_chain_readiness('openclaw-recovery-20260820-v1')->>'cloud_receipt_chain_complete';")"
+          test "$cloud_complete" = "true"
+
+          invalid_receipts="$(psql -At -h 127.0.0.1 -U postgres -d postgres -c \
+            "select count(*) from public.bridge_recovery_execution_chain where secret_values_included or length(evidence_sha256)<>64;")"
+          test "$invalid_receipts" = "0"
+
+          rls_enabled="$(psql -At -h 127.0.0.1 -U postgres -d postgres -c \
+            "select relrowsecurity from pg_class where oid='public.bridge_recovery_execution_chain'::regclass;")"
+          test "$rls_enabled" = "t"
+
+          echo "POSTGRES_SCRATCH_PASS stages=$stage_count cloud=$cloud_complete rls=$rls_enabled"
+
+      - name: Confirm validation-only workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          text = Path(".github/workflows/recovery-execution-chain-validate.yml").read_text(encoding="utf-8")
+          forbidden = ("git push", "gh pr merge", "supabase db push", "vercel --prod", "docker push")
+          for marker in forbidden:
+              assert marker not in text.lower(), marker
+          print("VALIDATION_ONLY_PASS")
+          PY
