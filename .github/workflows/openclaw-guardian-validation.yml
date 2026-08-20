@@ -104,4 +104,18 @@ jobs:
 
       - name: Confirm validation-only workflow
         run: |
-          ! grep -RniE 'supabase functions deploy|vercel deploy|gh pr merge|git push' .github/workflows/openclaw-guardian-validation.yml
+          python3 - <<'PY'
+          from pathlib import Path
+
+          workflow = Path(".github/workflows/openclaw-guardian-validation.yml").read_text(encoding="utf-8")
+          forbidden = [
+              "supabase functions " + "deploy",
+              "vercel " + "deploy",
+              "gh pr " + "merge",
+              "git " + "push",
+          ]
+          matches = [item for item in forbidden if item in workflow]
+          if matches:
+              raise SystemExit("write/deploy command found: " + ", ".join(matches))
+          print("Validation-only workflow confirmed")
+          PY
