@@ -21,7 +21,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@v5
         with:
@@ -50,15 +52,17 @@ jobs:
           text = '\n'.join(path.read_text(encoding='utf-8') for path in files)
           trees = [ast.parse(path.read_text(encoding='utf-8')) for path in files]
 
+          # Current deterministic recovery allowlist. The broad legacy
+          # pi_infrastructure_recovery handler is intentionally retired.
           required = {
               'pi_supabase_auth_model_recovery',
-              'pi_infrastructure_recovery',
               'telegram_model_failover_repair',
               'worker_liveness_guardian',
               'pull_recovery',
           }
           missing = sorted(value for value in required if value not in text)
           assert not missing, f'missing recovery contract markers: {missing}'
+          assert 'pi_infrastructure_recovery' not in text, 'obsolete broad recovery handler must stay retired'
 
           forbidden_calls = {'eval', 'exec', 'compile'}
           for tree in trees:
