@@ -22,10 +22,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     OPENCLAW_RUNTIME_DIR=/runtime
 
 WORKDIR /opt/openclaw-compat-guardian
-COPY guardian.py /opt/openclaw-compat-guardian/guardian.py
+COPY guardian.py self_test.py /opt/openclaw-compat-guardian/
 
-RUN python3 -m py_compile /opt/openclaw-compat-guardian/guardian.py \
-    && python3 /opt/openclaw-compat-guardian/guardian.py self-test \
+RUN python3 -m py_compile \
+      /opt/openclaw-compat-guardian/guardian.py \
+      /opt/openclaw-compat-guardian/self_test.py \
+    && python3 /opt/openclaw-compat-guardian/self_test.py \
     && groupadd --gid 65532 guardian \
     && useradd --uid 65532 --gid 65532 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin guardian \
     && mkdir -p /openclaw /runtime \
@@ -34,7 +36,7 @@ RUN python3 -m py_compile /opt/openclaw-compat-guardian/guardian.py \
 USER 65532:65532
 
 HEALTHCHECK --interval=5m --timeout=10s --start-period=10s --retries=2 \
-  CMD ["python3", "/opt/openclaw-compat-guardian/guardian.py", "self-test"]
+  CMD ["python3", "/opt/openclaw-compat-guardian/self_test.py"]
 
 ENTRYPOINT ["python3", "/opt/openclaw-compat-guardian/guardian.py"]
 CMD ["doctor"]
