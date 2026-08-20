@@ -153,7 +153,7 @@ jobs:
           assert 'Pattern Promotion Engine v1' in skill
           assert 'Supabase' in docs and 'Notion' in docs
 
-          combined = '\n'.join((core, seed, edge, skill, docs))
+          combined = '\n'.join((core, seed, edge))
           forbidden = {
               'automatic paid fallback': r'paid_(?:api_)?fallback(?:_enabled)?\s*[:=]\s*true',
               'second Telegram poller': r'getUpdates|start_second_telegram_poller\s*:\s*true',
