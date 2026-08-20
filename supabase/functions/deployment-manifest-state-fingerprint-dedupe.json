@@ -1,0 +1,116 @@
+{
+  "schema_version": 1,
+  "project_id": "dpllasnpfskyyyzebyal",
+  "recorded_at": "2026-08-20T06:12:00Z",
+  "state": "CANARY_API_ACTIVE",
+  "function": {
+    "name": "state-fingerprint-dedupe",
+    "version": 1,
+    "status": "ACTIVE",
+    "verify_jwt": true,
+    "allowed_roles": [
+      "pi-gateway-client",
+      "pattern-observer"
+    ],
+    "method": "POST",
+    "request_body_limit_bytes": 32768,
+    "state_payload_limit_bytes": 24576,
+    "rate_limit_per_user_hour": 240,
+    "execution_key_required": true,
+    "canonical_payload_returned": false,
+    "source": "supabase/functions/state-fingerprint-dedupe/index.ts"
+  },
+  "database": {
+    "table": "bridge_state_fingerprints",
+    "redaction_rpc": "bridge_redact_state_jsonb",
+    "normalization_rpc": "bridge_normalize_state_payload",
+    "fingerprint_rpc": "bridge_state_fingerprint",
+    "upsert_rpc": "bridge_upsert_state_fingerprint",
+    "rls_enabled": true,
+    "anon_access": false,
+    "authenticated_direct_table_access": false,
+    "service_role_only_mutation": true,
+    "normalizer_version": 1,
+    "exact_match_only": true,
+    "similar_items_auto_merged": false
+  },
+  "normalization": {
+    "ignored_keys": [
+      "updated_at",
+      "created_at",
+      "timestamp",
+      "observed_at",
+      "nonce",
+      "request_id",
+      "correlation_id",
+      "trace_id",
+      "span_id"
+    ],
+    "secret_key_redaction": true,
+    "secret_like_string_redaction": true,
+    "request_secret_rejection": true,
+    "caller_custom_ignore_keys": false
+  },
+  "namespace_prefixes": [
+    "openclaw",
+    "pi",
+    "telegram",
+    "docker",
+    "mcp",
+    "n8n",
+    "notion",
+    "memory",
+    "workflow",
+    "system",
+    "integration",
+    "artifact",
+    "credential"
+  ],
+  "live_e2e": {
+    "state": "pass",
+    "unauthenticated_status": 401,
+    "first_status": 200,
+    "replay_status": 200,
+    "exact_replay_same_fingerprint": true,
+    "replay_duplicate": true,
+    "replay_seen_count": 2,
+    "similar_status": 200,
+    "similar_state_preserved": true,
+    "duplicate_execution_status": 409,
+    "secret_like_content_status": 400,
+    "canonical_payload_returned": false,
+    "provider_secret_returned": false,
+    "temporary_users_remaining": 0,
+    "temporary_state_rows_remaining": 0,
+    "temporary_ledger_rows_remaining": 0
+  },
+  "skill": {
+    "name": "state-fingerprint-dedupe",
+    "state": "canary",
+    "risk_tier": "low",
+    "auto_promotable": true,
+    "canary_success_runs": 3,
+    "canary_failed_runs": 0,
+    "minimum_canary_minutes": 30,
+    "required_gates": [
+      "static_security",
+      "schema_validation",
+      "deterministic_e2e",
+      "rollback",
+      "secret_boundary"
+    ]
+  },
+  "security": {
+    "secret_values_included": false,
+    "provider_secret_returned": false,
+    "canonical_payload_returned": false,
+    "arbitrary_code_execution": false,
+    "automatic_similar_merge": false,
+    "automatic_data_delete": false,
+    "credential_scope_auto_increase": false,
+    "automatic_paid_api": false,
+    "second_telegram_poller": false,
+    "automatic_merge": false,
+    "production_deployment": false
+  }
+}
