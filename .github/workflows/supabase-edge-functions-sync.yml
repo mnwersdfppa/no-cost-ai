@@ -1,0 +1,204 @@
+name: Supabase Edge Functions source sync
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'supabase/functions/**'
+      - 'supabase/config.toml'
+      - '.github/workflows/supabase-edge-functions-sync.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'supabase/functions/**'
+      - 'supabase/config.toml'
+      - '.github/workflows/supabase-edge-functions-sync.yml'
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: 'Deploy the manifest-declared functions to the canonical Supabase project'
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supabase-edge-functions-sync-\${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SUPABASE_PROJECT_REF: dpllasnpfskyyyzebyal
+
+jobs:
+  source-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      function_list: \${{ steps.manifest.outputs.function_list }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate manifest and source boundaries
+        id: manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' > /tmp/supabase-functions.txt
+          import json
+          import os
+          from pathlib import Path
+
+          manifest_path = Path("supabase/functions/manifest.json")
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          if manifest.get("project_id") != os.environ["SUPABASE_PROJECT_REF"]:
+              raise SystemExit("manifest project_id does not match the canonical project")
+          functions = manifest.get("functions")
+          if not isinstance(functions, dict) or not functions:
+              raise SystemExit("manifest.functions must be a non-empty object")
+
+          names = []
+          for name, row in sorted(functions.items()):
+              if not isinstance(name, str) or not isinstance(row, dict):
+                  raise SystemExit(f"invalid function entry: {name!r}")
+              entrypoint = row.get("entrypoint")
+              if not isinstance(entrypoint, str):
+                  raise SystemExit(f"{name}: entrypoint is required")
+              path = Path(entrypoint)
+              if path.parts[:3] != ("supabase", "functions", name):
+                  raise SystemExit(f"{name}: entrypoint must stay inside its function directory")
+              if not path.is_file():
+                  raise SystemExit(f"{name}: missing entrypoint {entrypoint}")
+              names.append(name)
+
+          print("\n".join(names))
+          print(
+              json.dumps(
+                  {
+                      "schema_version": 1,
+                      "repository": os.environ["GITHUB_REPOSITORY"],
+                      "ref": os.environ["GITHUB_REF"],
+                      "commit_sha": os.environ["GITHUB_SHA"],
+                      "project_ref": os.environ["SUPABASE_PROJECT_REF"],
+                      "functions": names,
+                      "secret_values_read": False,
+                      "secret_values_included": False,
+                  },
+                  sort_keys=True,
+              ),
+              file=open("/tmp/supabase-source-receipt.json", "w", encoding="utf-8"),
+          )
+          PY
+          {
+            echo "function_list<<EOF"
+            tr "\n" " " < /tmp/supabase-functions.txt
+            echo
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Reject provider secret material in source
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -RInE --exclude='*.md' --exclude='*.json' \
+            '(sk-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{20,}|sb_secret_[A-Za-z0-9_-]{20,}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' \
+            supabase/functions; then
+            echo "::error::provider secret material was found in the committed Edge Function source"
+            exit 1
+          fi
+
+      - name: Upload non-secret source receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: supabase-edge-source-receipt-\${{ github.sha }}
+          path: /tmp/supabase-source-receipt.json
+          if-no-files-found: error
+          retention-days: 14
+
+  deploy:
+    needs: source-audit
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.deploy == true)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      SUPABASE_ACCESS_TOKEN: \${{ secrets.SUPABASE_ACCESS_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Require the CI-only Supabase management token
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "\${SUPABASE_ACCESS_TOKEN:-}" ]; then
+            echo "::error::Repository secret SUPABASE_ACCESS_TOKEN is missing. Add it to GitHub Actions before enabling deployment."
+            exit 1
+          fi
+
+      - name: Set up Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Deploy manifest-declared Edge Functions
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t functions < <(python3 - <<'PY'
+          import json
+          from pathlib import Path
+          manifest = json.loads(Path("supabase/functions/manifest.json").read_text(encoding="utf-8"))
+          for name in sorted(manifest["functions"]):
+              print(name)
+          PY
+          )
+          for function_name in "\${functions[@]}"; do
+            echo "::group::Deploy \${function_name}"
+            supabase functions deploy "\${function_name}" \
+              --project-ref "\${SUPABASE_PROJECT_REF}" \
+              --use-api
+            echo "::endgroup::"
+          done
+
+      - name: Write deployment receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          manifest = json.loads(Path("supabase/functions/manifest.json").read_text(encoding="utf-8"))
+          receipt = {
+              "schema_version": 1,
+              "result": "deploy_commands_succeeded",
+              "project_ref": os.environ["SUPABASE_PROJECT_REF"],
+              "commit_sha": os.environ["GITHUB_SHA"],
+              "functions": sorted(manifest["functions"]),
+              "management_token_values_read_by_workflow": False,
+              "provider_secret_values_read_by_workflow": False,
+              "provider_secret_values_returned_to_pi": False,
+          }
+          Path("supabase-edge-deployment-receipt.json").write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Upload deployment receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: supabase-edge-deployment-receipt-\${{ github.sha }}
+          path: supabase-edge-deployment-receipt.json
+          if-no-files-found: error
+          retention-days: 14
