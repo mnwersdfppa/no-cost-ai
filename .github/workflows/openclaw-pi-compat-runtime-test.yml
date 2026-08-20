@@ -1,0 +1,175 @@
+name: Test OpenClaw Pi compatibility image runtime
+
+on:
+  push:
+    branches:
+      - feat/supabase-emergency-bridge-20260819
+    paths:
+      - 'container/openclaw-pi-compat-v1/**'
+      - '.github/workflows/openclaw-pi-compat-runtime-test.yml'
+  pull_request:
+    paths:
+      - 'container/openclaw-pi-compat-v1/**'
+      - '.github/workflows/openclaw-pi-compat-runtime-test.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openclaw-pi-compat-runtime-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Build native validation image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build \
+            --pull \
+            --tag openclaw-pi-compat:test \
+            container/openclaw-pi-compat-v1
+
+      - name: Inspect rootless image configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          docker image inspect openclaw-pi-compat:test > evidence/docker-image-inspect.json
+          python - <<'PY'
+          import json
+          import pathlib
+          import re
+
+          rows = json.loads(pathlib.Path('evidence/docker-image-inspect.json').read_text())
+          assert len(rows) == 1
+          config = rows[0]['Config']
+          assert config['User'] == '10001:10001'
+          assert config.get('Healthcheck', {}).get('Test')
+          assert not config.get('ExposedPorts')
+          environment = config.get('Env') or []
+          forbidden = re.compile(
+              r'^(OPENCODE_API_KEY|OPENROUTER_API_KEY|TELEGRAM_BOT_TOKEN|'
+              r'TAILSCALE.*(?:KEY|TOKEN)|SUPABASE_SERVICE_ROLE_KEY)='
+          )
+          assert not [item for item in environment if forbidden.search(item)]
+          assert '/sbin/tini' in (config.get('Entrypoint') or [])
+          print('image_config_contract=pass')
+          PY
+
+      - name: Run embedded self-test under hardened flags
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --read-only \
+            --network none \
+            --user 10001:10001 \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --tmpfs /tmp:size=16m,mode=1777 \
+            --env OPENCLAW_COMPAT_MODE=self-test \
+            openclaw-pi-compat:test \
+            > evidence/self-test.json
+          python - <<'PY'
+          import json
+          import pathlib
+          value = json.loads(pathlib.Path('evidence/self-test.json').read_text())
+          assert value['ok'] is True
+          assert value['provider_credentials_present'] is False
+          assert value['second_telegram_poller_created'] is False
+          assert value['secret_values_included'] is False
+          print('hardened_self_test=pass')
+          PY
+
+      - name: Prove credential-free network isolation fails safely
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/no-network
+          sudo chown 10001:10001 evidence/no-network
+          set +e
+          docker run --rm \
+            --read-only \
+            --network none \
+            --user 10001:10001 \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --tmpfs /tmp:size=16m,mode=1777 \
+            --volume "$PWD/evidence/no-network:/data" \
+            openclaw-pi-compat:test \
+            > evidence/no-network/stdout.json 2> evidence/no-network/stderr.txt
+          code=$?
+          set -e
+          test "$code" -eq 2
+          python - <<'PY'
+          import json
+          import pathlib
+
+          receipt = json.loads(
+              pathlib.Path('evidence/no-network/openclaw-compat-receipt.json').read_text()
+          )
+          assert receipt['healthy'] is False
+          assert receipt['readiness']['configured'] is False
+          assert receipt['ollama']['reachable'] is False
+          assert receipt['provider_credentials_present'] is False
+          assert receipt['single_telegram_poller_preserved'] is True
+          assert receipt['secret_values_included'] is False
+          print('safe_failure_contract=pass')
+          PY
+
+      - name: Write runtime receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import pathlib
+          from datetime import datetime, timezone
+
+          receipt = {
+              'schema_version': 1,
+              'generated_at': datetime.now(timezone.utc).isoformat(),
+              'repository': os.environ['GITHUB_REPOSITORY'],
+              'commit_sha': os.environ['GITHUB_SHA'],
+              'native_test_platform': 'linux/amd64',
+              'image_build': 'pass',
+              'image_user': '10001:10001',
+              'read_only_runtime': 'pass',
+              'cap_drop_all': 'pass',
+              'no_new_privileges': 'pass',
+              'network_none_self_test': 'pass',
+              'credential_free_safe_failure': 'pass',
+              'provider_credentials_included': False,
+              'second_telegram_poller_created': False,
+              'paid_fallback_enabled': False,
+              'secret_values_included': False,
+          }
+          pathlib.Path('evidence/runtime-receipt.json').write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-pi-compat-runtime-${{ github.run_id }}
+          path: evidence
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Confirm workflow cannot publish or merge
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -nE 'docker push|packages: write|gh pr merge|vercel --prod|supabase functions deploy|git push .*main' \
+            .github/workflows/openclaw-pi-compat-runtime-test.yml
