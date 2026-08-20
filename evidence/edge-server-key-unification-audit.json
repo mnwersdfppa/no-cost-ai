@@ -1,6 +1,6 @@
 {
   "branch": "feat/supabase-emergency-bridge-20260819",
-  "commit_sha": "076203088538f8076aaa08d4afff56a26145b3e9",
+  "commit_sha": "b5ac98ad0fd1f5e35ffb04b9f4a12ef66f1508d1",
   "functions": [
     {
       "classification": "mixed_or_unclassified",
@@ -75,7 +75,7 @@
       "secret_value_included": false
     }
   ],
-  "generated_at": "2026-08-20T00:14:06.875943+00:00",
+  "generated_at": "2026-08-20T00:22:57.926497+00:00",
   "legacy_service_role_only_functions": [
     "credential-readiness-admission-gated",
     "emergency-bridge",
