@@ -107,7 +107,7 @@ path.write_text(
             "base_recovery_sha256": "${BASE_RECOVERY_SHA}",
             "telegram_delivery_installer_sha256": "${DELIVERY_INSTALLER_SHA}",
             "guardian_gateway": "pi-model-gateway-guardian",
-            "server_retry_schedule": "5min",
+            "server_retry_schedule": "2min",
             "pi_delivery_schedule": "2min+jitter",
             "outbound_only_delivery": True,
             "second_telegram_poller_created": False,
@@ -146,7 +146,7 @@ Deno.serve(async (req: Request) => {
       telegram_delivery_installer_url: DELIVERY_INSTALLER_URL,
       telegram_delivery_installer_sha256: DELIVERY_INSTALLER_SHA,
       guardian_gateway: "pi-model-gateway-guardian",
-      server_retry_schedule: "*/5 * * * *",
+      server_retry_schedule: "*/2 * * * *",
       pi_delivery_schedule: "2min+jitter",
       outbound_only_delivery: true,
       second_telegram_poller_created: false,
@@ -156,8 +156,8 @@ Deno.serve(async (req: Request) => {
     },
     sensitivity: "non_secret",
     enabled: true,
-    source: "supabase-composed-verified-installers",
-    notes: "One-command Pi recovery installer composed from two exact SHA-pinned Supabase installers.",
+    source: "supabase-composed-verified-installers-v2",
+    notes: "One-command Pi recovery installer composed from two exact SHA-pinned Supabase installers and the canonical two-minute server retry schedule.",
     updated_at: new Date().toISOString(),
   }, { onConflict: "config_key" });
   if (error) return fail("master_installer_snapshot_persist_failed", 503);
