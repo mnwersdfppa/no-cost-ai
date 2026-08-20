@@ -20,6 +20,7 @@
       "verify_jwt": false,
       "auth_mode": "custom_pi_access_or_refresh_token",
       "entrypoint": "supabase/functions/pi-infra-bootstrap/index.ts",
+      "refresh_token_minimum_chars": 8,
       "purpose": "Refresh scoped Pi sessions and return Guardian routing metadata without returning the OpenCode provider secret"
     },
     "pi-model-gateway-guardian": {
@@ -37,6 +38,8 @@
     "pi-auth-refresh": {
       "verify_jwt": false,
       "auth_mode": "supabase_refresh_token_exchange",
+      "entrypoint": "supabase/functions/pi-auth-refresh/index.ts",
+      "refresh_token_minimum_chars": 8,
       "purpose": "Rotate the short-lived Pi access token without exposing server credentials"
     },
     "pi-recovery-installer-verified": {
@@ -64,6 +67,8 @@
   "raw_provider_secret_returned_to_pi": false,
   "queue_on_provider_failure": true,
   "max_immediate_provider_attempts": 2,
+  "pi_refresh_token_minimum_chars": 8,
+  "pi_refresh_current_format_e2e": true,
   "canonical_pi_installer": "pi-openclaw-guardian-master-installer-verified",
   "canonical_pi_installer_sha256": "bc938153e8b6bfe90dabb0471d34eaebef595aca6f5ec94db64d1b206cd8ce39",
   "legacy_anon_fallback": false,
