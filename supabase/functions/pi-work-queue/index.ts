@@ -125,7 +125,7 @@ Deno.serve(async (req: Request) => {
     p_modern_key_present: adminKey.modern,
     p_legacy_key_present: adminKey.legacy,
     p_value_returned: false,
-  }).catch(() => undefined);
+  });
 
   const parsed = await requestBody(req);
   if (parsed instanceof Response) return parsed;
