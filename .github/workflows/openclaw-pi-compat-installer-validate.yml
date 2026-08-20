@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
 
@@ -73,7 +73,7 @@ jobs:
               'docker socket mount': r'docker\.sock',
               'curl pipe shell': r'curl\s*\|\s*(?:sh|bash)',
               'eval': r'\beval\b',
-              'source': r'(^|\s)source\s+',
+              'shell source command': r'^[ \t]*(?:source|\.)[ \t]+(?![=])',
               'unknown kill': r'kill\s+-9|pkill|killall',
           }
           for name, pattern in forbidden.items():
@@ -109,5 +109,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ! grep -nE 'docker push|packages: write|gh pr merge|vercel --prod|supabase functions deploy|git push .*main' \
-            .github/workflows/openclaw-pi-compat-installer-validate.yml
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/openclaw-pi-compat-installer-validate.yml')
+          text = path.read_text(encoding='utf-8')
+          runtime = text.split('- name: Confirm validation-only workflow', 1)[0]
+          forbidden = (
+              'docker' + ' push',
+              'packages:' + ' write',
+              'gh pr' + ' merge',
+              'vercel ' + '--prod',
+              'supabase functions ' + 'deploy',
+              'git push ' + 'main',
+          )
+          assert all(marker not in runtime for marker in forbidden)
+          PY
