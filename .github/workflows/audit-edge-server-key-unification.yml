@@ -1,6 +1,12 @@
 name: Audit Edge Function server-key unification
 
 on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'supabase/functions/**'
+      - '.github/workflows/audit-edge-server-key-unification.yml'
   push:
     branches:
       - feat/supabase-emergency-bridge-20260819
@@ -10,10 +16,10 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: audit-edge-server-key-unification
+  group: audit-edge-server-key-unification-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -23,11 +29,10 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: feat/supabase-emergency-bridge-20260819
           fetch-depth: 1
-          persist-credentials: true
+          persist-credentials: false
 
-      - name: Build non-secret server-key source inventory
+      - name: Build and validate non-secret server-key source inventory
         shell: bash
         run: |
           set -euo pipefail
@@ -40,34 +45,42 @@ jobs:
           from datetime import datetime, timezone
           from pathlib import Path
 
-          root=Path('supabase/functions')
-          excluded_parts={'deployed','_shared'}
-          rows=[]
+          root = Path('supabase/functions')
+          excluded_parts = {'deployed', '_shared'}
+          rows = []
+
           for path in sorted(root.glob('*/index.ts')):
               if any(part in excluded_parts for part in path.parts):
                   continue
-              text=path.read_text(encoding='utf-8')
-              has_modern='SUPABASE_SECRET_KEYS' in text
-              has_legacy='SUPABASE_SERVICE_ROLE_KEY' in text
-              modern_default=('modern.default' in text or 'secretKeys.default' in text or
-                              'parsed?.default' in text or 'parsed.default' in text)
-              modern_before_legacy=(
-                  has_modern and has_legacy and
-                  text.find('SUPABASE_SECRET_KEYS') < text.find('SUPABASE_SERVICE_ROLE_KEY')
+
+              text = path.read_text(encoding='utf-8')
+              has_modern = 'SUPABASE_SECRET_KEYS' in text
+              has_legacy = 'SUPABASE_SERVICE_ROLE_KEY' in text
+              modern_default = (
+                  'modern.default' in text
+                  or 'secretKeys.default' in text
+                  or 'parsed?.default' in text
+                  or 'parsed.default' in text
               )
-              has_runtime_receipt='bridge_record_runtime_key_selection' in text
-              uses_admin_client=('createClient(' in text and (has_modern or has_legacy))
+              modern_before_legacy = (
+                  has_modern
+                  and has_legacy
+                  and text.find('SUPABASE_SECRET_KEYS')
+                  < text.find('SUPABASE_SERVICE_ROLE_KEY')
+              )
+              has_runtime_receipt = 'bridge_record_runtime_key_selection' in text
+              uses_admin_client = 'createClient(' in text and (has_modern or has_legacy)
 
               if not uses_admin_client:
-                  classification='no_server_admin_key'
+                  classification = 'no_server_admin_key'
               elif has_modern and modern_default and (not has_legacy or modern_before_legacy):
-                  classification='modern_secret_default_first'
+                  classification = 'modern_secret_default_first'
               elif has_modern and not has_legacy:
-                  classification='modern_secret_present_unproven_default'
+                  classification = 'modern_secret_present_unproven_default'
               elif has_legacy and not has_modern:
-                  classification='legacy_service_role_only'
+                  classification = 'legacy_service_role_only'
               else:
-                  classification='mixed_or_unclassified'
+                  classification = 'mixed_or_unclassified'
 
               rows.append({
                   'function_name': path.parent.name,
@@ -79,11 +92,11 @@ jobs:
                   'secret_value_included': False,
               })
 
-          summary={}
+          summary = {}
           for row in rows:
-              summary[row['classification']]=summary.get(row['classification'],0)+1
+              summary[row['classification']] = summary.get(row['classification'], 0) + 1
 
-          required_functions={
+          required_functions = {
               'canonical-client-config',
               'credential-readiness',
               'emergency-bridge',
@@ -91,43 +104,54 @@ jobs:
               'pi-work-queue',
               'token-gateway',
           }
-          present={row['function_name'] for row in rows}
-          missing=sorted(required_functions-present)
-          legacy_only=sorted(
-              row['function_name'] for row in rows
-              if row['classification']=='legacy_service_role_only'
+          present = {row['function_name'] for row in rows}
+          missing = sorted(required_functions - present)
+          required_legacy_only = sorted(
+              row['function_name']
+              for row in rows
+              if row['function_name'] in required_functions
+              and row['classification'] == 'legacy_service_role_only'
           )
 
-          receipt={
-              'schema_version':1,
-              'result':'pass' if not missing else 'partial',
-              'repository':os.environ['GITHUB_REPOSITORY'],
-              'branch':'feat/supabase-emergency-bridge-20260819',
-              'commit_sha':os.environ['GITHUB_SHA'],
-              'generated_at':datetime.now(timezone.utc).isoformat(),
-              'functions':rows,
-              'summary':summary,
-              'required_functions_missing_from_source':missing,
-              'legacy_service_role_only_functions':legacy_only,
-              'secret_values_read':False,
-              'secret_values_included':False,
+          result = 'pass' if not missing and not required_legacy_only else 'fail'
+          receipt = {
+              'schema_version': 2,
+              'result': result,
+              'repository': os.environ['GITHUB_REPOSITORY'],
+              'ref': os.environ['GITHUB_REF'],
+              'commit_sha': os.environ['GITHUB_SHA'],
+              'generated_at': datetime.now(timezone.utc).isoformat(),
+              'functions': rows,
+              'summary': summary,
+              'required_functions_missing_from_source': missing,
+              'required_functions_legacy_only': required_legacy_only,
+              'workflow_mutates_repository': False,
+              'secret_values_read': False,
+              'secret_values_included': False,
           }
-          Path('evidence/edge-server-key-unification-audit.json').write_text(
-              json.dumps(receipt,indent=2,sort_keys=True)+'\n',encoding='utf-8'
-          )
-          print(json.dumps({'summary':summary,'missing':missing,'legacy_only':legacy_only},sort_keys=True))
+          output = Path('evidence/edge-server-key-unification-audit.generated.json')
+          output.write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+          print(json.dumps({
+              'result': result,
+              'summary': summary,
+              'missing': missing,
+              'required_legacy_only': required_legacy_only,
+              'repository_mutation': False,
+          }, sort_keys=True))
+
+          if result != 'pass':
+              raise SystemExit(1)
           PY
 
-      - name: Commit audit receipt
+      - name: Write audit summary
         shell: bash
         run: |
           set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add evidence/edge-server-key-unification-audit.json
-          if git diff --cached --quiet; then
-            echo 'AUDIT_RECEIPT=UNCHANGED'
-          else
-            git commit -m 'chore: record Edge server-key unification audit'
-            git push origin HEAD:feat/supabase-emergency-bridge-20260819
-          fi
+          {
+            echo '## Edge server-key audit'
+            echo
+            echo '- Result: PASS'
+            echo '- Repository mutation: OFF'
+            echo '- Secret values read: OFF'
+            echo '- Secret values included: OFF'
+          } >> "$GITHUB_STEP_SUMMARY"
