@@ -28,8 +28,11 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/openclaw-compat-guardian
+  DOCKER_IMAGE: docker.io/odifool/openclaw-compat
+  GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/openclaw-compat-guardian
   CONTEXT: container/openclaw-compat-guardian
+  BROKER_URL: https://dpllasnpfskyyyzebyal.supabase.co/functions/v1/docker-publisher-broker
+  BROKER_AUDIENCE: supabase-openclaw-docker-publisher
 
 jobs:
   validate:
@@ -121,7 +124,7 @@ jobs:
     if: github.event_name != 'pull_request'
     needs: validate
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -146,7 +149,109 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push immutable multi-platform image
+      - name: Warm multi-platform build cache before requesting publisher token
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ env.CONTEXT }}
+          file: ${{ env.CONTEXT }}/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: false
+          build-args: |
+            VCS_REF=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          outputs: type=cacheonly
+          provenance: false
+
+      - name: Exchange GitHub OIDC for scoped Docker Hub registry token
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 - <<'PY' > /tmp/github-oidc-url
+          import os
+          import urllib.parse
+
+          url = os.environ['ACTIONS_ID_TOKEN_REQUEST_URL']
+          parts = urllib.parse.urlsplit(url)
+          query = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+          query.append(('audience', os.environ['BROKER_AUDIENCE']))
+          print(urllib.parse.urlunsplit((
+              parts.scheme,
+              parts.netloc,
+              parts.path,
+              urllib.parse.urlencode(query),
+              parts.fragment,
+          )))
+          PY
+          oidc_url="$(cat /tmp/github-oidc-url)"
+          curl -fsS \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$oidc_url" \
+            -o /tmp/github-oidc-response.json
+          oidc_token="$(python3 - <<'PY'
+          import json
+          print(json.load(open('/tmp/github-oidc-response.json', encoding='utf-8'))['value'])
+          PY
+          )"
+          echo "::add-mask::$oidc_token"
+          curl -fsS \
+            -H "Authorization: Bearer $oidc_token" \
+            -H 'content-type: application/json' \
+            -H 'user-agent: github-openclaw-container-publisher/1' \
+            --data '{"action":"issue_repository_token"}' \
+            "$BROKER_URL" \
+            -o /tmp/docker-publisher-response.json
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+
+          response_path = pathlib.Path('/tmp/docker-publisher-response.json')
+          data = json.loads(response_path.read_text(encoding='utf-8'))
+          assert data.get('ok') is True
+          assert data.get('image') == 'docker.io/odifool/openclaw-compat'
+          assert data.get('auth_config_mode') == 'identitytoken'
+          assert data.get('docker_pat_returned') is False
+          assert data.get('provider_secret_returned') is False
+          assert data.get('short_lived_registry_token_returned') is True
+          assert sorted(data.get('actions', [])) == ['pull', 'push']
+          token = data.get('identity_token')
+          assert isinstance(token, str) and len(token) > 20
+          print(f'::add-mask::{token}')
+
+          config_path = pathlib.Path.home() / '.docker' / 'config.json'
+          config_path.parent.mkdir(parents=True, exist_ok=True)
+          try:
+              config = json.loads(config_path.read_text(encoding='utf-8'))
+          except (FileNotFoundError, json.JSONDecodeError):
+              config = {}
+          auths = config.setdefault('auths', {})
+          auths['https://index.docker.io/v1/'] = {
+              'username': data['username'],
+              'identitytoken': token,
+          }
+          config_path.write_text(
+              json.dumps(config, separators=(',', ':')) + '\n',
+              encoding='utf-8',
+          )
+          config_path.chmod(0o600)
+          response_path.write_text(
+              json.dumps({
+                  'ok': True,
+                  'image': data['image'],
+                  'expires_at': data['expires_at'],
+                  'actions': data['actions'],
+                  'identity_token_removed': True,
+                  'docker_pat_returned': False,
+                  'secret_values_included': False,
+              }, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          PY
+          rm -f /tmp/github-oidc-url /tmp/github-oidc-response.json
+
+      - name: Build and push identical Docker Hub and GHCR manifests
         id: build
         uses: docker/build-push-action@v7
         with:
@@ -155,8 +260,10 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ${{ env.IMAGE_NAME }}:edge
-            ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+            ${{ env.DOCKER_IMAGE }}:edge
+            ${{ env.DOCKER_IMAGE }}:sha-${{ github.sha }}
+            ${{ env.GHCR_IMAGE }}:edge
+            ${{ env.GHCR_IMAGE }}:sha-${{ github.sha }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -170,23 +277,56 @@ jobs:
           provenance: mode=max
           sbom: true
 
-      - name: Inspect pushed platform manifest
+      - name: Inspect both pushed platform manifests
         shell: bash
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           set -euo pipefail
           test -n "$DIGEST"
-          docker buildx imagetools inspect "$IMAGE_NAME@$DIGEST" | tee /tmp/image-manifest.txt
-          grep -Fq 'linux/amd64' /tmp/image-manifest.txt
-          grep -Fq 'linux/arm64' /tmp/image-manifest.txt
+          docker buildx imagetools inspect "$DOCKER_IMAGE@$DIGEST" | tee /tmp/dockerhub-image-manifest.txt
+          docker buildx imagetools inspect "$GHCR_IMAGE@$DIGEST" | tee /tmp/ghcr-image-manifest.txt
+          for manifest in /tmp/dockerhub-image-manifest.txt /tmp/ghcr-image-manifest.txt; do
+            grep -Fq 'linux/amd64' "$manifest"
+            grep -Fq 'linux/arm64' "$manifest"
+          done
           {
             echo '## OpenClaw container guardian'
             echo
             echo "- Digest: \`$DIGEST\`"
+            echo '- Docker Hub: docker.io/odifool/openclaw-compat'
+            echo '- GHCR fallback: ghcr.io/mnwersdfppa/openclaw-compat-guardian'
             echo '- Platforms: linux/amd64, linux/arm64'
-            echo '- Registry credential used: GitHub repository GITHUB_TOKEN'
-            echo '- Supabase Docker-api-key used: no; unresolved and not exported'
+            echo '- Docker Hub credential path: Supabase OIDC broker → short-lived scoped registry token'
+            echo '- Docker Hub PAT returned by broker: no'
             echo '- Provider secrets in image: no'
             echo '- Docker socket required at runtime: no'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove short-lived Docker Hub token material
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import pathlib
+
+          path = pathlib.Path.home() / '.docker' / 'config.json'
+          if path.exists():
+              try:
+                  data = json.loads(path.read_text(encoding='utf-8'))
+              except json.JSONDecodeError:
+                  data = {}
+              auths = data.get('auths')
+              if isinstance(auths, dict):
+                  auths.pop('https://index.docker.io/v1/', None)
+              path.write_text(json.dumps(data, separators=(',', ':')) + '\n', encoding='utf-8')
+              path.chmod(0o600)
+          for name in (
+              '/tmp/docker-publisher-response.json',
+              '/tmp/github-oidc-response.json',
+              '/tmp/github-oidc-url',
+          ):
+              pathlib.Path(name).unlink(missing_ok=True)
+          PY
