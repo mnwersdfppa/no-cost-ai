@@ -1,0 +1,39 @@
+services:
+  openclaw-compat-guardian:
+    image: ${OPENCLAW_GUARDIAN_IMAGE:-ghcr.io/mnwersdfppa/openclaw-compat-guardian:edge}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VCS_REF: ${VCS_REF:-local}
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    network_mode: host
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 256m
+    cpus: 1.0
+    environment:
+      OPENCLAW_ROOT: /openclaw
+      OPENCLAW_RUNTIME_DIR: /runtime
+      HOST_ARCH: ${HOST_ARCH:-unknown}
+      HOST_BITS: ${HOST_BITS:-64}
+      HOST_KERNEL: ${HOST_KERNEL:-unknown}
+      HOST_OS_ID: ${HOST_OS_ID:-unknown}
+      HOST_OS_VERSION: ${HOST_OS_VERSION:-unknown}
+      HOST_MEMORY_MB: ${HOST_MEMORY_MB:-}
+      HOST_DISK_FREE_MB: ${HOST_DISK_FREE_MB:-}
+      EXPECTED_PRIMARY_MODEL: supabase-opencode/nemotron-3-ultra-free
+      EXPECTED_GATEWAY_URL: https://dpllasnpfskyyyzebyal.supabase.co/functions/v1/pi-model-gateway-guardian/v1
+      OLLAMA_URL: http://127.0.0.1:11434/api/tags
+    volumes:
+      - ${OPENCLAW_HOST_ROOT:?OPENCLAW_HOST_ROOT is required}:/openclaw:ro
+      - ${OPENCLAW_HOST_RUNTIME:?OPENCLAW_HOST_RUNTIME is required}:/runtime:rw
+      - /etc/os-release:/host/etc/os-release:ro
+      - /proc/meminfo:/host/proc/meminfo:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m
+    restart: "no"
