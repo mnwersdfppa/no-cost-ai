@@ -1,0 +1,168 @@
+{
+  "project_id": "dpllasnpfskyyyzebyal",
+  "recorded_at": "2026-08-20T03:00:00Z",
+  "state": "CLOUD_ACTIVE_EXTERNAL_RESEARCH_AND_PHYSICAL_PI_PENDING",
+  "canonical_storage": "supabase",
+  "human_knowledge_layer": "notion",
+  "functions": {
+    "pattern-observation-intake": {
+      "version": 1,
+      "status": "ACTIVE",
+      "verify_jwt": true,
+      "auth_roles": [
+        "pi-gateway-client",
+        "pattern-observer"
+      ],
+      "body_limit_bytes": 16384,
+      "context_limit_bytes": 8192,
+      "rate_limit_per_user_hour": 120,
+      "execution_key_required": true,
+      "secret_like_content_rejected": true,
+      "raw_logs_accepted": false,
+      "source": "supabase/functions/pattern-observation-intake/index.ts"
+    },
+    "pattern-skill-readiness": {
+      "version": 1,
+      "status": "ACTIVE",
+      "verify_jwt": true,
+      "read_only": true,
+      "provider_secret_returned": false,
+      "source": "supabase/functions/pattern-skill-readiness/index.ts"
+    }
+  },
+  "database_contracts": {
+    "observations": "bridge_pattern_observations",
+    "candidates": "bridge_pattern_candidates",
+    "research_queue": "bridge_research_queue",
+    "solution_catalog": "bridge_solution_catalog",
+    "skill_registry": "bridge_skill_registry",
+    "skill_versions": "bridge_skill_versions",
+    "skill_evaluations": "bridge_skill_evaluations",
+    "automation_runs": "bridge_automation_runs",
+    "source_bindings": "bridge_source_bindings",
+    "capability_registry": "bridge_capability_registry",
+    "record_rpc": "bridge_record_pattern_observation",
+    "score_rpc": "bridge_score_pattern_candidates",
+    "research_enqueue_rpc": "bridge_enqueue_pattern_research",
+    "research_claim_rpc": "bridge_claim_research_task",
+    "skill_gate_rpc": "bridge_skill_gate_status",
+    "skill_promote_rpc": "bridge_promote_skill_candidate",
+    "sweep_rpc": "bridge_pattern_skill_sweep",
+    "readiness_rpc": "bridge_pattern_skill_readiness"
+  },
+  "scheduler": {
+    "job": "openclaw-pattern-skill-sweeper-v1",
+    "schedule": "*/30 * * * *",
+    "execution_key_bucket_seconds": 1800,
+    "metadata_only_promotion": true,
+    "external_fetch": false
+  },
+  "scoring": {
+    "version": 1,
+    "frequency_weight": 0.24,
+    "recency_weight": 0.08,
+    "impact_weight": 0.22,
+    "reasoning_cost_weight": 0.16,
+    "automation_fit_weight": 0.14,
+    "reversibility_weight": 0.06,
+    "confidence_weight": 0.10,
+    "risk_penalty_weight": 0.18
+  },
+  "promotion": {
+    "states": [
+      "observed",
+      "proposed",
+      "sandboxed",
+      "validated",
+      "canary",
+      "active",
+      "deprecated",
+      "blocked"
+    ],
+    "minimum_gates": [
+      "static_security",
+      "deterministic_e2e",
+      "rollback"
+    ],
+    "minimum_canary_minutes": 30,
+    "minimum_canary_successes": 3,
+    "maximum_canary_failures": 0,
+    "arbitrary_code_execution": false
+  },
+  "research": {
+    "search_before_build": true,
+    "english_query_cached_by_fingerprint": true,
+    "providers": [
+      "official_docs",
+      "github",
+      "mcp_registry",
+      "n8n_templates",
+      "internal_catalog"
+    ],
+    "read_only_fetch_worker": "PENDING_GATE",
+    "automatic_code_execution": false
+  },
+  "notion_migration": {
+    "operational_ssot": "supabase",
+    "source_system": "notion",
+    "automatic_source_delete": false,
+    "secret_migration": false,
+    "states": [
+      "discovered",
+      "classified",
+      "staged",
+      "copied",
+      "verified",
+      "archived",
+      "blocked",
+      "ignored"
+    ]
+  },
+  "docker_compatibility": {
+    "repository": "docker.io/odifool/openclaw-compat",
+    "target_platforms": [
+      "linux/arm64",
+      "linux/amd64"
+    ],
+    "activation_gate": "docker_openclaw_multiarch_public_pull",
+    "repository_creation_is_not_publication": true,
+    "publisher_credential_location": "supabase_edge_only",
+    "image_contains_credentials": false,
+    "docker_socket_default": false,
+    "privileged_default": false,
+    "host_network_default": false
+  },
+  "e2e_gates": {
+    "pattern_skill_schema": "pass",
+    "pattern_skill_scoring_e2e": "pass",
+    "pattern_skill_promotion_boundary": "pass",
+    "pattern_skill_run_receipts": "pass",
+    "pattern_observation_intake_e2e": "pass",
+    "pattern_skill_readiness_e2e": "pass",
+    "pattern_skill_secret_rejection_e2e": "pass",
+    "capability_secret_alias_inventory": "pass"
+  },
+  "pending_gates": {
+    "pattern_skill_research_worker": "RESEARCH_FETCH_WORKER_NOT_CONNECTED",
+    "notion_record_migration": "SOURCE_CLASSIFICATION_AND_CHECKSUM_REQUIRED",
+    "docker_openclaw_multiarch_public_pull": "REQUIRES_PUBLIC_MANIFEST_AND_DIGEST_EVIDENCE",
+    "physical_pi_application": "CURRENT_MASTER_INSTALLER_EXECUTION_REQUIRED",
+    "openclaw_gateway_api_e2e": "PHYSICAL_PI_REQUIRED",
+    "telegram_round_trip": "PHYSICAL_PI_REQUIRED"
+  },
+  "security": {
+    "rls_enabled": true,
+    "direct_anon_table_access": false,
+    "direct_authenticated_table_mutation": false,
+    "secret_values_included": false,
+    "raw_provider_secret_returned": false,
+    "automatic_credential_scope_increase": false,
+    "automatic_paid_api": false,
+    "automatic_merge": false,
+    "production_deployment": false,
+    "second_telegram_poller": false,
+    "hidden_infrastructure": false,
+    "unauthorized_access": false,
+    "jailbreak_or_safeguard_bypass": false
+  }
+}
