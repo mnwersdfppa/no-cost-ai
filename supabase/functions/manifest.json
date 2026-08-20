@@ -52,11 +52,20 @@
       "auth_mode": "public_integrity_pinned_artifact",
       "purpose": "Serve the SHA-pinned deterministic recovery queue worker installer"
     },
+    "pi-openclaw-master-recovery-installer": {
+      "verify_jwt": false,
+      "auth_mode": "public_composed_integrity_snapshot",
+      "entrypoint": "supabase/functions/pi-openclaw-master-recovery-installer/index.ts",
+      "canonical": true,
+      "purpose": "Canonical one-command Pi installer that composes exact SHA-pinned model/auth recovery and outbound Telegram delivery installers"
+    },
     "pi-openclaw-guardian-master-installer-verified": {
       "verify_jwt": false,
       "auth_mode": "public_integrity_pinned_artifact",
       "entrypoint": "supabase/functions/pi-openclaw-guardian-master-installer-verified/index.ts",
-      "purpose": "Serve one SHA-pinned installer that applies model/auth recovery and the deterministic recovery queue worker in order"
+      "canonical": false,
+      "lifecycle_status": "compatibility",
+      "purpose": "Compatibility installer retained for rollback; superseded by pi-openclaw-master-recovery-installer"
     }
   },
   "canonical_supabase_client_key": "SUPABASE_PUBLISHABLE_KEYS.default",
@@ -69,8 +78,13 @@
   "max_immediate_provider_attempts": 2,
   "pi_refresh_token_minimum_chars": 8,
   "pi_refresh_current_format_e2e": true,
-  "canonical_pi_installer": "pi-openclaw-guardian-master-installer-verified",
-  "canonical_pi_installer_sha256": "bc938153e8b6bfe90dabb0471d34eaebef595aca6f5ec94db64d1b206cd8ce39",
+  "canonical_pi_installer": "pi-openclaw-master-recovery-installer",
+  "canonical_pi_installer_url": "https://dpllasnpfskyyyzebyal.supabase.co/functions/v1/pi-openclaw-master-recovery-installer",
+  "canonical_pi_installer_sha256": "e44df620e78778e7711f67783ed64fa3639761ce34554e50eda46f7589096179",
+  "canonical_pi_installer_bytes": 2350,
+  "canonical_model_auth_installer_sha256": "4c21d9eab6fff335950f8a4c8c7a064a20b9aa00aead487b811cee779e8ae947",
+  "canonical_telegram_delivery_installer_sha256": "1db248ffbc0fea0bf22bcf17e2908134c9554f64539e1fe908dc0e2939268e97",
+  "compatibility_pi_installer": "pi-openclaw-guardian-master-installer-verified",
   "legacy_anon_fallback": false,
   "vercel_canonical_auth": "connected_connector",
   "vercel_raw_token_fallback": false,
