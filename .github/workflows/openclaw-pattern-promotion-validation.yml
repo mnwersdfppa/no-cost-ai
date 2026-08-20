@@ -184,7 +184,7 @@ jobs:
               'vercel ' + '--prod',
               'gh pr ' + 'merge',
               'git push ' + 'origin main',
-              'contents: write',
+              'contents:' + ' write',
           )
           for marker in forbidden:
               assert marker not in text, marker
