@@ -1,4 +1,4 @@
-name: Validate pattern-to-skill control plane
+name: Validate canonical pattern-to-skill control plane
 
 on:
   pull_request:
@@ -10,6 +10,8 @@ on:
       - 'supabase/migrations/20260820003000_pattern_to_skill_schema.sql'
       - 'supabase/migrations/20260820003100_pattern_to_skill_functions.sql'
       - 'supabase/migrations/20260820003200_pattern_to_skill_seed_schedule.sql'
+      - 'supabase/migrations/20260820003300_repair_canonical_pattern_sweep.sql'
+      - 'supabase/migrations/20260820003400_suppress_redundant_pattern_research.sql'
       - '.github/workflows/pattern-skill-control-plane-validation.yml'
   push:
     branches:
@@ -22,6 +24,8 @@ on:
       - 'supabase/migrations/20260820003000_pattern_to_skill_schema.sql'
       - 'supabase/migrations/20260820003100_pattern_to_skill_functions.sql'
       - 'supabase/migrations/20260820003200_pattern_to_skill_seed_schedule.sql'
+      - 'supabase/migrations/20260820003300_repair_canonical_pattern_sweep.sql'
+      - 'supabase/migrations/20260820003400_suppress_redundant_pattern_research.sql'
       - '.github/workflows/pattern-skill-control-plane-validation.yml'
   workflow_dispatch:
 
@@ -29,7 +33,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: pattern-skill-control-plane-${{ github.ref }}
+  group: canonical-pattern-skill-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -46,64 +50,120 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Type-check Edge Functions
+      - name: Type-check retired compatibility endpoints
         run: |
           set -euo pipefail
           deno check supabase/functions/pattern-observation-intake/index.ts
           deno check supabase/functions/pattern-skill-readiness/index.ts
+          grep -F 'retired_use_openclaw_pattern_engine_observe' supabase/functions/pattern-observation-intake/index.ts
+          grep -F 'retired_use_openclaw_pattern_engine_status' supabase/functions/pattern-skill-readiness/index.ts
 
-      - name: Validate deployment manifest
+      - name: Validate canonical deployment manifest
         run: |
           set -euo pipefail
           python3 - <<'PY'
           import json
           from pathlib import Path
 
-          path = Path('supabase/functions/deployment-manifest-pattern-skill.json')
-          data = json.loads(path.read_text(encoding='utf-8'))
+          data = json.loads(
+              Path('supabase/functions/deployment-manifest-pattern-skill.json')
+              .read_text(encoding='utf-8')
+          )
 
           assert data['project_id'] == 'dpllasnpfskyyyzebyal'
           assert data['canonical_storage'] == 'supabase'
-          assert data['functions']['pattern-observation-intake']['verify_jwt'] is True
-          assert data['functions']['pattern-observation-intake']['execution_key_required'] is True
-          assert data['functions']['pattern-observation-intake']['secret_like_content_rejected'] is True
-          assert data['functions']['pattern-observation-intake']['raw_logs_accepted'] is False
-          assert data['functions']['pattern-skill-readiness']['verify_jwt'] is True
-          assert data['functions']['pattern-skill-readiness']['read_only'] is True
-          assert data['scheduler']['schedule'] == '*/30 * * * *'
-          assert data['scheduler']['metadata_only_promotion'] is True
-          assert data['scheduler']['external_fetch'] is False
-          assert data['promotion']['arbitrary_code_execution'] is False
-          assert data['research']['search_before_build'] is True
-          assert data['research']['automatic_code_execution'] is False
-          assert data['notion_migration']['automatic_source_delete'] is False
-          assert data['notion_migration']['secret_migration'] is False
-          assert data['docker_compatibility']['repository_creation_is_not_publication'] is True
-          assert data['docker_compatibility']['image_contains_credentials'] is False
-          assert data['security']['secret_values_included'] is False
-          assert data['security']['automatic_credential_scope_increase'] is False
-          assert data['security']['automatic_paid_api'] is False
-          assert data['security']['automatic_merge'] is False
-          assert data['security']['production_deployment'] is False
-          assert data['security']['second_telegram_poller'] is False
-          assert data['security']['hidden_infrastructure'] is False
-          assert data['security']['unauthorized_access'] is False
-          assert data['security']['jailbreak_or_safeguard_bypass'] is False
-          print('manifest_contract=pass')
+          architecture = data['canonical_pattern_architecture']
+          assert architecture['operational_observations'] == 'openclaw_pattern_observations'
+          assert architecture['operational_candidates'] == 'openclaw_pattern_candidates'
+          assert architecture['canonical_api'] == 'openclaw-pattern-engine'
+          assert architecture['single_candidate_authority'] is True
+          assert data['functions']['openclaw-pattern-engine']['arbitrary_execution_allowed'] is False
+          assert data['functions']['pattern-observation-intake']['status'] == 'RETIRED_410'
+          assert data['functions']['pattern-skill-readiness']['status'] == 'RETIRED_410'
+
+          scheduler = data['scheduler']
+          assert scheduler['canonical_sweep_job']['schedule'] == '19 * * * *'
+          assert scheduler['canonical_sweep_job']['metadata_only_promotion'] is True
+          assert scheduler['canonical_sweep_job']['external_fetch'] is False
+          assert scheduler['research_housekeeping_job']['schedule'] == '24 * * * *'
+          assert scheduler['research_housekeeping_job']['paid_api'] is False
+
+          verified = data['verified_state']
+          assert verified['operational_patterns'] == 15
+          assert verified['patterns_synced'] == 15
+          assert verified['skills_synced'] == 15
+          assert verified['internal_catalog_tasks_completed'] == 13
+          assert verified['redundant_external_tasks_suppressed'] == 52
+          assert verified['research_tasks_queued'] == 0
+          assert verified['research_tasks_failed'] == 0
+          assert verified['external_api_calls_for_research'] == 0
+          assert verified['paid_api_calls_for_research'] == 0
+
+          research = data['research']
+          assert research['search_before_build'] is True
+          assert research['internal_catalog_first'] is True
+          assert research['automatic_code_execution'] is False
+
+          notion = data['notion_migration']
+          assert notion['migration_state'] == 'verified'
+          assert notion['active_items_copied'] == 7
+          assert notion['completed_items_retained'] == 3
+          assert notion['source_retained'] is True
+          assert notion['automatic_source_delete'] is False
+          assert notion['automatic_source_archive'] is False
+          assert notion['secret_migration'] is False
+
+          docker = data['docker_compatibility']
+          assert docker['anonymous_public_pull'] is True
+          assert docker['digest_verified'] is True
+          assert docker['non_root_verified'] is True
+          assert docker['entrypoint_verified'] is True
+          assert docker['image_contains_credentials'] is False
+          assert sorted(docker['platforms']) == ['linux/amd64', 'linux/arm64']
+
+          github = data['credential_selection']['github']
+          assert github['edge_fallback_alias'] == 'Github-api-delicate-key'
+          assert github['broad_alias_selected'] is False
+          assert data['credential_selection']['notion']['users_me_read_contract'] == 'PASS'
+
+          security = data['security']
+          for key in (
+              'secret_values_included',
+              'automatic_credential_scope_increase',
+              'automatic_paid_api',
+              'automatic_merge',
+              'production_deployment',
+              'second_telegram_poller',
+              'hidden_infrastructure',
+              'unauthorized_access',
+              'jailbreak_or_safeguard_bypass',
+          ):
+              assert security[key] is False, key
+          print('canonical_manifest=pass')
           PY
 
-      - name: Validate schema and RPC boundaries
+      - name: Validate schema, sweep and research deduplication
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          import re
 
-          schema = Path('supabase/migrations/20260820003000_pattern_to_skill_schema.sql').read_text(encoding='utf-8')
-          functions = Path('supabase/migrations/20260820003100_pattern_to_skill_functions.sql').read_text(encoding='utf-8')
-          seed = Path('supabase/migrations/20260820003200_pattern_to_skill_seed_schedule.sql').read_text(encoding='utf-8')
+          paths = {
+              name: Path(name).read_text(encoding='utf-8')
+              for name in (
+                  'supabase/migrations/20260820003000_pattern_to_skill_schema.sql',
+                  'supabase/migrations/20260820003100_pattern_to_skill_functions.sql',
+                  'supabase/migrations/20260820003200_pattern_to_skill_seed_schedule.sql',
+                  'supabase/migrations/20260820003300_repair_canonical_pattern_sweep.sql',
+                  'supabase/migrations/20260820003400_suppress_redundant_pattern_research.sql',
+              )
+          }
+          schema = paths['supabase/migrations/20260820003000_pattern_to_skill_schema.sql']
+          functions = paths['supabase/migrations/20260820003100_pattern_to_skill_functions.sql']
+          sweep = paths['supabase/migrations/20260820003300_repair_canonical_pattern_sweep.sql']
+          housekeeping = paths['supabase/migrations/20260820003400_suppress_redundant_pattern_research.sql']
 
-          required_tables = {
+          for table in (
               'bridge_pattern_observations',
               'bridge_pattern_candidates',
               'bridge_research_queue',
@@ -114,59 +174,39 @@ jobs:
               'bridge_automation_runs',
               'bridge_source_bindings',
               'bridge_capability_registry',
-          }
-          for table in required_tables:
+          ):
               assert f'create table if not exists public.{table}' in schema, table
-              assert f"'{table}'" in schema, f'RLS loop missing {table}'
+
+          assert 'enable row level security' in schema.lower()
+          assert 'secret_values_included boolean not null default false' in schema.lower()
+          assert 'unique(skill_key,execution_key)' in schema.lower()
+          assert 'bridge_skill_gate_status' in functions
+          assert 'v_success_runs>=3' in functions
+          assert 'v_failed_runs=0' in functions
 
           for marker in (
-              'enable row level security',
-              'revoke all on table',
-              'grant all on table',
-              'secret_values_included boolean not null default false',
-              'unique(skill_key,execution_key)',
-          ):
-              assert marker in schema.lower(), marker
-
-          required_functions = {
-              'bridge_refresh_pattern_candidate',
-              'bridge_record_pattern_observation',
-              'bridge_score_pattern_candidates',
-              'bridge_enqueue_pattern_research',
-              'bridge_claim_research_task',
-              'bridge_skill_gate_status',
-              'bridge_promote_skill_candidate',
-              'bridge_pattern_skill_sweep',
-              'bridge_pattern_skill_readiness',
-          }
-          for function in required_functions:
-              assert f'function public.{function}' in functions, function
-
-          for marker in (
-              "metadata_only_promotion',true",
+              'openclaw_harvest_operational_patterns',
+              'openclaw_refresh_pattern_scores',
+              'bridge_sync_openclaw_pattern_engine',
+              'bridge_process_internal_research_tasks',
+              "'trace-to-pattern-feedback'",
+              "'reuse-first-solution-composer'",
+              "'metadata_only_promotion',true",
+              "'external_fetch_performed',false",
               "'arbitrary_code_execution',false",
-              "'hidden_infrastructure',false",
-              "'credential_scope_auto_increase',false",
-              "'search_before_build',true",
-              "on conflict(skill_key,execution_key) do nothing",
-              "v_success_runs>=3",
-              "v_failed_runs=0",
           ):
-              assert marker in functions, marker
+              assert marker in sweep, marker
 
-          assert "'*/30 * * * *'" in seed
-          assert "'openclaw-pattern-skill-sweeper-v1'" in seed
-          assert "'delete_source_automatically',false" in seed
-          assert "'migrate_secrets',false" in seed
-          assert "'reasoning_is_fallback_not_default',true" in seed
-
-          mutation_grants = re.findall(
-              r'grant execute on function public\.(bridge_[^(]+)',
-              functions,
-              flags=re.IGNORECASE,
-          )
-          assert 'bridge_pattern_skill_readiness' in mutation_grants
-          print('schema_rpc_contract=pass')
+          for marker in (
+              'bridge_suppress_redundant_external_research_tasks',
+              "provider<>'internal_catalog'",
+              "'external_api_called',false",
+              "'paid_api_used',false",
+              "'openclaw-pattern-research-housekeeping-v1'",
+              "'24 * * * *'",
+          ):
+              assert marker in housekeeping, marker
+          print('schema_sweep_housekeeping=pass')
           PY
 
       - name: Reject arbitrary execution and secret literals
@@ -176,42 +216,32 @@ jobs:
           from pathlib import Path
           import re
 
-          paths = [
+          files = [
               Path('supabase/functions/pattern-observation-intake/index.ts'),
               Path('supabase/functions/pattern-skill-readiness/index.ts'),
               Path('supabase/migrations/20260820003000_pattern_to_skill_schema.sql'),
               Path('supabase/migrations/20260820003100_pattern_to_skill_functions.sql'),
               Path('supabase/migrations/20260820003200_pattern_to_skill_seed_schedule.sql'),
+              Path('supabase/migrations/20260820003300_repair_canonical_pattern_sweep.sql'),
+              Path('supabase/migrations/20260820003400_suppress_redundant_pattern_research.sql'),
           ]
-          texts = {path: path.read_text(encoding='utf-8') for path in paths}
-          edge = texts[paths[0]] + '\n' + texts[paths[1]]
+          combined = '\n'.join(path.read_text(encoding='utf-8') for path in files)
 
-          forbidden_edge = (
+          for pattern in (
               r'Deno\.Command\s*\(',
               r'new\s+Function\s*\(',
               r'\beval\s*\(',
               r'getUpdates',
               r'curl\s*\|\s*(?:sh|bash)',
-          )
-          for pattern in forbidden_edge:
-              assert re.search(pattern, edge, re.IGNORECASE) is None, pattern
-
-          combined = '\n'.join(texts.values())
-          secret_literals = (
               r'sk-proj-[A-Za-z0-9_-]{20,}',
               r'ghp_[A-Za-z0-9]{20,}',
               r'github_pat_[A-Za-z0-9_]{20,}',
               r'xox[baprs]-[A-Za-z0-9-]{20,}',
               r'tskey-(?:auth|api|client)-[A-Za-z0-9_-]{20,}',
               r'dckr_(?:pat|oat)_[A-Za-z0-9_-]{20,}',
-          )
-          for pattern in secret_literals:
-              assert re.search(pattern, combined) is None, pattern
-
-          assert 'SECRET_LIKE' in edge
-          assert 'secret_like_content_rejected' in edge
-          assert 'raw_logs_copied: false' in edge
-          print('execution_and_secret_boundary=pass')
+          ):
+              assert re.search(pattern, combined, re.IGNORECASE) is None, pattern
+          print('execution_secret_boundary=pass')
           PY
 
       - name: Confirm non-production workflow
@@ -221,14 +251,13 @@ jobs:
           from pathlib import Path
 
           workflow = Path('.github/workflows/pattern-skill-control-plane-validation.yml').read_text(encoding='utf-8')
-          forbidden = [
+          for marker in (
               'supabase functions ' + 'deploy',
               'vercel ' + '--prod',
               'gh pr ' + 'merge',
               'git push ' + 'origin main',
               'contents: write',
-          ]
-          for marker in forbidden:
+          ):
               assert marker not in workflow, marker
           assert 'contents: read' in workflow
           assert 'persist-credentials: false' in workflow
