@@ -1,0 +1,166 @@
+name: Docker reconcile Pi model route finalizer
+
+on:
+  push:
+    branches:
+      - fix/pi-model-route-docker-reconcile-20260821
+    paths:
+      - pi/pi-model-route-finalizer-20260821.sh
+      - docker/pi-model-route-finalizer/**
+      - .github/workflows/pi-model-route-finalizer-docker-verify.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pi-model-route-docker-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SCRIPT_PATH: pi/pi-model-route-finalizer-20260821.sh
+  EXPECTED_SHA256: a9b179f18596aacf2b474ea2ce6ea3f6ec32335b65a1d3a3ab556ffa7d446d8a
+  DOCKERFILE: docker/pi-model-route-finalizer/Dockerfile
+
+jobs:
+  verify:
+    name: exact bytes and multi-arch Docker execution
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Verify canonical bytes and GitHub raw parity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          actual="$(sha256sum "$SCRIPT_PATH" | awk '{print $1}')"
+          test "$actual" = "$EXPECTED_SHA256"
+          bash -n "$SCRIPT_PATH"
+
+          python3 - "$SCRIPT_PATH" <<'PY'
+          from pathlib import Path
+          import sys
+
+          data = Path(sys.argv[1]).read_bytes()
+          assert data.startswith(b"#!/usr/bin/env bash\n")
+          assert b"\r\n" not in data
+          assert data.endswith(b"\n")
+          print(f"canonical_bytes={len(data)}")
+          PY
+
+          raw="/tmp/pi-model-route-finalizer.raw.sh"
+          curl --fail --silent --show-error --location \
+            --proto '=https' --tlsv1.2 \
+            "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/${SCRIPT_PATH}" \
+            -o "$raw"
+
+          cmp --silent "$SCRIPT_PATH" "$raw"
+          test "$(sha256sum "$raw" | awk '{print $1}')" = "$EXPECTED_SHA256"
+          rm -f "$raw"
+
+      - name: Enable ARM64 emulation
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Initialize isolated Buildx builder
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          docker buildx create \
+            --name pi-model-route-reconcile \
+            --driver docker-container \
+            --use
+          docker buildx inspect --bootstrap
+          mkdir -p artifacts
+          chmod 0777 artifacts
+
+      - name: Build and execute linux/amd64 test
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          docker buildx build \
+            --pull \
+            --platform linux/amd64 \
+            --load \
+            --file "$DOCKERFILE" \
+            --tag pi-model-route-finalizer:amd64 \
+            .
+
+          docker run --rm \
+            --network none \
+            --platform linux/amd64 \
+            --volume "$PWD/artifacts:/out" \
+            pi-model-route-finalizer:amd64
+
+      - name: Build and execute linux/arm64 test
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          docker buildx build \
+            --pull \
+            --platform linux/arm64 \
+            --load \
+            --file "$DOCKERFILE" \
+            --tag pi-model-route-finalizer:arm64 \
+            .
+
+          docker run --rm \
+            --network none \
+            --platform linux/arm64 \
+            --volume "$PWD/artifacts:/out" \
+            pi-model-route-finalizer:arm64
+
+      - name: Compare architecture receipts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          files = sorted(Path("artifacts").glob("docker-validation-*.json"))
+          assert len(files) == 2, [str(path) for path in files]
+          rows = [json.loads(path.read_text(encoding="utf-8")) for path in files]
+          assert {row["architecture"] for row in rows} == {"x86_64", "aarch64"}
+          assert {row["script_sha256"] for row in rows} == {
+              "a9b179f18596aacf2b474ea2ce6ea3f6ec32335b65a1d3a3ab556ffa7d446d8a"
+          }
+          for row in rows:
+              assert row["result"] == "pass"
+              assert row["primary"] == "supabase-opencode/nemotron-3-ultra-free"
+              assert row["fallbacks"] == ["supabase-opencode/laguna-s-2.1-free"]
+              assert row["gateway_state"] == "active"
+              assert row["gateway_rpc_ok"] is True
+              assert row["idempotent_second_run"] is True
+              assert row["paid_api_fallback"] is False
+              assert row["second_telegram_poller_created"] is False
+              assert row["network_used_during_runtime"] is False
+              assert row["secret_values_included"] is False
+          print(json.dumps({"result": "pass", "receipts": rows}, indent=2))
+          PY
+
+          {
+            echo '## Docker reconciliation result'
+            echo
+            echo '- Exact repository and GitHub raw bytes: PASS'
+            echo '- SHA-256: `a9b179f18596aacf2b474ea2ce6ea3f6ec32335b65a1d3a3ab556ffa7d446d8a`'
+            echo '- linux/amd64 deterministic execution: PASS'
+            echo '- linux/arm64 deterministic execution: PASS'
+            echo '- Second-run idempotency: PASS'
+            echo '- Runtime network access: disabled'
+            echo '- Paid fallback: disabled'
+            echo '- Second Telegram poller: not created'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload reconciliation receipts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-model-route-docker-reconciliation
+          path: artifacts/*.json
+          if-no-files-found: error
+          retention-days: 7
