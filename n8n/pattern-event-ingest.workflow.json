@@ -1,0 +1,157 @@
+{
+  "name": "OpenClaw Pattern Event Ingest v1.1 (inactive)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "openclaw-pattern-event-v1",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "23a7abde-57ce-4c1c-afb8-b99b33464517",
+      "name": "Pattern Event Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "db82693d-059b-4cb8-b28a-3595f35fe116"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "d49d1063-f8ce-46fb-b1fc-a0fbf8f35c8d",
+              "leftValue": "={{ Boolean($env.OPENCLAW_PATTERN_INGEST_TOKEN) && $json.headers?.['x-openclaw-ingest-token'] === $env.OPENCLAW_PATTERN_INGEST_TOKEN }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "87cf3dc8-a09b-4070-a207-6c10f0205372",
+      "name": "Fail Closed Header Check",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [260, 0]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "c249cf6d-cebb-4b98-a07e-1a6ae5b57b81",
+              "name": "source_type",
+              "value": "n8n",
+              "type": "string"
+            },
+            {
+              "id": "9da2aeb3-bd1b-4ab0-8818-18386a13d1a1",
+              "name": "source_ref",
+              "value": "={{ $json.headers?.['x-correlation-id'] || $execution.id }}",
+              "type": "string"
+            },
+            {
+              "id": "f5210cc7-b120-44ed-8868-521347296cec",
+              "name": "pattern_kind",
+              "value": "={{ $json.body?.pattern_kind || 'workflow_event' }}",
+              "type": "string"
+            },
+            {
+              "id": "850270ed-71d7-4c41-9e9a-cde27aac4a56",
+              "name": "canonical_title",
+              "value": "={{ $json.body?.canonical_title || 'n8n workflow event' }}",
+              "type": "string"
+            },
+            {
+              "id": "3a01140a-fead-41ac-8110-7dde12146fa9",
+              "name": "redacted_summary",
+              "value": "={{ $json.body?.redacted_summary || 'redacted n8n event' }}",
+              "type": "string"
+            },
+            {
+              "id": "57b74072-f032-4717-8f30-07fd3c6858f9",
+              "name": "context",
+              "value": "={{ $json.body?.context || {} }}",
+              "type": "object"
+            }
+          ]
+        },
+        "includeOtherFields": false,
+        "options": {}
+      },
+      "id": "d5f36713-7a2a-42f2-886d-e78e7c46447d",
+      "name": "Minimize and Redact",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [520, -80]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://CHANGE_ME.invalid/internal/pattern-ingest",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-openclaw-ingest-token",
+              "value": "={{ $env.OPENCLAW_PATTERN_INGEST_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "21cd75ec-9ac6-465c-a286-44f18243f7df",
+      "name": "Send to Private OpenClaw Gateway",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [780, -80]
+    }
+  ],
+  "connections": {
+    "Pattern Event Webhook": {
+      "main": [[{"node": "Fail Closed Header Check", "type": "main", "index": 0}]]
+    },
+    "Fail Closed Header Check": {
+      "main": [[{"node": "Minimize and Redact", "type": "main", "index": 0}], []]
+    },
+    "Minimize and Redact": {
+      "main": [[{"node": "Send to Private OpenClaw Gateway", "type": "main", "index": 0}]]
+    }
+  },
+  "pinData": {},
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "none",
+    "saveDataSuccessExecution": "none",
+    "saveManualExecutions": false,
+    "saveExecutionProgress": false
+  },
+  "versionId": "1fdd2849-258b-4ab3-8413-c1d8dc18214e",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "openclawPatternEngineVersion": "1.1.0",
+    "requiresPrivateGatewayTarget": true,
+    "requiresEnvironmentToken": true,
+    "automaticActivation": false
+  },
+  "tags": []
+}
