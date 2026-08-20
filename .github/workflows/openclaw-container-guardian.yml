@@ -1,0 +1,192 @@
+name: OpenClaw container compatibility guardian
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'container/openclaw-compat-guardian/**'
+      - 'pi/install-openclaw-container-guardian.sh'
+      - '.github/workflows/openclaw-container-guardian.yml'
+  push:
+    branches:
+      - feat/supabase-emergency-bridge-20260819
+    paths:
+      - 'container/openclaw-compat-guardian/**'
+      - 'pi/install-openclaw-container-guardian.sh'
+      - '.github/workflows/openclaw-container-guardian.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: openclaw-container-guardian-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/openclaw-compat-guardian
+  CONTEXT: container/openclaw-compat-guardian
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm64
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4
+        with:
+          driver: docker-container
+          install: true
+
+      - name: Record immutable source hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum \
+            "$CONTEXT/guardian.py" \
+            "$CONTEXT/Dockerfile" \
+            "$CONTEXT/check_oci.py" \
+            "$CONTEXT/compose.yaml" \
+            "$CONTEXT/.dockerignore" \
+            | tee /tmp/source-sha256.txt
+
+      - name: Compile and self-test guardian
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile "$CONTEXT/guardian.py" "$CONTEXT/check_oci.py"
+          python3 "$CONTEXT/guardian.py" self-test
+          docker buildx build --check "$CONTEXT"
+
+      - name: Build and execute native image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker buildx build \
+            --load \
+            --platform linux/amd64 \
+            --build-arg VCS_REF="$GITHUB_SHA" \
+            --tag openclaw-compat-guardian:test \
+            "$CONTEXT"
+          docker run --rm \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --pids-limit 64 \
+            --memory 256m \
+            --network none \
+            openclaw-compat-guardian:test self-test
+
+      - name: Build multi-platform OCI archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --build-arg VCS_REF="$GITHUB_SHA" \
+            --provenance=false \
+            --output type=oci,dest=/tmp/openclaw-compat-guardian.oci.tar \
+            "$CONTEXT"
+          python3 "$CONTEXT/check_oci.py" \
+            /tmp/openclaw-compat-guardian.oci.tar \
+            --max-compressed-mb 180 \
+            --receipt /tmp/oci-compatibility-receipt.json
+
+      - name: Upload compatibility receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-container-compatibility-${{ github.sha }}
+          path: |
+            /tmp/source-sha256.txt
+            /tmp/oci-compatibility-receipt.json
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    if: github.event_name != 'pull_request'
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm64
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4
+        with:
+          driver: docker-container
+
+      - name: Login to GHCR with repository token
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push immutable multi-platform image
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ env.CONTEXT }}
+          file: ${{ env.CONTEXT }}/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:edge
+            ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            io.openclaw.supported-platforms=linux/amd64,linux/arm64
+            io.openclaw.provider-secret-included=false
+            io.openclaw.second-telegram-poller=false
+          build-args: |
+            VCS_REF=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
+
+      - name: Inspect pushed platform manifest
+        shell: bash
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          test -n "$DIGEST"
+          docker buildx imagetools inspect "$IMAGE_NAME@$DIGEST" | tee /tmp/image-manifest.txt
+          grep -Fq 'linux/amd64' /tmp/image-manifest.txt
+          grep -Fq 'linux/arm64' /tmp/image-manifest.txt
+          {
+            echo '## OpenClaw container guardian'
+            echo
+            echo "- Digest: \`$DIGEST\`"
+            echo '- Platforms: linux/amd64, linux/arm64'
+            echo '- Registry credential used: GitHub repository GITHUB_TOKEN'
+            echo '- Supabase Docker-api-key used: no; unresolved and not exported'
+            echo '- Provider secrets in image: no'
+            echo '- Docker socket required at runtime: no'
+          } >> "$GITHUB_STEP_SUMMARY"
