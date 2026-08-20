@@ -13,7 +13,7 @@ Resolve known operational intents without fresh model reasoning whenever an exis
 
 ## Route order
 
-1. Native API
+1. Verified native API
 2. MCP capability
 3. Connected app or connector
 4. Deterministic SQL or macro
@@ -22,6 +22,8 @@ Resolve known operational intents without fresh model reasoning whenever an exis
 7. Local model
 8. Cloud model
 9. Manual review
+
+A verified native API is preferred when available.
 
 ## One-owner rule
 
@@ -62,10 +64,11 @@ Return the selected capability and its endpoint, cost tier, permission risk, rel
 - Use n8n for connector work, not as authoritative state.
 - Use LangGraph only when checkpoint, interrupt, and resume semantics are required.
 - Use Docker only for portable workloads. Host devices, systemd, Tailscale, Ollama acceleration, Gateway control, and Telegram inbound polling remain native.
-- Unknown intents fail closed to manual review.
+- Unknown intents fail closed to manual review. Unknown intents route to manual review.
 
 ## Safety boundaries
 
+- Never return credentials, provider keys, Supabase server keys, refresh tokens, Authorization headers, or credential values.
 - No arbitrary command or executable path from a queue payload.
 - No automatic permission elevation, credential creation, paid fallback, merge, or Production deployment.
 - No second Telegram poller.
