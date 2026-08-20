@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-08-20T06:20:00Z",
+  "state": "PASS",
+  "supabase_project": "dpllasnpfskyyyzebyal",
+  "worker": {
+    "function": "pattern-research-worker",
+    "version": 1,
+    "authentication": "supabase_vault_sha256_verification",
+    "max_tasks_per_run": 2,
+    "schedule": "6,21,36,51 * * * *",
+    "enabled_providers": [
+      "github",
+      "internal_catalog"
+    ],
+    "disabled_providers": [
+      "official_docs",
+      "mcp_registry",
+      "n8n_templates",
+      "docker_hub",
+      "manual"
+    ]
+  },
+  "provider_reconciliation": {
+    "function": "bridge_reconcile_research_provider_queue",
+    "job": "openclaw-pattern-provider-reconcile-v1",
+    "schedule": "25 * * * *",
+    "disconnected_provider_state": "blocked",
+    "disconnected_provider_error": "PROVIDER_WORKER_NOT_CONNECTED",
+    "auto_requeue_after_enablement": true
+  },
+  "github_credential": {
+    "selected_alias": "Github-api-delicate-key",
+    "broader_alias_present": true,
+    "broader_alias_selected": false,
+    "selection_policy": "required_read_capability_then_least_known_privilege",
+    "public_search_verified": true,
+    "target_repository_read_verified": true,
+    "write_permission_tested": false,
+    "automatic_scope_increase": false,
+    "credential_value_returned": false
+  },
+  "queue": {
+    "completed": 93,
+    "blocked": 42,
+    "queued": 0,
+    "claimed": 0,
+    "failed": 0,
+    "completed_by_provider": {
+      "github": 27,
+      "internal_catalog": 27,
+      "official_docs": 13,
+      "mcp_registry": 13,
+      "n8n_templates": 13
+    },
+    "blocked_by_provider": {
+      "official_docs": 14,
+      "mcp_registry": 14,
+      "n8n_templates": 14
+    }
+  },
+  "catalog": {
+    "solutions": 54,
+    "candidate_solution_matches": 5
+  },
+  "cleanup": {
+    "temporary_e2e_users": 0,
+    "temporary_research_candidates": 0,
+    "temporary_research_tasks": 0,
+    "one_time_github_selector_retired": true,
+    "one_time_explicit_user_cleanup_retired": true
+  },
+  "safety": {
+    "repository_content_downloaded": false,
+    "readme_executed": false,
+    "arbitrary_url_fetch": false,
+    "automatic_install": false,
+    "automatic_selection": false,
+    "automatic_skill_activation": false,
+    "automatic_paid_api": false,
+    "credential_scope_increased": false,
+    "credential_value_returned": false,
+    "provider_secret_returned": false,
+    "second_telegram_poller_created": false,
+    "automatic_pr_merge": false,
+    "production_deployment": false,
+    "hidden_infrastructure": false,
+    "unauthorized_access": false,
+    "secret_values_included": false
+  }
+}
