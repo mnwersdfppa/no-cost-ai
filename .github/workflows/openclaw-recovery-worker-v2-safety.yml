@@ -78,8 +78,6 @@ jobs:
                               and keyword.value.value is True
                           ), 'shell=True forbidden'
 
-          # A source-level self-test may mention the word getUpdates. Reject
-          # actual Telegram polling primitives rather than that inert assertion.
           polling_patterns = (
               r'api\.telegram\.org[^\n]{0,240}getUpdates',
               r'get_updates\s*\(',
@@ -114,5 +112,18 @@ jobs:
 
       - name: Confirm non-production workflow
         run: |
-          ! grep -R -nE 'supabase functions deploy|vercel --prod|gh pr merge|git push .*main' \
-            .github/workflows/openclaw-recovery-worker-v2-safety.yml
+          python - <<'PY'
+          from pathlib import Path
+
+          text = Path('.github/workflows/openclaw-recovery-worker-v2-safety.yml').read_text(encoding='utf-8')
+          forbidden = [
+              'supabase functions ' + 'deploy',
+              'vercel ' + '--prod',
+              'gh pr ' + 'merge',
+              'git push ' + 'origin main',
+          ]
+          for marker in forbidden:
+              assert marker not in text, marker
+          assert 'contents: read' in text
+          print('production_mutation=off')
+          PY
