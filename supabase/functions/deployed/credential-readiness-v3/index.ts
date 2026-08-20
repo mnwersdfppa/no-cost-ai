@@ -2,8 +2,73 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.56.0";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
-const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+const MAX_BODY_BYTES = 16_384;
+
+type JsonRecord = Record<string, unknown>;
+type KeySelection = {
+  value: string;
+  selectedType:
+    | "modern_secret_default"
+    | "modern_secret_named"
+    | "legacy_service_role_compatibility"
+    | "missing";
+  modernPresent: boolean;
+  legacyPresent: boolean;
+};
+
+function parseNamedKeySet(raw: string | undefined): Record<string, string> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed).filter(([, value]) =>
+        typeof value === "string" && value.length > 0
+      ),
+    ) as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+function resolveAdminKey(): KeySelection {
+  const modern = parseNamedKeySet(Deno.env.get("SUPABASE_SECRET_KEYS"));
+  const legacy = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  if (modern.default) {
+    return {
+      value: modern.default,
+      selectedType: "modern_secret_default",
+      modernPresent: true,
+      legacyPresent: Boolean(legacy),
+    };
+  }
+  const first = Object.values(modern)[0];
+  if (typeof first === "string" && first.length > 0) {
+    return {
+      value: first,
+      selectedType: "modern_secret_named",
+      modernPresent: true,
+      legacyPresent: Boolean(legacy),
+    };
+  }
+  if (legacy) {
+    return {
+      value: legacy,
+      selectedType: "legacy_service_role_compatibility",
+      modernPresent: false,
+      legacyPresent: true,
+    };
+  }
+  return {
+    value: "",
+    selectedType: "missing",
+    modernPresent: false,
+    legacyPresent: false,
+  };
+}
+
+const adminKey = resolveAdminKey();
+const admin = createClient(SUPABASE_URL, adminKey.value, {
   auth: { persistSession: false, autoRefreshToken: false },
 });
 
@@ -22,7 +87,7 @@ const CREDENTIAL_GROUPS: Record<string, string[]> = Object.freeze({
   vercel: ["VERCEL_TOKEN", "VERCEL_API_TOKEN"],
 });
 
-function reply(body: unknown, status = 200) {
+function reply(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: {
@@ -34,6 +99,21 @@ function reply(body: unknown, status = 200) {
   });
 }
 
+function fail(code: string, status: number): Response {
+  return reply(
+    {
+      ok: false,
+      error: code,
+      values_exposed: false,
+      values_returned: false,
+      prefixes_returned: false,
+      hashes_returned: false,
+      lengths_returned: false,
+    },
+    status,
+  );
+}
+
 function boundedString(value: unknown, min: number, max: number): string | null {
   if (typeof value !== "string") return null;
   const result = value.trim();
@@ -42,40 +122,65 @@ function boundedString(value: unknown, min: number, max: number): string | null 
 
 async function requirePi(req: Request) {
   const authorization = req.headers.get("authorization");
-  if (!authorization?.startsWith("Bearer ")) {
-    throw reply({ ok: false, error: "unauthorized" }, 401);
-  }
+  if (!authorization?.startsWith("Bearer ")) throw fail("unauthorized", 401);
   const { data, error } = await admin.auth.getUser(authorization.slice(7));
-  if (error || !data.user) {
-    throw reply({ ok: false, error: "unauthorized" }, 401);
-  }
+  if (error || !data.user) throw fail("unauthorized", 401);
   if (data.user.app_metadata?.role !== "pi-gateway-client") {
-    throw reply({ ok: false, error: "pi_identity_required" }, 403);
+    throw fail("pi_identity_required", 403);
   }
   return data.user;
 }
 
-Deno.serve(async (req: Request) => {
-  if (req.method !== "POST") {
-    return reply({ ok: false, error: "method_not_allowed" }, 405);
+async function parseBody(req: Request): Promise<JsonRecord> {
+  const declared = Number(req.headers.get("content-length") ?? "0");
+  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+    throw fail("payload_too_large", 413);
   }
+  try {
+    const value = await req.json();
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error("object required");
+    }
+    return value as JsonRecord;
+  } catch {
+    throw fail("invalid_json", 400);
+  }
+}
+
+async function recordRuntimeKeySelection(userId: string): Promise<void> {
+  const { error } = await admin.rpc("bridge_record_runtime_key_selection", {
+    p_user_id: userId,
+    p_function_name: "credential-readiness",
+    p_selected_key_type: adminKey.selectedType,
+    p_modern_key_present: adminKey.modernPresent,
+    p_legacy_key_present: adminKey.legacyPresent,
+    p_value_returned: false,
+  });
+  if (error) throw new Error("runtime_key_receipt_failed");
+  const { error: reconcileError } = await admin.rpc(
+    "bridge_reconcile_runtime_key_unification",
+  );
+  if (reconcileError) throw new Error("runtime_key_reconcile_failed");
+}
+
+Deno.serve(async (req: Request) => {
+  if (!SUPABASE_URL || !adminKey.value) return fail("server_not_configured", 503);
+  if (req.method !== "POST") return fail("method_not_allowed", 405);
 
   let user;
   try {
     user = await requirePi(req);
   } catch (response) {
-    if (response instanceof Response) return response;
-    return reply({ ok: false, error: "authentication_failed" }, 401);
+    return response instanceof Response
+      ? response
+      : fail("authentication_failed", 401);
   }
 
-  let body: Record<string, unknown> = {};
+  let body: JsonRecord;
   try {
-    const parsed = await req.json();
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      body = parsed as Record<string, unknown>;
-    }
-  } catch {
-    body = {};
+    body = await parseBody(req);
+  } catch (response) {
+    return response instanceof Response ? response : fail("invalid_request", 400);
   }
 
   const executionKey = boundedString(
@@ -83,8 +188,14 @@ Deno.serve(async (req: Request) => {
     1,
     128,
   );
+  if (!executionKey) return fail("execution_key_required", 400);
+  const correlationId = boundedString(
+    body.correlation_id ?? req.headers.get("x-correlation-id"),
+    1,
+    128,
+  );
 
-  const { data: admissions, error: admissionError } = await admin.rpc(
+  const { data: admissionRows, error: admissionError } = await admin.rpc(
     "bridge_admit_request",
     {
       p_user_id: user.id,
@@ -92,26 +203,30 @@ Deno.serve(async (req: Request) => {
       p_execution_key: executionKey,
     },
   );
-
-  if (admissionError || !admissions?.[0]) {
-    return reply({
-      ok: false,
-      error: "admission_check_failed",
-      values_returned: false,
-    }, 503);
+  if (admissionError || !admissionRows?.[0]) {
+    return fail("admission_check_failed", 503);
+  }
+  const admission = admissionRows[0];
+  if (!admission.allowed) {
+    return reply(
+      {
+        ok: false,
+        error: admission.reason,
+        admission,
+        values_exposed: false,
+        values_returned: false,
+        prefixes_returned: false,
+        hashes_returned: false,
+        lengths_returned: false,
+      },
+      admission.reason === "rate_limit_exceeded" ? 429 : 403,
+    );
   }
 
-  const admission = admissions[0];
-  if (!admission.allowed) {
-    return reply({
-      ok: false,
-      error: admission.reason,
-      admission,
-      values_returned: false,
-      prefixes_returned: false,
-      hashes_returned: false,
-      lengths_returned: false,
-    }, admission.reason === "rate_limit_exceeded" ? 429 : 403);
+  try {
+    await recordRuntimeKeySelection(user.id);
+  } catch {
+    return fail("runtime_key_receipt_failed", 503);
   }
 
   if (admission.duplicate) {
@@ -119,6 +234,8 @@ Deno.serve(async (req: Request) => {
       ok: true,
       duplicate: true,
       admission,
+      runtime_server_key_type: adminKey.selectedType,
+      values_exposed: false,
       values_returned: false,
       prefixes_returned: false,
       hashes_returned: false,
@@ -142,66 +259,77 @@ Deno.serve(async (req: Request) => {
       .eq("integration", integration)
       .maybeSingle();
 
-    const existingPresence = current?.runtime_presence &&
+    const priorPresence = current?.runtime_presence &&
         typeof current.runtime_presence === "object"
-      ? current.runtime_presence
+      ? current.runtime_presence as JsonRecord
       : {};
-    const runtimePresence = { ...existingPresence, supabase_edge_env: present };
     const protectedStatus = [
       "valid",
       "invalid",
       "blocked",
       "external_only",
     ].includes(current?.validation_status ?? "");
-    const validationStatus = protectedStatus
-      ? current!.validation_status
-      : present
-      ? "unverified"
-      : current?.validation_status ?? "not_present";
 
-    await admin.from("bridge_credentials").upsert({
-      integration,
-      canonical_secret_name: current?.canonical_secret_name ?? aliases[0],
-      detected_aliases: current?.detected_aliases ?? [],
-      storage_scope: present
-        ? "supabase_edge_env"
-        : current?.storage_scope ?? "unknown",
-      configured: Boolean(current?.configured || present),
-      validation_status: validationStatus,
-      validation_detail: protectedStatus
-        ? current?.validation_detail
-        : present
-        ? "Credential presence detected in Edge runtime; value not read or returned. Provider validation remains separate."
-        : current?.validation_detail ??
-          "Credential not present in this Edge runtime. It may exist in Pi local secrets, OAuth device storage, n8n credentials or a connected external connector.",
-      required_scopes: current?.required_scopes ?? [],
-      read_only_default: current?.read_only_default ?? true,
-      runtime_presence: runtimePresence,
-      last_validated_at: now,
-      updated_at: now,
-    }, { onConflict: "integration" });
+    await admin.from("bridge_credentials").upsert(
+      {
+        integration,
+        canonical_secret_name: current?.canonical_secret_name ?? aliases[0],
+        detected_aliases: current?.detected_aliases ?? [],
+        storage_scope: present
+          ? "supabase_edge_env"
+          : current?.storage_scope ?? "unknown",
+        configured: Boolean(current?.configured || present),
+        validation_status: protectedStatus
+          ? current!.validation_status
+          : present
+          ? "unverified"
+          : current?.validation_status ?? "not_present",
+        validation_detail: protectedStatus
+          ? current?.validation_detail
+          : present
+          ? "Credential presence detected in Edge runtime; value was not read, hashed, measured, logged, or returned. Provider validation remains separate."
+          : current?.validation_detail ??
+            "Credential not present in this Edge runtime. It may exist in Pi-local secrets, OAuth device storage, n8n credentials, or a connected external connector.",
+        required_scopes: current?.required_scopes ?? [],
+        read_only_default: current?.read_only_default ?? true,
+        runtime_presence: { ...priorPresence, supabase_edge_env: present },
+        last_validated_at: now,
+        updated_at: now,
+      },
+      { onConflict: "integration" },
+    );
   }
+
+  await admin.from("bridge_route_registry").update({
+    health_status: "healthy",
+    last_checked_at: now,
+    updated_at: now,
+  }).eq("route_key", "supabase.credential_readiness");
 
   await admin.rpc("bridge_record_event", {
     p_event_type: "credential_readiness_refresh",
-    p_node_name: null,
-    p_correlation_id: boundedString(body.correlation_id, 1, 128),
+    p_node_name: "raspberry-pi5",
+    p_correlation_id: correlationId,
     p_severity: "info",
     p_outcome: "succeeded",
     p_detail: {
       actor_user_id: user.id,
       integrations_checked: results.length,
+      runtime_server_key_type: adminKey.selectedType,
       values_exposed: false,
     },
   });
 
   return reply({
     ok: true,
+    version: 7,
     admission,
     results,
+    runtime_server_key_type: adminKey.selectedType,
     platform_managed_supabase_runtime: Boolean(
-      SUPABASE_URL && SERVICE_ROLE_KEY,
+      SUPABASE_URL && adminKey.value,
     ),
+    values_exposed: false,
     values_returned: false,
     prefixes_returned: false,
     hashes_returned: false,
