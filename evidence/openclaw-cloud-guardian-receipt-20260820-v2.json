@@ -1,0 +1,42 @@
+{
+  "recorded_at": "2026-08-20T00:00:00Z",
+  "repository": "mnwersdfppa/no-cost-ai",
+  "supabase_project_ref": "dpllasnpfskyyyzebyal",
+  "state": "CLOUD_GUARDIAN_READY_PHYSICAL_PI_PENDING",
+  "cloud": {
+    "canonical_model_gateway": "pi-model-gateway-guardian",
+    "guardian_route": "https://dpllasnpfskyyyzebyal.supabase.co/functions/v1/pi-model-gateway-guardian/v1",
+    "provider": "supabase-opencode",
+    "primary": "supabase-opencode/nemotron-3-ultra-free",
+    "fallbacks": [
+      "supabase-opencode/laguna-s-2.1-free"
+    ],
+    "queue_ack_on_total_provider_failure": true,
+    "raw_provider_error_to_telegram": false,
+    "max_immediate_provider_attempts": 2,
+    "paid_api_fallback": false,
+    "provider_secret_location": "supabase_edge_only",
+    "single_telegram_poller": true
+  },
+  "pi_recovery": {
+    "queue_action": "pull_recovery",
+    "fixed_handler_allowlist": [
+      "pi_supabase_auth_model_recovery",
+      "pi_infrastructure_recovery",
+      "telegram_model_failover_repair",
+      "worker_liveness_guardian"
+    ],
+    "payload_shell_execution": false,
+    "unknown_process_termination": false,
+    "provider_secret_export": false,
+    "tailscale_credential_class": "node_auth_key",
+    "physical_installer_execution": "pending"
+  },
+  "completion_boundary": {
+    "cloud_preparation_is_physical_completion": false,
+    "telegram_round_trip_verified": false,
+    "tailscale_node_join_verified": false,
+    "production_merge_performed": false
+  },
+  "secret_values_included": false
+}
