@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "release_name": "openclaw-recovery-20260820-v1",
+  "recorded_at": "2026-08-20T11:42:26.542605Z",
+  "state": "CLOUD_RECEIPT_CHAIN_COMPLETE_PHYSICAL_PI_PENDING",
+  "target": {
+    "repository": "mnwersdfppa/no-cost-ai",
+    "source_pull_request": 5,
+    "source_head_sha": "d9230abb790f64b7f41f74779db230868f5a0e70",
+    "supabase_project_ref": "dpllasnpfskyyyzebyal"
+  },
+  "cloud_chain": {
+    "read_only_preflight": "pass",
+    "docker_scratch": "pass",
+    "docker_runtime_run_id": 32360686567,
+    "docker_runtime_job_id": 96399412944,
+    "docker_runtime_artifact_id": 9403394473,
+    "docker_runtime_artifact_digest": "sha256:8859c96dd6f5ab0eee92bfdaa6f8f1a3ac04212b406998a39a4a7853f8dfe12b",
+    "multiarch_run_id": 32360686401,
+    "linux_arm64_job_id": 96399412902,
+    "linux_amd64_job_id": 96399413012,
+    "supabase_live_migration": "pass",
+    "migration_name": "record_recovery_execution_chain_v1",
+    "post_migration_verify": "pass",
+    "receipt_chain_rpc": "public.bridge_recovery_execution_chain_readiness(text)"
+  },
+  "remaining_receipt_gates": {
+    "n8n_import": "pending_verified_instance_or_pi_local_cli",
+    "physical_pi": "pending_authenticated_remote_or_local_actuator",
+    "telegram_t4": "pending_existing_single_poller_round_trip",
+    "rollback": "pending_physical_non_destructive_receipt",
+    "production": "blocked_until_physical_pi_telegram_t4_and_rollback_pass"
+  },
+  "remote_path_findings": {
+    "raspberry_pi_connect": "previously_observed_online_but_not_available_as_a_callable_connector",
+    "tailscale_device": "previously_observed_at_100.96.41.125_but_private_route_not_available_from_current_runtime",
+    "local_lan_ssh": "previously_observed_at_192.168.0.47_but_private_lan_not_available_from_current_runtime",
+    "clawbro_front_door": "reachable_but_requires_provider_specific_bot_routing_contract",
+    "supabase_queue": "cloud_active_but_physical_pi_worker_has_not_claimed_the_current_task"
+  },
+  "safety": {
+    "secret_values_included": false,
+    "password_values_committed": false,
+    "second_telegram_poller_created": false,
+    "automatic_paid_fallback": false,
+    "arbitrary_remote_shell_created": false,
+    "unknown_process_termination": false,
+    "automatic_reboot": false,
+    "automatic_merge": false,
+    "automatic_production_deploy": false
+  },
+  "completion_claim": false
+}
