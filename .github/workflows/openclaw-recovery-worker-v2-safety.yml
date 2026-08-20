@@ -1,0 +1,102 @@
+name: Validate OpenClaw recovery worker v2 safety
+
+on:
+  pull_request:
+    paths:
+      - 'pi/openclaw-recovery-worker.py'
+      - 'pi/openclaw-recovery-worker-v2.py'
+      - 'pi/install-openclaw-recovery-worker-v2.sh'
+      - '.github/workflows/openclaw-recovery-worker-v2-safety.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openclaw-recovery-worker-v2-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Compile Python sources
+        run: |
+          python -m py_compile \
+            pi/openclaw-recovery-worker.py \
+            pi/openclaw-recovery-worker-v2.py
+
+      - name: Validate installer syntax
+        run: bash -n pi/install-openclaw-recovery-worker-v2.sh
+
+      - name: Validate fixed-handler and no-shell contract
+        run: |
+          python - <<'PY'
+          import ast
+          import pathlib
+          import re
+
+          files = [
+              pathlib.Path('pi/openclaw-recovery-worker.py'),
+              pathlib.Path('pi/openclaw-recovery-worker-v2.py'),
+          ]
+          text = '\n'.join(path.read_text(encoding='utf-8') for path in files)
+          trees = [ast.parse(path.read_text(encoding='utf-8')) for path in files]
+
+          required = {
+              'pi_supabase_auth_model_recovery',
+              'pi_infrastructure_recovery',
+              'telegram_model_failover_repair',
+              'worker_liveness_guardian',
+              'pull_recovery',
+          }
+          missing = sorted(value for value in required if value not in text)
+          assert not missing, f'missing recovery contract markers: {missing}'
+
+          forbidden_calls = {'eval', 'exec', 'compile'}
+          for tree in trees:
+              for node in ast.walk(tree):
+                  if isinstance(node, ast.Call):
+                      if isinstance(node.func, ast.Name):
+                          assert node.func.id not in forbidden_calls, f'forbidden call: {node.func.id}'
+                      for keyword in node.keywords:
+                          if keyword.arg == 'shell':
+                              assert not (isinstance(keyword.value, ast.Constant) and keyword.value.value is True), 'shell=True forbidden'
+
+          assert 'getUpdates' not in text, 'second Telegram poller primitive forbidden'
+          assert re.search(r'curl\s*\|\s*(?:sh|bash)', text) is None, 'curl pipe shell forbidden'
+          print('fixed_handler_contract=pass')
+          PY
+
+      - name: Reject committed secret literals
+        run: |
+          python - <<'PY'
+          import pathlib
+          import re
+
+          targets = [
+              pathlib.Path('pi/openclaw-recovery-worker.py'),
+              pathlib.Path('pi/openclaw-recovery-worker-v2.py'),
+              pathlib.Path('pi/install-openclaw-recovery-worker-v2.sh'),
+          ]
+          pattern = re.compile(
+              r'(sk-proj-[A-Za-z0-9_-]{16,}|ghp_[A-Za-z0-9]{20,}|'
+              r'xox[baprs]-[A-Za-z0-9-]{20,}|'
+              r'tskey-(?:auth|api|client)-[A-Za-z0-9_-]{16,})'
+          )
+          for path in targets:
+              assert pattern.search(path.read_text(encoding='utf-8')) is None, f'secret literal in {path}'
+          print('secret_literal_scan=pass')
+          PY
+
+      - name: Confirm non-production workflow
+        run: |
+          ! grep -R -nE 'supabase functions deploy|vercel --prod|gh pr merge|git push .*main' \
+            .github/workflows/openclaw-recovery-worker-v2-safety.yml
