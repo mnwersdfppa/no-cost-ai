@@ -1,0 +1,65 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import pathlib
+import sys
+
+STATE = pathlib.Path("/tmp/mock-systemctl-state")
+KNOWN = {
+    "openclaw-gateway.service",
+    "openclaw-pi-session-refresh.service",
+    "openclaw-pi-session-refresh.timer",
+    "openclaw-pi-recovery-worker-current.service",
+    "openclaw-pi-recovery-worker-current.timer",
+    "openclaw-telegram-delivery-worker.service",
+    "openclaw-telegram-delivery-worker.timer",
+}
+
+
+def normalized() -> list[str]:
+    return [arg for arg in sys.argv[1:] if arg != "--user"]
+
+
+def target(args: list[str]) -> str:
+    candidates = [arg for arg in args[1:] if not arg.startswith("-")]
+    return candidates[-1] if candidates else ""
+
+
+def main() -> int:
+    args = normalized()
+    if not args:
+        return 64
+    command = args[0]
+
+    if command == "daemon-reload":
+        return 0
+
+    if command == "list-unit-files":
+        unit = target(args)
+        if unit in KNOWN:
+            print(f"{unit} enabled")
+            return 0
+        return 1
+
+    if command in {"enable", "start", "restart"}:
+        STATE.parent.mkdir(parents=True, exist_ok=True)
+        with STATE.open("a", encoding="utf-8") as handle:
+            handle.write(target(args) + "\n")
+        return 0
+
+    if command == "is-active":
+        unit = target(args)
+        if unit not in KNOWN:
+            if "--quiet" not in args:
+                print("inactive")
+            return 3
+        if "--quiet" not in args:
+            print("active")
+        return 0
+
+    print(f"unsupported mock systemctl invocation: {args!r}", file=sys.stderr)
+    return 64
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
