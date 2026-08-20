@@ -1,14 +1,18 @@
 {
   "project_id": "dpllasnpfskyyyzebyal",
   "status": "ACTIVE_HEALTHY",
-  "recorded_at": "2026-08-20T01:54:10Z",
+  "recorded_at": "2026-08-20T03:16:00Z",
   "canonical_model_gateway": "pi-model-gateway-guardian",
   "server_retry_schedule": "*/2 * * * *",
   "canonical_server_retry_job": "openclaw-model-retry-worker-v2",
   "pi_delivery_schedule": "2min+jitter",
+  "canonical_pi_installer": "pi-openclaw-current-master-recovery-verified",
+  "canonical_pi_installer_source": "pi-openclaw-master-recovery-installer",
+  "canonical_pi_installer_sha256": "d8e4792e759d898a2a3c7434e973b82fdeddd10e291ac1d4973276ece7216419",
+  "canonical_pi_installer_bytes": 2973,
   "functions": {
     "model-retry-worker": {
-      "version": 4,
+      "version": 5,
       "status": "ACTIVE",
       "verify_jwt": false,
       "custom_auth": "supabase_vault_sha256_verification",
@@ -16,7 +20,7 @@
       "positive_auth_status": 200,
       "negative_auth_status": 401,
       "max_tasks_per_run": 2,
-      "ezbr_sha256": "cbf0f37f8e575d8236581dbb683fe5c428dc27321dd70cdb0b60ae6935dff39a",
+      "ezbr_sha256": "9fefe07db4ea0f88bf54c2b651b1a122b6fdee0aafebb1b46394a672b47f5459",
       "source": "supabase/functions/model-retry-worker/index.ts"
     },
     "pi-result-delivery-queue": {
@@ -36,13 +40,29 @@
       "source_commit": "292aae516c8c174c7174b88be1e8ff42d1223a99"
     },
     "pi-openclaw-master-recovery-installer": {
-      "version": 4,
+      "version": 6,
       "status": "ACTIVE",
       "verify_jwt": false,
-      "ezbr_sha256": "fc420b11804bad4963f7b22856b9bf9b3b7580e48f629c504b3e4f1c916f7792",
-      "artifact_sha256": "3293587b3d1e1692b9969b5db115a8403787e29c52c88a142bc082fc568d052b",
-      "artifact_bytes": 2346,
-      "server_retry_schedule": "*/2 * * * *"
+      "canonical": false,
+      "lifecycle_status": "verified_source",
+      "ezbr_sha256": "c5915029da98e65caf5459dace22fc7dc3e6c198e0553ad486c8c4f80c6a38b4",
+      "artifact_sha256": "d8e4792e759d898a2a3c7434e973b82fdeddd10e291ac1d4973276ece7216419",
+      "artifact_bytes": 2973,
+      "model_auth_installer_sha256": "0754e14b097578edfc2659390456162f88053c70d9610578d686438faa389f54",
+      "recovery_worker_installer_sha256": "56094db3aeb87a757d433f29e8857fdde59d29a476415bd7928e6a218b086b92",
+      "telegram_delivery_installer_sha256": "1db248ffbc0fea0bf22bcf17e2908134c9554f64539e1fe908dc0e2939268e97",
+      "server_retry_schedule": "*/2 * * * *",
+      "source": "supabase/functions/pi-openclaw-master-recovery-installer/index.ts"
+    },
+    "pi-openclaw-current-master-recovery-verified": {
+      "version": 2,
+      "status": "ACTIVE",
+      "verify_jwt": false,
+      "canonical": true,
+      "ezbr_sha256": "1d85341ab02223453e8a2d02c42f798a21de6aa165368c76fc1e2e41c2bba18b",
+      "artifact_sha256": "d8e4792e759d898a2a3c7434e973b82fdeddd10e291ac1d4973276ece7216419",
+      "artifact_bytes": 2973,
+      "source": "supabase/functions/pi-openclaw-current-master-recovery-verified/index.ts"
     }
   },
   "database_contracts": {
@@ -58,11 +78,13 @@
     "server_model_retry_worker_e2e": "pass",
     "server_model_retry_scheduler": "pass",
     "pi_result_delivery_queue_e2e": "pass",
-    "pi_master_recovery_installer_integrity": "pass"
+    "pi_recovery_worker_current_installer_integrity": "pass",
+    "pi_current_master_installer_integrity": "pass"
   },
   "physical_gates": {
     "pi_openclaw_model_activation": "pending",
-    "pi_telegram_result_delivery_worker": "pending",
+    "pi_recovery_queue_worker_active": "pending",
+    "pi_telegram_result_delivery_worker": "pending_optional",
     "tailscale_pi_enrollment": "pending_optional"
   },
   "security": {
