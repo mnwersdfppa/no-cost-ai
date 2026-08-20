@@ -1,6 +1,6 @@
 {
   "project_id": "dpllasnpfskyyyzebyal",
-  "recorded_at": "2026-08-20T00:24:00Z",
+  "recorded_at": "2026-08-20T00:56:55Z",
   "canonical_model_component": "edge.pi-model-gateway-guardian",
   "canonical_model_route": "supabase.opencode_model_guardian",
   "canonical_base_url": "https://dpllasnpfskyyyzebyal.supabase.co/functions/v1/pi-model-gateway-guardian/v1",
@@ -22,11 +22,11 @@
       "source": "supabase/functions/pi-infra-bootstrap/index.ts"
     },
     "pi-work-queue": {
-      "version": 8,
+      "version": 9,
       "status": "ACTIVE",
       "verify_jwt": true,
       "auth_mode": "platform_jwt_plus_pi_gateway_client_role",
-      "ezbr_sha256": "0904a92d98c0c62f3d5e598fb2d35de90f60c1d22ad50b25c29fd0e5532c544c",
+      "ezbr_sha256": "cd354b3443bed92b40fddb9449123fc9966c8312866ac72e22426a170c434ec6",
       "source": "supabase/functions/pi-work-queue/index.ts"
     }
   },
