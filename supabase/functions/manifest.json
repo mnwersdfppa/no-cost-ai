@@ -48,6 +48,12 @@
       "verify_jwt": false,
       "auth_mode": "public_integrity_pinned_artifact",
       "purpose": "Serve the SHA-pinned deterministic recovery queue worker installer"
+    },
+    "pi-openclaw-guardian-master-installer-verified": {
+      "verify_jwt": false,
+      "auth_mode": "public_integrity_pinned_artifact",
+      "entrypoint": "supabase/functions/pi-openclaw-guardian-master-installer-verified/index.ts",
+      "purpose": "Serve one SHA-pinned installer that applies model/auth recovery and the deterministic recovery queue worker in order"
     }
   },
   "canonical_supabase_client_key": "SUPABASE_PUBLISHABLE_KEYS.default",
@@ -58,6 +64,8 @@
   "raw_provider_secret_returned_to_pi": false,
   "queue_on_provider_failure": true,
   "max_immediate_provider_attempts": 2,
+  "canonical_pi_installer": "pi-openclaw-guardian-master-installer-verified",
+  "canonical_pi_installer_sha256": "bc938153e8b6bfe90dabb0471d34eaebef595aca6f5ec94db64d1b206cd8ce39",
   "legacy_anon_fallback": false,
   "vercel_canonical_auth": "connected_connector",
   "vercel_raw_token_fallback": false,
