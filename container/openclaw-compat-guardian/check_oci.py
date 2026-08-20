@@ -37,6 +37,56 @@ def load_json(archive: tarfile.TarFile, name: str) -> dict[str, Any]:
     return value
 
 
+def _platform_tuple(value: Any) -> tuple[str, str] | None:
+    if not isinstance(value, dict):
+        return None
+    os_name = value.get("os")
+    architecture = value.get("architecture")
+    if not isinstance(os_name, str) or not isinstance(architecture, str):
+        return None
+    return os_name, architecture
+
+
+def _collect_platform_manifests(
+    archive: tarfile.TarFile,
+    descriptor: dict[str, Any],
+) -> list[tuple[tuple[str, str], dict[str, Any], str]]:
+    """Return image manifests, tolerating exporters that omit index platforms.
+
+    BuildKit's OCI exporter normally copies platform metadata onto index
+    descriptors. Some versions instead emit a nested index or omit that
+    metadata and keep it only in the image config. Resolve both forms so the
+    verifier checks the archive rather than relying on one exporter layout.
+    """
+    digest = descriptor.get("digest")
+    if not isinstance(digest, str):
+        return []
+
+    declared = _platform_tuple(descriptor.get("platform"))
+    document = load_json(archive, blob_name(digest))
+    nested = document.get("manifests")
+    if isinstance(nested, list):
+        collected: list[tuple[tuple[str, str], dict[str, Any], str]] = []
+        for child in nested:
+            if isinstance(child, dict):
+                collected.extend(_collect_platform_manifests(archive, child))
+        return collected
+
+    config_descriptor = document.get("config")
+    if not isinstance(config_descriptor, dict):
+        return []
+    config_digest = config_descriptor.get("digest")
+    if not isinstance(config_digest, str):
+        return []
+    config = load_json(archive, blob_name(config_digest))
+    inferred = _platform_tuple(config)
+    platform = declared or inferred
+    if platform is None:
+        return []
+    source = "descriptor" if declared is not None else "config"
+    return [(platform, document, source)]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("archive")
@@ -58,36 +108,38 @@ def main() -> int:
         for descriptor in descriptors:
             if not isinstance(descriptor, dict):
                 continue
-            platform = descriptor.get("platform")
-            if not isinstance(platform, dict):
-                continue
-            os_name = platform.get("os")
-            architecture = platform.get("architecture")
-            if not isinstance(os_name, str) or not isinstance(architecture, str):
-                continue
-            key = (os_name, architecture)
-            if key not in EXPECTED:
-                raise RuntimeError(f"unexpected OCI platform: {key}")
-            manifest = load_json(archive, blob_name(str(descriptor.get("digest"))))
-            layers = manifest.get("layers")
-            config = manifest.get("config")
-            if not isinstance(layers, list) or not isinstance(config, dict):
-                raise RuntimeError(f"invalid image manifest for {key}")
-            compressed = int(config.get("size", 0)) + sum(
-                int(layer.get("size", 0))
-                for layer in layers
-                if isinstance(layer, dict)
-            )
-            if compressed <= 0 or compressed > max_bytes:
-                raise RuntimeError(
-                    f"compressed image size out of policy for {key}: {compressed}"
+            for key, manifest, platform_source in _collect_platform_manifests(
+                archive, descriptor
+            ):
+                if key not in EXPECTED:
+                    raise RuntimeError(f"unexpected OCI platform: {key}")
+                layers = manifest.get("layers")
+                config = manifest.get("config")
+                if not isinstance(layers, list) or not isinstance(config, dict):
+                    raise RuntimeError(f"invalid image manifest for {key}")
+                compressed = int(config.get("size", 0)) + sum(
+                    int(layer.get("size", 0))
+                    for layer in layers
+                    if isinstance(layer, dict)
                 )
-            platforms[key] = {
-                "manifest_digest": descriptor.get("digest"),
-                "compressed_bytes": compressed,
-                "compressed_mb": round(compressed / (1024 * 1024), 2),
-                "layer_count": len(layers),
-            }
+                if compressed <= 0 or compressed > max_bytes:
+                    raise RuntimeError(
+                        f"compressed image size out of policy for {key}: {compressed}"
+                    )
+                platforms[key] = {
+                    "manifest_digest": next(
+                        (
+                            descriptor_digest.get("digest")
+                            for descriptor_digest in [descriptor]
+                            if isinstance(descriptor_digest.get("digest"), str)
+                        ),
+                        None,
+                    ),
+                    "compressed_bytes": compressed,
+                    "compressed_mb": round(compressed / (1024 * 1024), 2),
+                    "layer_count": len(layers),
+                    "platform_source": platform_source,
+                }
 
     missing = EXPECTED.difference(platforms)
     if missing:
