@@ -20,6 +20,8 @@ FALLBACK_TARGET="$BIN_DIR/openclaw-local-fallback-repair"
 SERVICE_FILE="$USER_SYSTEMD_DIR/openclaw-pi-recovery-worker.service"
 TIMER_FILE="$USER_SYSTEMD_DIR/openclaw-pi-recovery-worker.timer"
 RECEIPT="$RUNTIME_DIR/openclaw-recovery-worker-install-receipt.json"
+MIN_REFRESH_TOKEN_CHARS=8
+WORKER_VERSION=3
 
 fail() {
   printf 'BLOCKED=%s\n' "$1" >&2
@@ -44,7 +46,7 @@ OPENCLAW_RECOVERY_WORKER_CORE="$CORE_TARGET" "$WORKER_TARGET" --self-test >/dev/
 
 cat >"$SERVICE_FILE" <<'UNIT'
 [Unit]
-Description=OpenClaw bounded Supabase recovery queue worker v2
+Description=OpenClaw bounded Supabase recovery queue worker v3
 After=network-online.target
 Wants=network-online.target
 ConditionPathExists=%h/.openclaw/secrets/pi-work-queue.env
@@ -98,7 +100,8 @@ import json, pathlib, sys
 path=pathlib.Path(sys.argv[1])
 path.write_text(json.dumps({
   "result":"installed_blocked_session_missing",
-  "worker_version":2,
+  "worker_version":3,
+  "refresh_token_minimum_chars":8,
   "timer_enabled":False,
   "allowed_task_types":[
     "pi_supabase_auth_model_recovery",
@@ -117,7 +120,9 @@ fi
 chmod 600 "$SESSION_ENV"
 # shellcheck disable=SC1090
 source "$SESSION_ENV"
-if [[ ${#PI_ACCESS_TOKEN:-0} -lt 20 && ${#PI_REFRESH_TOKEN:-0} -lt 20 ]]; then
+ACCESS_TOKEN_VALUE="${PI_ACCESS_TOKEN:-}"
+REFRESH_TOKEN_VALUE="${PI_REFRESH_TOKEN:-}"
+if (( ${#ACCESS_TOKEN_VALUE} < 20 && ${#REFRESH_TOKEN_VALUE} < MIN_REFRESH_TOKEN_CHARS )); then
   fail "pi_access_or_refresh_token_required"
 fi
 if [[ "${SUPABASE_URL:-}" != "https://dpllasnpfskyyyzebyal.supabase.co" ]]; then
@@ -138,7 +143,8 @@ path=pathlib.Path(sys.argv[1])
 active=sys.argv[2].lower()=="true"
 path.write_text(json.dumps({
   "result":"installed",
-  "worker_version":2,
+  "worker_version":3,
+  "refresh_token_minimum_chars":8,
   "timer_enabled":active,
   "interval":"2min+jitter",
   "allowed_task_types":[
@@ -154,4 +160,4 @@ path.write_text(json.dumps({
 path.chmod(0o600)
 PY
 
-printf 'RESULT=installed worker_version=2 timer_active=%s receipt=%s\n' "$TIMER_ACTIVE" "$RECEIPT"
+printf 'RESULT=installed worker_version=%s timer_active=%s receipt=%s\n' "$WORKER_VERSION" "$TIMER_ACTIVE" "$RECEIPT"
