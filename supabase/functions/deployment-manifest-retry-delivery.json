@@ -1,15 +1,29 @@
 {
+  "schema_version": 3,
   "project_id": "dpllasnpfskyyyzebyal",
   "status": "ACTIVE_HEALTHY",
-  "recorded_at": "2026-08-20T03:27:00Z",
+  "recorded_at": "2026-08-20T03:52:00Z",
   "canonical_model_gateway": "pi-model-gateway-guardian",
   "server_retry_schedule": "*/2 * * * *",
   "canonical_server_retry_job": "openclaw-model-retry-worker-v2",
   "pi_delivery_schedule": "2min+jitter",
-  "canonical_pi_installer": "pi-openclaw-current-master-recovery-verified",
-  "canonical_pi_installer_source": "pi-openclaw-master-recovery-installer",
-  "canonical_pi_installer_sha256": "d8e4792e759d898a2a3c7434e973b82fdeddd10e291ac1d4973276ece7216419",
-  "canonical_pi_installer_bytes": 2973,
+  "canonical_container_bootstrap": "pi-container-bootstrap",
+  "canonical_container_bootstrap_version": 3,
+  "canonical_container_image": "docker.io/odifool/openclaw-compat:2026.08.20",
+  "canonical_container_digest": "sha256:6c6df789c26cb0400171818fb0903d27ff799f9642d6e8c2eaf2b1c8e2e2894b",
+  "canonical_container_platforms": [
+    "linux/amd64",
+    "linux/arm64"
+  ],
+  "canonical_pi_installer": "pi-openclaw-docker-compat-installer-verified",
+  "canonical_pi_installer_source": "pi/install-openclaw-docker-compat.sh",
+  "canonical_pi_installer_url": "https://dpllasnpfskyyyzebyal.supabase.co/functions/v1/pi-openclaw-docker-compat-installer-verified",
+  "canonical_pi_installer_sha256": "f00e9b5bb8169bad33f6e89dd2b97faf004644dcd9b05f735e728438d65ed329",
+  "canonical_pi_installer_bytes": 6961,
+  "native_recovery_installer": "pi-openclaw-current-master-recovery-verified",
+  "native_recovery_installer_source": "pi-openclaw-master-recovery-installer",
+  "native_recovery_installer_sha256": "d8e4792e759d898a2a3c7434e973b82fdeddd10e291ac1d4973276ece7216419",
+  "native_recovery_installer_bytes": 2973,
   "functions": {
     "model-retry-worker": {
       "version": 6,
@@ -38,8 +52,38 @@
       "verify_jwt": false,
       "ezbr_sha256": "9d2138cca29e59faa042f9401426f26faa912606fdec1a81ca94e582990aa83d",
       "artifact_sha256": "1db248ffbc0fea0bf22bcf17e2908134c9554f64539e1fe908dc0e2939268e97",
-      "artifact_bytes": 28106,
+      "artifact_bytes": 19504,
       "source_commit": "292aae516c8c174c7174b88be1e8ff42d1223a99"
+    },
+    "pi-container-bootstrap": {
+      "version": 3,
+      "status": "ACTIVE",
+      "verify_jwt": false,
+      "auth_mode": "custom_pi_access_or_refresh_token",
+      "refresh_token_minimum_chars": 8,
+      "architecture_normalization": true,
+      "typed_execution_steps_only": true,
+      "ezbr_sha256": "150024000cbe5cf4ec4a5ddbab459a679e469b0c164b67c5a50bb77595a81c8e",
+      "source": "supabase/functions/pi-container-bootstrap/index.ts",
+      "e2e_status": "pass",
+      "e2e_evidence": "net._http_response:265"
+    },
+    "pi-openclaw-docker-compat-installer-verified": {
+      "version": 1,
+      "status": "ACTIVE",
+      "verify_jwt": false,
+      "canonical": true,
+      "ezbr_sha256": "d365d06f204f7694d9ec3b9298153fc566559ecce2f0348988fdaa812312fa17",
+      "artifact_sha256": "f00e9b5bb8169bad33f6e89dd2b97faf004644dcd9b05f735e728438d65ed329",
+      "artifact_bytes": 6961,
+      "agent_sha256": "fab29d2a9ec3417b881b4e9735afac0e78f03d74d09f5310301d08ec7db76188",
+      "image": "docker.io/odifool/openclaw-compat:2026.08.20",
+      "image_digest": "sha256:6c6df789c26cb0400171818fb0903d27ff799f9642d6e8c2eaf2b1c8e2e2894b",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "source": "supabase/functions/pi-openclaw-docker-compat-installer-verified/index.ts"
     },
     "pi-openclaw-master-recovery-installer": {
       "version": 6,
@@ -60,7 +104,8 @@
       "version": 2,
       "status": "ACTIVE",
       "verify_jwt": false,
-      "canonical": true,
+      "canonical": false,
+      "lifecycle_status": "native_rollback",
       "ezbr_sha256": "1d85341ab02223453e8a2d02c42f798a21de6aa165368c76fc1e2e41c2bba18b",
       "artifact_sha256": "d8e4792e759d898a2a3c7434e973b82fdeddd10e291ac1d4973276ece7216419",
       "artifact_bytes": 2973,
@@ -81,7 +126,11 @@
     "server_model_retry_scheduler": "pass",
     "pi_result_delivery_queue_e2e": "pass",
     "pi_recovery_worker_current_installer_integrity": "pass",
-    "pi_current_master_installer_integrity": "pass"
+    "pi_current_master_installer_integrity": "pass",
+    "docker_registry_multiarch_publish": "pass",
+    "pi_container_bootstrap_v3_e2e": "pass",
+    "docker_preemptive_compatibility_system": "pass",
+    "pi_docker_compat_installer_integrity": "pass"
   },
   "physical_gates": {
     "pi_openclaw_model_activation": "pending",
@@ -89,11 +138,21 @@
     "pi_telegram_result_delivery_worker": "pending_optional",
     "tailscale_pi_enrollment": "pending_optional"
   },
+  "docker": {
+    "credential_location": "supabase_edge_only",
+    "runtime_pull_auth": "anonymous_public_repository",
+    "qemu_default": false,
+    "privileged": false,
+    "docker_socket_mount": false,
+    "provider_secret_mount": false,
+    "native_recovery_after_preflight": true
+  },
   "security": {
     "provider_secret_location": "supabase_edge_only",
     "worker_auth_location": "supabase_vault_only",
     "worker_db_verification": "sha256_hex_only",
     "provider_secret_returned_to_pi": false,
+    "docker_registry_secret_returned_to_pi": false,
     "worker_token_returned": false,
     "worker_token_persisted": false,
     "raw_provider_error_surfaced_to_telegram": false,
@@ -101,5 +160,6 @@
     "second_telegram_poller": false,
     "paid_api_fallback": false,
     "outbound_delivery_command": "openclaw message send"
-  }
+  },
+  "completion_state": "CLOUD_DOCKER_COMPAT_READY_PHYSICAL_PI_PENDING"
 }
