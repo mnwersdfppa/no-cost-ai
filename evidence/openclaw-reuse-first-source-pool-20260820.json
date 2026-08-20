@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-08-20T04:00:00Z",
+  "supabase_project": "dpllasnpfskyyyzebyal",
+  "source_catalog": {
+    "enabled_sources": 23,
+    "pattern_source_matches": 29,
+    "licenses_classified": true,
+    "official_sources_first": true
+  },
+  "research_pipeline": {
+    "english_queries_queued": 15,
+    "schedule": "23 */6 * * *",
+    "query_templates_per_pattern": 3,
+    "official_docs_first": true,
+    "official_github_first": true,
+    "perplexity_optional": true
+  },
+  "projection_contract": {
+    "queue": "openclaw_ssot_projection_queue",
+    "supabase_authoritative": true,
+    "notion_projection_only": true,
+    "exact_duplicate_same_id": true,
+    "automatic_delete": false,
+    "claim_complete_e2e": "pass"
+  },
+  "api": {
+    "endpoint": "https://dpllasnpfskyyyzebyal.supabase.co/functions/v1/openclaw-reuse-engine",
+    "authentication": "scoped_pi_gateway_client_jwt",
+    "actions": [
+      "status",
+      "sources",
+      "reuse_queue",
+      "research_queries",
+      "projection_status"
+    ],
+    "unauthorized_status": 401,
+    "authenticated_status": 200,
+    "read_only": true,
+    "promotion_exposed": false,
+    "claim_exposed": false,
+    "e2e": "pass"
+  },
+  "safety": {
+    "secret_values_included": false,
+    "provider_secret_exported": false,
+    "automatic_merge": false,
+    "automatic_production_deploy": false,
+    "automatic_paid_fallback": false,
+    "second_telegram_poller": false,
+    "arbitrary_payload_execution": false,
+    "covert_or_unauthorized_methods": false
+  },
+  "physical_pi": {
+    "skill_install": "pending",
+    "gateway_round_trip": "pending",
+    "notion_projection_worker": "pending"
+  }
+}
