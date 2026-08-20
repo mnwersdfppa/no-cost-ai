@@ -37,6 +37,7 @@ The OpenCode provider credential remains in Supabase Edge. It is never returned 
 ## Safety boundaries
 
 - one existing Telegram inbound poller only
+- No second Telegram poller.
 - no raw upstream error text to Telegram
 - no provider secret export
 - no paid automatic fallback
