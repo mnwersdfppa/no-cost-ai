@@ -1,0 +1,194 @@
+name: Validate OpenClaw pattern evolution system
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'supabase/migrations/20260820050000_openclaw_pattern_evolution_control_plane.sql'
+      - 'docs/openclaw-pattern-evolution-system.md'
+      - 'skills/pattern-promotion-engine/**'
+      - 'evidence/openclaw-pattern-evolution-state-20260820.json'
+      - '.github/workflows/openclaw-pattern-evolution-validate.yml'
+  push:
+    branches:
+      - feat/supabase-emergency-bridge-20260819
+    paths:
+      - 'supabase/migrations/20260820050000_openclaw_pattern_evolution_control_plane.sql'
+      - 'docs/openclaw-pattern-evolution-system.md'
+      - 'skills/pattern-promotion-engine/**'
+      - 'evidence/openclaw-pattern-evolution-state-20260820.json'
+      - '.github/workflows/openclaw-pattern-evolution-validate.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openclaw-pattern-evolution-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate schema, skill and non-secret receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import re
+          from pathlib import Path
+
+          migration_path = Path('supabase/migrations/20260820050000_openclaw_pattern_evolution_control_plane.sql')
+          docs_path = Path('docs/openclaw-pattern-evolution-system.md')
+          skill_path = Path('skills/pattern-promotion-engine/SKILL.md')
+          evidence_path = Path('evidence/openclaw-pattern-evolution-state-20260820.json')
+          workflow_path = Path('.github/workflows/openclaw-pattern-evolution-validate.yml')
+
+          paths = [migration_path, docs_path, skill_path, evidence_path, workflow_path]
+          missing = [str(path) for path in paths if not path.is_file()]
+          if missing:
+              raise SystemExit(f'missing files: {missing}')
+
+          migration = migration_path.read_text(encoding='utf-8')
+          docs = docs_path.read_text(encoding='utf-8')
+          skill = skill_path.read_text(encoding='utf-8')
+          workflow = workflow_path.read_text(encoding='utf-8')
+          evidence = json.loads(evidence_path.read_text(encoding='utf-8'))
+
+          required_sql = [
+              'bridge_pattern_observations',
+              'bridge_pattern_candidates',
+              'bridge_solution_catalog',
+              'bridge_research_queue',
+              'bridge_skill_registry',
+              'bridge_skill_evaluations',
+              'bridge_automation_runs',
+              'bridge_source_bindings',
+              'openclaw_ssot_projection_queue',
+              'enable row level security',
+              'revoke all on table',
+              'grant all on table',
+              'secret_values_included=false',
+              'search_before_build',
+              'arbitrary_code_execution',
+          ]
+          missing_sql = [marker for marker in required_sql if marker.lower() not in migration.lower()]
+          if missing_sql:
+              raise SystemExit(f'migration contract missing: {missing_sql}')
+
+          if not skill.startswith('---\nname: pattern-promotion-engine\n'):
+              raise SystemExit('skill frontmatter missing or invalid')
+
+          required_skill = [
+              'Search official documentation and official source repositories before creating new code.',
+              'static security',
+              'deterministic E2E',
+              'rollback',
+              'Never automatically promote',
+              'Supabase is authoritative',
+          ]
+          missing_skill = [marker for marker in required_skill if marker.lower() not in skill.lower()]
+          if missing_skill:
+              raise SystemExit(f'skill contract missing: {missing_skill}')
+
+          safety = evidence.get('safety', {})
+          required_false = [
+              'secret_values_included',
+              'provider_key_exported_to_pi',
+              'second_telegram_poller_created',
+              'automatic_paid_fallback_enabled',
+              'hidden_or_covert_infrastructure',
+              'malware_or_biological_capability',
+              'automatic_pr_merge',
+              'vercel_production_deployment',
+          ]
+          invalid = [key for key in required_false if safety.get(key) is not False]
+          if invalid:
+              raise SystemExit(f'evidence safety fields must be false: {invalid}')
+
+          docker = evidence.get('docker_compatibility', {})
+          if not re.fullmatch(r'sha256:[0-9a-f]{64}', str(docker.get('index_digest', ''))):
+              raise SystemExit('Docker digest is not immutable')
+          if sorted(docker.get('platforms', [])) != ['linux/amd64', 'linux/arm64']:
+              raise SystemExit('required multiarchitecture platforms missing')
+
+          combined = '\n'.join([migration, docs, skill, json.dumps(evidence, sort_keys=True)])
+          secret_patterns = [
+              r'sk-proj-[A-Za-z0-9_-]{12,}',
+              r'ghp_[A-Za-z0-9]{16,}',
+              r'github_pat_[A-Za-z0-9_]{16,}',
+              r'tskey-(?:auth|api|client)-[A-Za-z0-9_-]{12,}',
+              r'xox[baprs]-[A-Za-z0-9-]{16,}',
+              r'Bearer\s+[A-Za-z0-9._~+/-]{16,}',
+              r'BEGIN\s+(?:RSA|OPENSSH|EC)\s+PRIVATE\s+KEY',
+          ]
+          matches = [pattern for pattern in secret_patterns if re.search(pattern, combined, re.IGNORECASE)]
+          if matches:
+              raise SystemExit(f'secret-like literal detected: {matches}')
+
+          forbidden_runtime = [
+              r'shell\s*=\s*True',
+              r'\beval\s*\(',
+              r'\bexec\s*\(',
+              r'Telegram[^\n]{0,40}getUpdates',
+              r'curl\s*\|\s*(?:sh|bash)',
+          ]
+          runtime_matches = [pattern for pattern in forbidden_runtime if re.search(pattern, combined, re.IGNORECASE)]
+          if runtime_matches:
+              raise SystemExit(f'forbidden runtime construct detected: {runtime_matches}')
+
+          if 'contents: read' not in workflow:
+              raise SystemExit('workflow must be read-only')
+          for forbidden in [
+              'contents:' + ' write',
+              'git ' + 'push',
+              'supabase functions ' + 'deploy',
+              'vercel ' + '--prod',
+              'pull_request_target:',
+          ]:
+              if forbidden in workflow:
+                  raise SystemExit(f'workflow mutation boundary violated: {forbidden}')
+
+          if evidence.get('authoritative_store') != 'supabase':
+              raise SystemExit('Supabase authority missing')
+          if evidence.get('notion_migration_index', {}).get('historical_pages_deleted') is not False:
+              raise SystemExit('Notion history deletion must remain false')
+          if evidence.get('physical_pi', {}).get('cloud_completion_is_not_physical_completion') is not True:
+              raise SystemExit('physical completion boundary missing')
+
+          print(json.dumps({
+              'result': 'PASS',
+              'schema_version': evidence.get('schema_version'),
+              'state': evidence.get('state'),
+              'active_skills': evidence.get('pattern_system', {}).get('active_bridge_skills', []),
+              'secret_values_included': False,
+              'repository_mutation': False,
+          }, sort_keys=True))
+          PY
+
+      - name: Write validation summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## OpenClaw pattern evolution validation'
+            echo
+            echo '- Supabase authoritative: enforced'
+            echo '- Reuse before build: enforced'
+            echo '- High-risk automatic promotion: OFF'
+            echo '- Arbitrary execution: OFF'
+            echo '- Secret values in evidence: OFF'
+            echo '- Automatic merge and Production deployment: OFF'
+            echo '- Physical Pi completion remains a separate gate'
+          } >> "$GITHUB_STEP_SUMMARY"
