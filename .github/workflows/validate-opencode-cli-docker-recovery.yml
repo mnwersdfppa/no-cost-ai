@@ -4,6 +4,13 @@ on:
   push:
     branches:
       - ops/opencode-cli-docker-recovery-20260821
+  pull_request:
+    paths:
+      - "recovery/opencode-docker/**"
+      - ".opencode/**"
+      - "RUN_WITH_OPENCODE.cmd"
+      - "RUN_DIRECT.cmd"
+      - ".github/workflows/validate-opencode-cli-docker-recovery.yml"
   workflow_dispatch:
 
 permissions:
