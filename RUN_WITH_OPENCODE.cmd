@@ -14,5 +14,5 @@ if not exist ".private\pi-recovery.sh" (
   exit /b 3
 )
 
-opencode run --auto --agent openclaw-recovery --dir "%CD%" "Run the project recovery command exactly once by invoking the approved Start-OpenClaw-Recovery.ps1 entrypoint with .private/pi-recovery.sh. Do not edit files, do not alter Tailscale policy, and do not retry after failure. Return only the OPENCODE_RECOVERY result and receipt path."
+opencode run --agent openclaw-recovery --dir "%CD%" "Run the project recovery command exactly once by invoking the approved Start-OpenClaw-Recovery.ps1 entrypoint with .private/pi-recovery.sh. Do not edit files, do not alter Tailscale policy, and do not retry after failure. Return only the OPENCODE_RECOVERY result and receipt path."
 exit /b %ERRORLEVEL%
