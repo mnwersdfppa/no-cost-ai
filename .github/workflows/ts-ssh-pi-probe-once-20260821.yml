@@ -1,0 +1,296 @@
+name: Tailscale SSH Pi probe and recovery once
+
+on:
+  push:
+    branches:
+      - ops/ts-ssh-pi-probe-20260821-r5
+    paths:
+      - .github/workflows/ts-ssh-pi-probe-once-20260821.yml
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: ts-ssh-pi-probe-20260821-r5
+  cancel-in-progress: false
+
+jobs:
+  probe-and-recover:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      BROKER_URL: https://dpllasnpfskyyyzebyal.supabase.co/functions/v1/github-oidc-tailscale-ssh-probe-r5
+      OIDC_AUDIENCE: odi-ts-ssh-probe-905f91de09497918
+    steps:
+      - name: Checkout exact workflow ref
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Exchange OIDC for encrypted one-time capabilities
+        id: broker
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 \
+            -out /tmp/recipient-private.pem >/dev/null 2>&1
+          openssl pkey -in /tmp/recipient-private.pem -pubout -outform DER \
+            -out /tmp/recipient-public.der
+          PUBLIC_SPKI_B64="$(base64 -w0 /tmp/recipient-public.der)"
+
+          OIDC_JSON="$(curl --fail --silent --show-error \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${OIDC_AUDIENCE}")"
+          OIDC_TOKEN="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<<"$OIDC_JSON")"
+          unset OIDC_JSON
+
+          python3 - "$PUBLIC_SPKI_B64" >/tmp/broker-body.json <<'PY'
+          import json,sys
+          print(json.dumps({"public_spki_b64":sys.argv[1]},separators=(",",":")))
+          PY
+
+          curl --fail --silent --show-error \
+            --request POST \
+            --header "Authorization: Bearer ${OIDC_TOKEN}" \
+            --header 'content-type: application/json' \
+            --data-binary @/tmp/broker-body.json \
+            "$BROKER_URL" \
+            -o /tmp/broker-response.json
+          unset OIDC_TOKEN PUBLIC_SPKI_B64
+
+          python3 - <<'PY'
+          import base64,json,pathlib
+          data=json.loads(pathlib.Path("/tmp/broker-response.json").read_text())
+          if data.get("ok") is not True:
+              raise SystemExit("broker_response_not_ok")
+          for field,target in (
+              ("encrypted_auth_key_b64","/tmp/auth-key.bin"),
+              ("encrypted_bootstrap_token_b64","/tmp/bootstrap-token.bin"),
+          ):
+              pathlib.Path(target).write_bytes(base64.b64decode(data[field],validate=True))
+          safe={
+              "candidates":data.get("candidates",[]),
+              "users":data.get("users",[]),
+              "expected_pi":data.get("expected_pi",{}),
+              "runner":data.get("runner",{}),
+              "recipient_public_spki_sha256":data.get("recipient_public_spki_sha256"),
+              "secret_values_included":False,
+          }
+          pathlib.Path("/tmp/broker-safe.json").write_text(json.dumps(safe,separators=(",",":")))
+          PY
+
+          openssl pkeyutl -decrypt \
+            -inkey /tmp/recipient-private.pem \
+            -in /tmp/auth-key.bin \
+            -pkeyopt rsa_padding_mode:oaep \
+            -pkeyopt rsa_oaep_md:sha256 \
+            -out /tmp/tailscale-auth-key
+          openssl pkeyutl -decrypt \
+            -inkey /tmp/recipient-private.pem \
+            -in /tmp/bootstrap-token.bin \
+            -pkeyopt rsa_padding_mode:oaep \
+            -pkeyopt rsa_oaep_md:sha256 \
+            -out /tmp/bootstrap-token
+
+          AUTHKEY="$(cat /tmp/tailscale-auth-key)"
+          BOOTSTRAP_TOKEN="$(cat /tmp/bootstrap-token)"
+          [[ "$AUTHKEY" == tskey-auth-* ]]
+          [[ ${#BOOTSTRAP_TOKEN} -ge 40 ]]
+          echo "::add-mask::$AUTHKEY"
+          echo "::add-mask::$BOOTSTRAP_TOKEN"
+
+          {
+            echo "authkey=$AUTHKEY"
+            echo "bootstrap_token=$BOOTSTRAP_TOKEN"
+          } >> "$GITHUB_OUTPUT"
+
+          rm -f /tmp/recipient-private.pem /tmp/recipient-public.der \
+            /tmp/auth-key.bin /tmp/bootstrap-token.bin /tmp/tailscale-auth-key \
+            /tmp/bootstrap-token /tmp/broker-response.json /tmp/broker-body.json
+
+      - name: Join authorized Tailnet ephemerally
+        uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade
+        with:
+          authkey: ${{ steps.broker.outputs.authkey }}
+          hostname: odi-ts-ssh-probe-${{ github.run_id }}
+          statedir: /tmp/tailscale-state/
+          version: 1.82.0
+          timeout: 2m
+          retry: 5
+
+      - name: Download and verify one-time bootstrap runner
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          RUNNER_URL="$(python3 -c 'import json; print(json.load(open("/tmp/broker-safe.json"))["runner"]["url"])')"
+          RUNNER_BYTES="$(python3 -c 'import json; print(json.load(open("/tmp/broker-safe.json"))["runner"]["bytes"])')"
+          RUNNER_SHA="$(python3 -c 'import json; print(json.load(open("/tmp/broker-safe.json"))["runner"]["sha256"])')"
+
+          curl --fail --silent --show-error --location \
+            --proto '=https' --tlsv1.2 \
+            --retry 2 --retry-delay 2 \
+            "$RUNNER_URL" -o /tmp/pi-bootstrap-runner.sh
+
+          test "$(wc -c < /tmp/pi-bootstrap-runner.sh | tr -d ' ')" = "$RUNNER_BYTES"
+          test "$(sha256sum /tmp/pi-bootstrap-runner.sh | awk '{print $1}')" = "$RUNNER_SHA"
+          bash -n /tmp/pi-bootstrap-runner.sh
+          chmod 700 /tmp/pi-bootstrap-runner.sh
+
+      - name: Probe Tailscale SSH identities and recover only attested Pi
+        id: recovery
+        env:
+          BOOTSTRAP_TOKEN: ${{ steps.broker.outputs.bootstrap_token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          mkdir -p artifacts
+          : > artifacts/probe-results.log
+
+          python3 - <<'PY'
+          import json,pathlib
+          data=json.load(open("/tmp/broker-safe.json"))
+          addresses=[]
+          for device in data.get("candidates",[]):
+              for address in device.get("addresses",[]):
+                  if isinstance(address,str) and "." in address and address not in addresses:
+                      addresses.append(address)
+          prior=data.get("expected_pi",{}).get("prior_tailscale_ip")
+          if isinstance(prior,str) and prior and prior not in addresses:
+              addresses.append(prior)
+          users=[x for x in data.get("users",[]) if isinstance(x,str)]
+          pathlib.Path("/tmp/candidates.txt").write_text("\n".join(addresses)+"\n")
+          pathlib.Path("/tmp/users.txt").write_text("\n".join(users)+"\n")
+          PY
+
+          SAFE_PROBE='set -eu; HOST=$(hostname 2>/dev/null | tr -cd "A-Za-z0-9._-"); USER_NAME=$(id -un 2>/dev/null | tr -cd "A-Za-z0-9._-"); ARCH=$(uname -m 2>/dev/null | tr -cd "A-Za-z0-9._/-"); MODEL=""; if [ -r /proc/device-tree/model ]; then MODEL=$(tr -d "\000" </proc/device-tree/model | tr -cd "A-Za-z0-9 ._/-" | head -c 120); fi; OC=false; if command -v openclaw >/dev/null 2>&1 || [ -f "$HOME/.openclaw/openclaw.json" ]; then OC=true; fi; GW=unknown; if command -v systemctl >/dev/null 2>&1; then GW=$(systemctl --user is-active openclaw-gateway.service 2>/dev/null || true); fi; LAN=false; if timeout 4 bash -lc "</dev/tcp/192.168.0.47/22" >/dev/null 2>&1; then LAN=true; fi; printf "HOST=%s\nUSER=%s\nARCH=%s\nMODEL=%s\nOPENCLAW=%s\nGATEWAY=%s\nLAN22=%s\n" "$HOST" "$USER_NAME" "$ARCH" "$MODEL" "$OC" "$GW" "$LAN"'
+
+          MODE=""
+          TARGET=""
+          ACCESS_USER=""
+          RELAY=""
+          RELAY_USER=""
+
+          while IFS= read -r candidate; do
+            [[ -n "$candidate" ]] || continue
+            timeout 20s tailscale ping --c 2 --timeout 6s "$candidate" >/dev/null 2>&1 || continue
+            while IFS= read -r user; do
+              [[ -n "$user" ]] || continue
+              INFO="$(timeout 30s tailscale ssh "${user}@${candidate}" "$SAFE_PROBE" 2>/dev/null || true)"
+              [[ -n "$INFO" ]] || continue
+              {
+                printf 'TARGET=%s LOGIN=%s\n' "$candidate" "$user"
+                printf '%s\n' "$INFO"
+                printf '%s\n' '---'
+              } >> artifacts/probe-results.log
+
+              if grep -Eiq '^MODEL=.*Raspberry Pi|^HOST=(raspberry5|raspberry-pi5-openclaw|mnwersdfppap)$' <<<"$INFO" \
+                && grep -Eq '^OPENCLAW=true$' <<<"$INFO"; then
+                MODE="direct"
+                TARGET="$candidate"
+                ACCESS_USER="$user"
+                break 2
+              fi
+
+              if grep -Eq '^LAN22=true$' <<<"$INFO" && [[ -z "$RELAY" ]]; then
+                RELAY="$candidate"
+                RELAY_USER="$user"
+              fi
+            done </tmp/users.txt
+          done </tmp/candidates.txt
+
+          if [[ -z "$MODE" && -n "$RELAY" ]]; then
+            while IFS= read -r pi_user; do
+              [[ -n "$pi_user" ]] || continue
+              RELAY_COMMAND="ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=7 ${pi_user}@192.168.0.47 '$SAFE_PROBE'"
+              INFO="$(timeout 40s tailscale ssh "${RELAY_USER}@${RELAY}" "$RELAY_COMMAND" 2>/dev/null || true)"
+              [[ -n "$INFO" ]] || continue
+              {
+                printf 'RELAY=%s RELAY_LOGIN=%s PI_LOGIN=%s\n' "$RELAY" "$RELAY_USER" "$pi_user"
+                printf '%s\n' "$INFO"
+                printf '%s\n' '---'
+              } >> artifacts/probe-results.log
+              if grep -Eiq '^MODEL=.*Raspberry Pi|^HOST=(raspberry5|raspberry-pi5-openclaw|mnwersdfppap)$' <<<"$INFO" \
+                && grep -Eq '^OPENCLAW=true$' <<<"$INFO"; then
+                MODE="relay"
+                TARGET="192.168.0.47"
+                ACCESS_USER="$pi_user"
+                break
+              fi
+            done </tmp/users.txt
+          fi
+
+          if [[ -z "$MODE" ]]; then
+            printf '{"result":"blocked","reason":"tailscale_ssh_no_attested_pi_or_keyed_relay","secret_values_included":false}\n' \
+              > artifacts/recovery-result.json
+            exit 20
+          fi
+
+          python3 - "$BOOTSTRAP_TOKEN" <<'PY'
+          import pathlib,shlex,sys
+          token=sys.argv[1]
+          runner=pathlib.Path("/tmp/pi-bootstrap-runner.sh").read_text()
+          content="export ODI_BOOTSTRAP_TOKEN="+shlex.quote(token)+"\n"+runner
+          path=pathlib.Path("/tmp/remote-bootstrap.sh")
+          path.write_text(content)
+          path.chmod(0o700)
+          PY
+          unset BOOTSTRAP_TOKEN
+
+          if [[ "$MODE" == "direct" ]]; then
+            timeout 30m tailscale ssh "${ACCESS_USER}@${TARGET}" 'bash -s' \
+              </tmp/remote-bootstrap.sh \
+              > artifacts/recovery-output.log 2>&1
+          else
+            REMOTE_COMMAND="ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 ${ACCESS_USER}@${TARGET} 'bash -s'"
+            timeout 30m tailscale ssh "${RELAY_USER}@${RELAY}" "$REMOTE_COMMAND" \
+              </tmp/remote-bootstrap.sh \
+              > artifacts/recovery-output.log 2>&1
+          fi
+
+          printf '{"result":"executed","mode":"%s","target":"%s","secret_values_included":false}\n' \
+            "$MODE" "$TARGET" > artifacts/recovery-result.json
+          echo "recovery_executed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Collect secret-free evidence
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p artifacts
+          python3 - <<'PY'
+          import json,pathlib,re
+          result={"secret_values_included":False}
+          route=pathlib.Path("artifacts/recovery-result.json")
+          if route.exists():
+              try: result["recovery"]=json.loads(route.read_text())
+              except Exception: result["recovery"]={"result":"invalid"}
+          probe=pathlib.Path("artifacts/probe-results.log")
+          if probe.exists():
+              text=probe.read_text(errors="replace")
+              text=re.sub(r'(tskey-|eyJ|sk-|ghp_)[A-Za-z0-9._~-]+','[REDACTED]',text)
+              pathlib.Path("artifacts/probe-results.log").write_text(text[:12000])
+              result["probe_log_present"]=True
+          output=pathlib.Path("artifacts/recovery-output.log")
+          if output.exists():
+              text=output.read_text(errors="replace")
+              text=re.sub(r'(tskey-|eyJ|sk-|ghp_)[A-Za-z0-9._~-]+','[REDACTED]',text)
+              pathlib.Path("artifacts/recovery-output.log").write_text(text[-20000:])
+              result["recovery_output_present"]=True
+          pathlib.Path("artifacts/summary.json").write_text(json.dumps(result,separators=(",",":")))
+          PY
+          rm -f /tmp/remote-bootstrap.sh /tmp/pi-bootstrap-runner.sh \
+            /tmp/candidates.txt /tmp/users.txt /tmp/broker-safe.json
+          unset BOOTSTRAP_TOKEN || true
+
+      - name: Upload secret-free evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ts-ssh-pi-probe-r5-evidence
+          path: artifacts/*
+          retention-days: 3
+          if-no-files-found: warn
