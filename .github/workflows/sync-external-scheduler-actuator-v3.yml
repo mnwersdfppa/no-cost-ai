@@ -1,0 +1,80 @@
+name: External scheduler actuator v3.1 source sync
+
+on:
+  push:
+    branches:
+      - ops/external-scheduler-actuator-v3-1-20260822
+    paths:
+      - ".github/workflows/sync-external-scheduler-actuator-v3.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ops/external-scheduler-actuator-v3-1-20260822
+          fetch-depth: 0
+      - name: Download, verify, and persist artifacts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          mkdir -p scripts pi receipts /tmp/actuator-v3
+          fetch_verified() {
+            local slug="$1" role="$2" destination="$3"
+            local body="/tmp/actuator-v3/${role}.sh"
+            local headers="/tmp/actuator-v3/${role}.headers"
+            curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --dump-header "$headers" "https://dpllasnpfskyyyzebyal.supabase.co/functions/v1/${slug}" -o "$body"
+            local expected_bytes expected_sha expected_role
+            expected_bytes="$(awk 'BEGIN{IGNORECASE=1} /^x-artifact-bytes:/{gsub("\r","",$2);print $2}' "$headers" | tail -1)"
+            expected_sha="$(awk 'BEGIN{IGNORECASE=1} /^x-artifact-sha256:/{gsub("\r","",$2);print $2}' "$headers" | tail -1)"
+            expected_role="$(awk 'BEGIN{IGNORECASE=1} /^x-artifact-role:/{gsub("\r","",$2);print $2}' "$headers" | tail -1)"
+            test "$expected_role" = "$role"
+            test "$expected_bytes" = "$(wc -c < "$body" | tr -d ' ')"
+            printf '%s  %s\n' "$expected_sha" "$body" | sha256sum --check -
+            bash -n "$body"
+            install -m 0755 "$body" "$destination"
+          }
+          fetch_verified pi-disable-project-schedulers-v3-verified-20260822 disable scripts/disable-project-schedulers-v3.sh
+          fetch_verified pi-rollback-project-schedulers-v3-verified-20260822 rollback scripts/rollback-project-schedulers-v3.sh
+          fetch_verified pi-external-scheduler-actuator-installer-v3-verified-20260822 installer pi/install-external-scheduler-actuator-v3.sh
+      - name: Validate safety and generate manifest
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import datetime, hashlib, json, re
+          files=[Path('scripts/disable-project-schedulers-v3.sh'),Path('scripts/rollback-project-schedulers-v3.sh'),Path('pi/install-external-scheduler-actuator-v3.sh')]
+          text={str(p):p.read_text(encoding='utf-8') for p in files}
+          assert 'openclaw-native-disabled.json' in text[str(files[0])]
+          assert 'openclaw-jobs.before.json' in text[str(files[0])]
+          assert 'LOCAL_SCHEDULERS_V3_RESTORED' in text[str(files[1])]
+          assert 'native_openclaw_cron_disable_supported' in text[str(files[2])]
+          forbidden=re.compile(r'(?mi)^\s*(?:sudo\s+)?(?:reboot|poweroff|halt|shutdown\s+-)\b')
+          for name,value in text.items():
+              assert not forbidden.search(value),name
+              assert 'curl | sh' not in value.lower(),name
+          manifest={'schema':'openclaw.external-scheduler-actuator-v3.1/v1','generated_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'source':'byte-verified Supabase Edge artifacts','files':{str(p):{'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in files},'native_openclaw_jobs_json_supported':True,'rollback_ready':True,'automatic_reboot':False,'arbitrary_command_execution':False,'secret_values_included':False}
+          Path('receipts/external-scheduler-actuator-v3.1-manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          print('ACTUATOR_V3_1_VALIDATION_PASS')
+          PY
+      - name: Commit artifacts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name openclaw-ops-bot
+          git config user.email openclaw-ops-bot@users.noreply.github.com
+          git add scripts/disable-project-schedulers-v3.sh scripts/rollback-project-schedulers-v3.sh pi/install-external-scheduler-actuator-v3.sh receipts/external-scheduler-actuator-v3.1-manifest.json
+          if git diff --cached --quiet; then
+            echo ARTIFACTS_ALREADY_CURRENT
+          else
+            git commit -m 'ops: persist external scheduler actuator v3.1 artifacts [skip ci]'
+            git push origin HEAD:ops/external-scheduler-actuator-v3-1-20260822
+          fi
