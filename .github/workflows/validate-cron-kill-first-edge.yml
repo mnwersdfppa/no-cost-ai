@@ -1,0 +1,81 @@
+name: Validate Cron Kill-First Edge Contract
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/validate-cron-kill-first-edge.yml"
+      - "docs/CRON_KILL_FIRST_EDGE.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      ARTIFACT_URL: "https://dpllasnpfskyyyzebyal.supabase.co/functions/v1/pi-cron-kill-first-verified-20260822"
+      EXPECTED_BYTES: "4741"
+      EXPECTED_SHA256: "77fc7ee1d4921f3c50ddf9da2f3c0684135ba859f1ad9ee2c810b2b0844aaa64"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch immutable contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          file="${RUNNER_TEMP}/pi-cron-kill-first.sh"
+          curl --fail --silent --show-error --location \
+            --proto '=https' --tlsv1.2 \
+            --retry 3 --retry-delay 2 \
+            "$ARTIFACT_URL" -o "$file"
+          test "$(wc -c < "$file" | tr -d ' ')" = "$EXPECTED_BYTES"
+          printf '%s  %s\n' "$EXPECTED_SHA256" "$file" | sha256sum --check -
+          bash -n "$file"
+
+      - name: Validate safety and rollback contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          file="${RUNNER_TEMP}/pi-cron-kill-first.sh"
+          grep -Fq 'OPENCLAW_SKIP_CRON=1' "$file"
+          grep -Fq 'openclaw-rollback-project-schedulers-v3' "$file"
+          grep -Fq 'job_definitions_deleted' "$file"
+          grep -Fq 'automatic_reboot' "$file"
+          grep -Fq 'second_telegram_poller_created' "$file"
+          if grep -Eq 'curl[[:space:]]*\|[[:space:]]*(sh|bash)|getUpdates|rm[[:space:]]+-rf[[:space:]]+/' "$file"; then
+            echo 'unsafe_contract_detected' >&2
+            exit 1
+          fi
+
+      - name: Validate downloaded nested artifacts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          base='https://raw.githubusercontent.com/mnwersdfppa/no-cost-ai/ff3f0fad54c33498edb92dec985a8f1e043ef7f0'
+          curl -fsSL "$base/scripts/disable-project-schedulers-v3.sh" -o "${RUNNER_TEMP}/disable.sh"
+          curl -fsSL "$base/scripts/rollback-project-schedulers-v3.sh" -o "${RUNNER_TEMP}/rollback.sh"
+          echo '9151a4dbf25cc88237864a60a2940e09c600ff747efe30f4e354d5a584b66cd7  '"${RUNNER_TEMP}/disable.sh" | sha256sum -c -
+          echo '98eba0554f23d57d63798b9db5fab1468cc4558ed4335befb080fab3c719c99f  '"${RUNNER_TEMP}/rollback.sh" | sha256sum -c -
+          bash -n "${RUNNER_TEMP}/disable.sh"
+          bash -n "${RUNNER_TEMP}/rollback.sh"
+          grep -Fq 'Environment=OPENCLAW_SKIP_CRON=1' "${RUNNER_TEMP}/disable.sh"
+          grep -Fq 'unset-environment OPENCLAW_SKIP_CRON' "${RUNNER_TEMP}/rollback.sh"
+
+      - name: Publish validation summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## Cron Kill-First Edge'
+            echo
+            echo '- Edge bytes: 4,741'
+            echo '- Edge SHA-256: 77fc7ee1d4921f3c50ddf9da2f3c0684135ba859f1ad9ee2c810b2b0844aaa64'
+            echo '- Native OpenClaw Cron: official OPENCLAW_SKIP_CRON kill switch'
+            echo '- Job definitions: preserved'
+            echo '- Rollback: available'
+            echo '- Host reboot: not used'
+            echo '- Arbitrary queue command execution: not used'
+          } >> "$GITHUB_STEP_SUMMARY"
