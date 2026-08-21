@@ -1,0 +1,81 @@
+name: Validate OpenClaw native Cron kill switch
+
+on:
+  push:
+    branches:
+      - ops/openclaw-native-cron-killswitch-20260822
+    paths:
+      - "pi/external-scheduler-actuator-v3.py"
+      - "pi/install-external-scheduler-actuator-v3.sh"
+      - "scripts/disable-project-schedulers-v3.sh"
+      - "scripts/rollback-project-schedulers-v3.sh"
+      - ".github/workflows/validate-native-cron-killswitch.yml"
+  pull_request:
+    paths:
+      - "pi/external-scheduler-actuator-v3.py"
+      - "pi/install-external-scheduler-actuator-v3.sh"
+      - "scripts/disable-project-schedulers-v3.sh"
+      - "scripts/rollback-project-schedulers-v3.sh"
+      - ".github/workflows/validate-native-cron-killswitch.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-cron-killswitch-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Static syntax and worker self-test
+        run: |
+          python3 -m py_compile pi/external-scheduler-actuator-v3.py
+          python3 pi/external-scheduler-actuator-v3.py --self-test
+          bash -n pi/install-external-scheduler-actuator-v3.sh
+          bash -n scripts/disable-project-schedulers-v3.sh
+          bash -n scripts/rollback-project-schedulers-v3.sh
+
+      - name: Verify pinned artifact digests
+        run: |
+          echo "3e18afdaac6fa376367dbd8e8840ea1039b38edca09c47530e8c38dcc6595606  pi/external-scheduler-actuator-v3.py" | sha256sum -c -
+          echo "9151a4dbf25cc88237864a60a2940e09c600ff747efe30f4e354d5a584b66cd7  scripts/disable-project-schedulers-v3.sh" | sha256sum -c -
+          echo "98eba0554f23d57d63798b9db5fab1468cc4558ed4335befb080fab3c719c99f  scripts/rollback-project-schedulers-v3.sh" | sha256sum -c -
+          echo "09c9ecddff8131b2f5731e99f2fddcb2e9a110c30bf8af85a76f911ede180af8  pi/install-external-scheduler-actuator-v3.sh" | sha256sum -c -
+
+      - name: Verify scheduler ownership contract
+        run: |
+          grep -Fq 'Environment=OPENCLAW_SKIP_CRON=1' scripts/disable-project-schedulers-v3.sh
+          grep -Fq 'set-environment OPENCLAW_SKIP_CRON=1' scripts/disable-project-schedulers-v3.sh
+          grep -Fq 'unset-environment OPENCLAW_SKIP_CRON' scripts/rollback-project-schedulers-v3.sh
+          grep -Fq 'openclaw_native_cron_kill_switch' scripts/disable-project-schedulers-v3.sh
+          grep -Fq 'job_definitions_deleted": False' scripts/disable-project-schedulers-v3.sh
+          grep -Fq 'sqlite_modified": False' scripts/disable-project-schedulers-v3.sh
+          grep -Fq 'external-local-scheduler-disable-v1' pi/external-scheduler-actuator-v3.py
+          grep -Fq 'OPENCLAW_NATIVE_CRON_KILL_SWITCH_UNCONFIRMED' pi/external-scheduler-actuator-v3.py
+          grep -Fq 'openclaw-pi-recovery-worker-current.timer' scripts/disable-project-schedulers-v3.sh
+          grep -Fq 'openclaw-pi-session-refresh.timer' scripts/disable-project-schedulers-v3.sh
+          grep -Fq 'openclaw-telegram-delivery-worker.timer' scripts/disable-project-schedulers-v3.sh
+          grep -Fq 'openclaw-external-scheduler-actuator.timer' scripts/disable-project-schedulers-v3.sh
+
+      - name: Reject broad destructive or secret-like additions
+        run: |
+          ! grep -ERn 'curl[[:space:]]*\|[[:space:]]*(sh|bash)|shell[[:space:]]*=[[:space:]]*True|getUpdates|rm[[:space:]]+-rf[[:space:]]+/' \
+            pi/external-scheduler-actuator-v3.py \
+            pi/install-external-scheduler-actuator-v3.sh \
+            scripts/disable-project-schedulers-v3.sh \
+            scripts/rollback-project-schedulers-v3.sh
+          ! grep -ERn 'sk-proj-[A-Za-z0-9_-]{16,}|github_pat_[A-Za-z0-9_]{20,}|tskey-(auth|api|client)-[A-Za-z0-9_-]{16,}|lsv2_(pt|sk)_[A-Za-z0-9_-]{16,}' \
+            pi/external-scheduler-actuator-v3.py \
+            pi/install-external-scheduler-actuator-v3.sh \
+            scripts/disable-project-schedulers-v3.sh \
+            scripts/rollback-project-schedulers-v3.sh
+
+      - name: Report
+        run: echo 'OPENCLAW_NATIVE_CRON_KILLSWITCH_VALIDATION_PASS'
