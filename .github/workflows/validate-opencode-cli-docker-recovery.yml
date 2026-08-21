@@ -74,6 +74,22 @@ jobs:
           docker logs opencode-recovery-smoke
           exit 1
 
+      - name: Upload verified public recovery bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: opencode-cli-docker-recovery-public
+          retention-days: 3
+          include-hidden-files: true
+          if-no-files-found: error
+          path: |
+            .opencode/
+            .private/README.txt
+            recovery/opencode-docker/
+            RUN_WITH_OPENCODE.cmd
+            RUN_DIRECT.cmd
+            .gitignore
+
       - name: Cleanup
         if: always()
         run: docker rm --force opencode-recovery-smoke >/dev/null 2>&1 || true
