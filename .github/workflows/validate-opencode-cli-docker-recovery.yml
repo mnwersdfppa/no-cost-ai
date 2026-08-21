@@ -1,0 +1,95 @@
+name: Validate OpenCode CLI Docker recovery
+
+on:
+  push:
+    branches:
+      - ops/opencode-cli-docker-recovery-20260821
+  pull_request:
+    paths:
+      - "recovery/opencode-docker/**"
+      - ".opencode/**"
+      - "RUN_WITH_OPENCODE.cmd"
+      - "RUN_DIRECT.cmd"
+      - ".github/workflows/validate-opencode-cli-docker-recovery.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opencode-cli-docker-recovery-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: PowerShell host orchestrator preflight
+        shell: pwsh
+        run: |
+          ./recovery/opencode-docker/Start-OpenClaw-Recovery.ps1 `
+            -PayloadPath "recovery/opencode-docker/tests/dummy-payload.sh" `
+            -PreflightOnly `
+            -DockerPlatform "linux/amd64"
+
+      - name: Install QEMU for Raspberry Pi ARM64 syntax validation
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: ARM64 payload syntax validation
+        run: |
+          docker run --rm --platform linux/arm64 \
+            --mount "type=bind,source=${PWD}/recovery/opencode-docker/tests,target=/payload,readonly" \
+            debian:bookworm-slim \
+            bash -n /payload/dummy-payload.sh
+
+      - name: Build OpenCode headless validation image
+        run: |
+          docker build \
+            --file recovery/opencode-docker/Dockerfile \
+            --tag opencode-recovery-smoke:${GITHUB_SHA} \
+            .
+
+      - name: Start OpenCode headless server and verify health
+        run: |
+          docker run --detach --rm \
+            --name opencode-recovery-smoke \
+            --publish 127.0.0.1:4096:4096 \
+            opencode-recovery-smoke:${GITHUB_SHA}
+
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:4096/global/health \
+              | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["healthy"] is True'; then
+              echo "OPENCODE_DOCKER_HEALTH_PASS"
+              exit 0
+            fi
+            sleep 2
+          done
+
+          docker logs opencode-recovery-smoke
+          exit 1
+
+      - name: Upload verified public recovery bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: opencode-cli-docker-recovery-public
+          retention-days: 3
+          include-hidden-files: true
+          if-no-files-found: error
+          path: |
+            .opencode/
+            .private/README.txt
+            recovery/opencode-docker/
+            RUN_WITH_OPENCODE.cmd
+            RUN_DIRECT.cmd
+            .gitignore
+
+      - name: Cleanup
+        if: always()
+        run: docker rm --force opencode-recovery-smoke >/dev/null 2>&1 || true
