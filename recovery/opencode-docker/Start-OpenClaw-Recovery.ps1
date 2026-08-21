@@ -61,7 +61,7 @@ if (Test-Path -LiteralPath $ManifestPath) {
 $DockerState = "unavailable"
 $SyntaxState = "not_checked"
 $DockerCommand = Get-Command docker -ErrorAction SilentlyContinue
-$BashCommand = $null
+$BashExecutable = $null
 $BashPaths = [System.Collections.Generic.List[string]]::new()
 if ($env:ProgramFiles) {
     $BashPaths.Add((Join-Path $env:ProgramFiles "Git/bin/bash.exe"))
@@ -72,11 +72,14 @@ if (${env:ProgramFiles(x86)}) {
 }
 foreach ($BashPath in $BashPaths) {
     if (Test-Path -LiteralPath $BashPath) {
-        $BashCommand = Get-Item -LiteralPath $BashPath
+        $BashExecutable = (Get-Item -LiteralPath $BashPath).FullName
         break
     }
 }
-if (-not $BashCommand) { $BashCommand = Get-Command bash -ErrorAction SilentlyContinue }
+if (-not $BashExecutable) {
+    $BashCandidate = Get-Command bash -ErrorAction SilentlyContinue
+    if ($BashCandidate) { $BashExecutable = $BashCandidate.Source }
+}
 
 if ($DockerCommand) {
     try {
@@ -99,8 +102,8 @@ if ($DockerCommand) {
     }
 }
 
-if ($SyntaxState -ne "pass" -and $BashCommand) {
-    & $BashCommand.Source -n $PayloadFullPath
+if ($SyntaxState -ne "pass" -and $BashExecutable) {
+    & $BashExecutable -n $PayloadFullPath
     if ($LASTEXITCODE -eq 0) {
         $SyntaxState = "pass"
         if ($DockerState -eq "failed") { $DockerState = "failed_local_bash_passed" }
