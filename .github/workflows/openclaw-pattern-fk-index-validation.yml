@@ -1,0 +1,55 @@
+name: Validate OpenClaw pattern-engine FK indexes
+
+on:
+  pull_request:
+    paths:
+      - 'supabase/migrations/20260820050200_add_pattern_engine_fk_indexes.sql'
+      - '.github/workflows/openclaw-pattern-fk-index-validation.yml'
+  push:
+    branches:
+      - feat/supabase-emergency-bridge-20260819
+    paths:
+      - 'supabase/migrations/20260820050200_add_pattern_engine_fk_indexes.sql'
+      - '.github/workflows/openclaw-pattern-fk-index-validation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Validate non-destructive index migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('supabase/migrations/20260820050200_add_pattern_engine_fk_indexes.sql')
+          text = path.read_text(encoding='utf-8')
+
+          expected = {
+              'openclaw_pattern_feedback_pattern_key_idx': 'openclaw_pattern_feedback',
+              'openclaw_pattern_promotion_log_pattern_key_idx': 'openclaw_pattern_promotion_log',
+              'openclaw_pattern_evidence_links_pattern_key_idx': 'openclaw_pattern_evidence_links',
+              'openclaw_skill_versions_pattern_key_idx': 'openclaw_skill_versions',
+          }
+          for index, table in expected.items():
+              assert f'create index if not exists {index}' in text.lower(), index
+              assert f'on public.{table}' in text.lower(), table
+
+          assert 'version_no' not in text
+          assert 'skill_version desc' in text.lower()
+          assert re.search(r'\bdrop\s+(?:table|schema|function|index)\b', text, re.IGNORECASE) is None
+          assert re.search(r'\btruncate\b|\bdelete\s+from\b', text, re.IGNORECASE) is None
+          print('pattern_engine_fk_indexes=pass')
+          PY

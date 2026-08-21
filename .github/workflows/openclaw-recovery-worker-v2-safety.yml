@@ -1,0 +1,159 @@
+name: Validate OpenClaw recovery worker v3 safety
+
+on:
+  pull_request:
+    paths:
+      - 'pi/openclaw-recovery-worker.py'
+      - 'pi/openclaw-recovery-worker-v2.py'
+      - 'pi/install-openclaw-recovery-worker-v2.sh'
+      - '.github/workflows/openclaw-recovery-worker-v2-safety.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openclaw-recovery-worker-v3-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+
+      - name: Compile Python sources and validate installer syntax
+        run: |
+          python -m py_compile \
+            pi/openclaw-recovery-worker.py \
+            pi/openclaw-recovery-worker-v2.py
+          bash -n pi/install-openclaw-recovery-worker-v2.sh
+
+      - name: Run launcher self-test against current core
+        shell: bash
+        run: |
+          set -euo pipefail
+          OPENCLAW_RECOVERY_WORKER_CORE="$PWD/pi/openclaw-recovery-worker.py" \
+            python pi/openclaw-recovery-worker-v2.py --self-test \
+            | tee /tmp/openclaw-recovery-worker-self-test.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          result=json.loads(Path('/tmp/openclaw-recovery-worker-self-test.json').read_text(encoding='utf-8'))
+          assert result['ok'] is True
+          assert result['refresh_token_minimum_chars'] == 8
+          assert result['arbitrary_payload_execution'] is False
+          assert result['secret_values_included'] is False
+          assert not any(result['forbidden'].values()), result['forbidden']
+          PY
+
+      - name: Validate fixed handlers, auth refresh and executable-poller boundary
+        run: |
+          python - <<'PY'
+          import ast
+          import pathlib
+          import re
+
+          core_path = pathlib.Path('pi/openclaw-recovery-worker.py')
+          launcher_path = pathlib.Path('pi/openclaw-recovery-worker-v2.py')
+          installer_path = pathlib.Path('pi/install-openclaw-recovery-worker-v2.sh')
+          core = core_path.read_text(encoding='utf-8')
+          launcher = launcher_path.read_text(encoding='utf-8')
+          installer = installer_path.read_text(encoding='utf-8')
+          trees = {
+              core_path: ast.parse(core),
+              launcher_path: ast.parse(launcher),
+          }
+
+          required = {
+              'pi_supabase_auth_model_recovery',
+              'telegram_model_failover_repair',
+              'worker_liveness_guardian',
+              'pull_recovery',
+          }
+          missing = sorted(value for value in required if value not in core)
+          assert not missing, f'missing recovery contract markers: {missing}'
+          assert 'pi_infrastructure_recovery' not in core, 'obsolete broad recovery handler must stay retired'
+          assert 'MIN_REFRESH_TOKEN_CHARS = 8' in core
+          assert 'len(REFRESH_TOKEN) < MIN_REFRESH_TOKEN_CHARS' in core
+          assert 'WORKER_VERSION=3' in installer
+          assert 'MIN_REFRESH_TOKEN_CHARS=8' in installer
+          assert '${#REFRESH_TOKEN_VALUE} < MIN_REFRESH_TOKEN_CHARS' in installer
+
+          forbidden_calls = {'eval', 'exec', 'compile'}
+          poll_names = {'get' + 'Updates', 'get_updates'}
+          for path, tree in trees.items():
+              for node in ast.walk(tree):
+                  if not isinstance(node, ast.Call):
+                      continue
+                  if isinstance(node.func, ast.Name):
+                      assert node.func.id not in forbidden_calls, f'forbidden call in {path}: {node.func.id}'
+                      assert node.func.id not in poll_names, f'second Telegram poller call in {path}'
+                  if isinstance(node.func, ast.Attribute):
+                      assert node.func.attr not in poll_names, f'second Telegram poller call in {path}'
+                  for keyword in node.keywords:
+                      if keyword.arg == 'shell':
+                          assert not (
+                              isinstance(keyword.value, ast.Constant)
+                              and keyword.value.value is True
+                          ), 'shell=True forbidden'
+
+          poll_method = 'get' + 'Updates'
+          endpoint_pattern = re.compile(
+              rf'https?://[^\s\"\']*api\.telegram\.org[^\s\"\']*/{re.escape(poll_method)}',
+              re.IGNORECASE,
+          )
+          assert endpoint_pattern.search(core) is None
+          assert endpoint_pattern.search(launcher) is None
+          assert 'TELEGRAM_BOT_TOKEN' not in core
+          assert re.search(r'curl\s*\|\s*(?:sh|bash)', core + '\n' + launcher + '\n' + installer) is None
+          print('fixed_handler_contract=pass')
+          PY
+
+      - name: Reject committed secret literals
+        run: |
+          python - <<'PY'
+          import pathlib
+          import re
+
+          targets = [
+              pathlib.Path('pi/openclaw-recovery-worker.py'),
+              pathlib.Path('pi/openclaw-recovery-worker-v2.py'),
+              pathlib.Path('pi/install-openclaw-recovery-worker-v2.sh'),
+          ]
+          pattern = re.compile(
+              r'(sk-proj-[A-Za-z0-9_-]{16,}|ghp_[A-Za-z0-9]{20,}|'
+              r'xox[baprs]-[A-Za-z0-9-]{20,}|'
+              r'tskey-(?:auth|api|client)-[A-Za-z0-9_-]{16,})'
+          )
+          for path in targets:
+              assert pattern.search(path.read_text(encoding='utf-8')) is None, f'secret literal in {path}'
+          print('secret_literal_scan=pass')
+          PY
+
+      - name: Confirm non-production workflow
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          text = Path('.github/workflows/openclaw-recovery-worker-v2-safety.yml').read_text(encoding='utf-8')
+          forbidden = [
+              'supabase functions ' + 'deploy',
+              'vercel ' + '--prod',
+              'gh pr ' + 'merge',
+              'git push ' + 'origin main',
+          ]
+          for marker in forbidden:
+              assert marker not in text, marker
+          assert 'contents: read' in text
+          print('production_mutation=off')
+          PY

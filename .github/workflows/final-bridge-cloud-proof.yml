@@ -1,0 +1,155 @@
+name: Final bridge cloud preparation proof
+
+on:
+  push:
+    branches:
+      - feat/supabase-emergency-bridge-20260819
+    paths:
+      - 'pi/**'
+      - 'supabase/functions/**'
+      - 'supabase/migrations/**'
+      - 'docs/FINAL_BRIDGE_ACTIVATION_V2.md'
+      - '.github/workflows/final-bridge-cloud-proof.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: final-bridge-cloud-proof
+  cancel-in-progress: true
+
+jobs:
+  prove:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feat/supabase-emergency-bridge-20260819
+          fetch-depth: 1
+          persist-credentials: true
+
+      - name: Validate final branch contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile pi/openclaw-bridge-agent.py
+          bash -n pi/install-openclaw-bridge-agent.sh
+          bash -n pi/uninstall-openclaw-bridge-agent.sh
+
+          for function_name in \
+            canonical-client-config \
+            credential-readiness \
+            emergency-bridge \
+            command-center
+          do
+            cmp \
+              "supabase/functions/deployed/final-v1/${function_name}/index.ts" \
+              "supabase/functions/${function_name}/index.ts"
+          done
+
+          python3 - <<'PY'
+          from collections import Counter
+          from pathlib import Path
+          import re
+
+          versions=[]
+          for path in Path('supabase/migrations').glob('*.sql'):
+              match=re.match(r'^(\d+)_',path.name)
+              if match:
+                  versions.append(match.group(1))
+          duplicates=sorted(version for version,count in Counter(versions).items() if count>1)
+          if duplicates:
+              raise SystemExit(f'duplicate migration versions: {duplicates}')
+
+          migration=Path('supabase/migrations/20260819090000_finalize_bridge_admission_canonical_ssot_runtime_receipts.sql').read_text()
+          required=(
+              'bridge_canonical_credentials',
+              'bridge_runtime_key_selection',
+              'bridge_record_runtime_key_selection',
+              'bridge_reconcile_runtime_key_unification',
+              'bridge_request_ledger_user_action_execution_key_uidx',
+              "when 'canonical_config' then 'canonical_config'",
+              "when 'command_status' then 'command_status'",
+              "when 'command_ingest' then 'command_ingest'",
+              "when 'decision_record' then 'decision_record'",
+              "when 'feedback_record' then 'feedback_record'",
+              "when 'object_link' then 'object_link'",
+          )
+          missing=[item for item in required if item not in migration]
+          if missing:
+              raise SystemExit(f'missing final migration invariants: {missing}')
+          PY
+
+          ! grep -RInE \
+            --exclude='*.md' \
+            --exclude='package-lock.json' \
+            '(sk-proj-|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|Bearer[[:space:]]+[A-Za-z0-9._-]{20,})' \
+            pi supabase
+          ! grep -RInE '(Deno\.Command|child_process|/bin/sh|shell_exec|execSync)' \
+            supabase/functions/deployed/final-v1
+          ! grep -RInE '(SUPABASE_SERVICE_ROLE_KEY|OPENAI_API_KEY|VERCEL_TOKEN)' pi
+          ! grep -RInE '(getUpdates\(|start_polling\(|run_polling\()' \
+            pi supabase/functions/deployed/final-v1
+
+      - name: Write non-secret cloud-preparation receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          python3 - <<'PY'
+          import json
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          receipt={
+              'schema_version': 1,
+              'result': 'cloud_preparation_pass',
+              'repository': os.environ['GITHUB_REPOSITORY'],
+              'branch': 'feat/supabase-emergency-bridge-20260819',
+              'commit_sha': os.environ['GITHUB_SHA'],
+              'generated_at': datetime.now(timezone.utc).isoformat(),
+              'checks': {
+                  'pi_agent_python_compile': True,
+                  'pi_installer_shell_syntax': True,
+                  'canonical_sources_match_final_snapshots': True,
+                  'migration_versions_unique': True,
+                  'final_migration_contracts_present': True,
+                  'secret_literal_scan': True,
+                  'forbidden_execution_scan': True,
+                  'second_telegram_poller_scan': True,
+              },
+              'safe_defaults': {
+                  'paid_api_fallback': False,
+                  'public_shell_execution': False,
+                  'second_telegram_poller_created': False,
+                  'vercel_deployment_performed': False,
+                  'credential_rotation_performed': False,
+              },
+              'physical_gates': {
+                  'pi_authenticated_receipt': False,
+                  'phone_t3': False,
+                  'telegram_t4': False,
+              },
+              'secret_values_included': False,
+          }
+          Path('evidence/final-bridge-cloud-preparation.json').write_text(
+              json.dumps(receipt,indent=2,sort_keys=True)+'\n'
+          )
+          PY
+
+      - name: Commit proof receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add evidence/final-bridge-cloud-preparation.json
+          if git diff --cached --quiet; then
+            echo 'PROOF_RECEIPT=UNCHANGED'
+          else
+            git commit -m 'chore: record final bridge cloud-preparation proof'
+            git push origin HEAD:feat/supabase-emergency-bridge-20260819
+          fi

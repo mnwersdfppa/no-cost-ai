@@ -1,0 +1,192 @@
+name: Validate OpenClaw pattern promotion engine
+
+on:
+  pull_request:
+    paths:
+      - 'supabase/migrations/20260820050000_openclaw_pattern_promotion_engine_v1.sql'
+      - 'supabase/migrations/20260820050100_seed_openclaw_pattern_promotion_engine_v1.sql'
+      - 'supabase/functions/openclaw-pattern-engine/**'
+      - 'supabase/functions/deployment-manifest-pattern-engine.json'
+      - 'skills/pattern-promotion-engine/**'
+      - 'docs/openclaw-pattern-promotion-system.md'
+      - '.github/workflows/openclaw-pattern-promotion-validation.yml'
+  push:
+    branches:
+      - feat/supabase-emergency-bridge-20260819
+    paths:
+      - 'supabase/migrations/20260820050000_openclaw_pattern_promotion_engine_v1.sql'
+      - 'supabase/migrations/20260820050100_seed_openclaw_pattern_promotion_engine_v1.sql'
+      - 'supabase/functions/openclaw-pattern-engine/**'
+      - 'supabase/functions/deployment-manifest-pattern-engine.json'
+      - 'skills/pattern-promotion-engine/**'
+      - 'docs/openclaw-pattern-promotion-system.md'
+      - '.github/workflows/openclaw-pattern-promotion-validation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openclaw-pattern-promotion-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Type-check Edge Function
+        run: deno check supabase/functions/openclaw-pattern-engine/index.ts
+
+      - name: Validate manifest and promotion contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          import re
+
+          manifest_path = Path('supabase/functions/deployment-manifest-pattern-engine.json')
+          core_path = Path('supabase/migrations/20260820050000_openclaw_pattern_promotion_engine_v1.sql')
+          seed_path = Path('supabase/migrations/20260820050100_seed_openclaw_pattern_promotion_engine_v1.sql')
+          edge_path = Path('supabase/functions/openclaw-pattern-engine/index.ts')
+          skill_path = Path('skills/pattern-promotion-engine/SKILL.md')
+          docs_path = Path('docs/openclaw-pattern-promotion-system.md')
+
+          for path in (manifest_path, core_path, seed_path, edge_path, skill_path, docs_path):
+              assert path.is_file(), path
+
+          manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+          assert manifest['project_id'] == 'dpllasnpfskyyyzebyal'
+          function = manifest['function']
+          assert function['name'] == 'openclaw-pattern-engine'
+          assert function['version'] == 1
+          assert function['custom_auth'] == 'scoped_pi_gateway_client_jwt'
+          assert function['promotion_action_exposed'] is False
+          assert function['verify_jwt'] is False
+          assert manifest['safety']['arbitrary_execution_allowed'] is False
+          assert manifest['safety']['provider_secret_returned'] is False
+          assert manifest['safety']['server_secret_returned'] is False
+          assert manifest['schedules']['openclaw-pattern-harvest-v1'] == '*/15 * * * *'
+          assert manifest['schedules']['openclaw-pattern-score-v1'] == '7 * * * *'
+
+          expected_e2e = {
+              'unauthenticated_status': 401,
+              'authenticated_status': 200,
+              'capability_resolve_status': 200,
+              'safe_observation_status': 200,
+              'duplicate_execution_status': 409,
+              'secret_like_payload_status': 400,
+              'executable_payload_status': 400,
+              'feedback_status': 200,
+          }
+          for key, value in expected_e2e.items():
+              assert manifest['e2e'][key] == value, key
+          assert manifest['e2e']['temporary_identity_deleted'] is True
+          assert manifest['e2e']['temporary_rows_deleted'] is True
+
+          core = core_path.read_text(encoding='utf-8')
+          seed = seed_path.read_text(encoding='utf-8')
+          edge = edge_path.read_text(encoding='utf-8')
+          skill = skill_path.read_text(encoding='utf-8')
+          docs = docs_path.read_text(encoding='utf-8')
+
+          core_markers = (
+              'openclaw_pattern_candidates',
+              'openclaw_pattern_observations',
+              'openclaw_pattern_feedback',
+              'openclaw_capability_registry',
+              'openclaw_register_pattern_observation',
+              'openclaw_refresh_pattern_scores',
+              'openclaw_resolve_capability',
+              'openclaw_promote_pattern',
+              'openclaw_harvest_operational_patterns',
+              'enable row level security',
+              'revoke all',
+          )
+          for marker in core_markers:
+              assert marker.lower() in core.lower(), marker
+
+          seed_markers = (
+              'provider-overload-failover',
+              'durable-queue-retry',
+              'pi-auth-device-identity-recovery',
+              'runtime-compatibility-resolver',
+              'state-fingerprint-dedupe',
+              'notion-ssot-projection',
+              'api-first-status-routing',
+              'openclaw-pattern-harvest-v1',
+              'openclaw-pattern-score-v1',
+          )
+          for marker in seed_markers:
+              assert marker in seed, marker
+
+          edge_markers = (
+              'pi-gateway-client',
+              'openclaw_register_pattern_observation',
+              'openclaw_record_pattern_feedback',
+              'openclaw_resolve_capability',
+              'duplicate_execution_key',
+              'secret_like_payload_rejected',
+              'executable_payload_field_rejected',
+              'arbitrary_execution_allowed: false',
+              'provider_secret_returned: false',
+              'server_secret_returned: false',
+          )
+          for marker in edge_markers:
+              assert marker in edge, marker
+
+          assert 'openclaw_promote_pattern' not in edge, 'Pi API must not expose promotion RPC'
+          assert 'action === "promote"' not in edge
+          assert 'action == "promote"' not in edge
+          assert '# Pattern Promotion Engine' in skill
+          assert 'Supabase' in docs and 'Notion' in docs
+
+          combined = '\n'.join((core, seed, edge))
+          forbidden = {
+              'automatic paid fallback': r'paid_(?:api_)?fallback(?:_enabled)?\s*[:=]\s*true',
+              'second Telegram poller': r'getUpdates|start_second_telegram_poller\s*:\s*true',
+              'curl pipe shell': r'curl\s*\|\s*(?:sh|bash)',
+              'GitHub PAT literal': r'(?:ghp_|github_pat_)[A-Za-z0-9_]{20,}',
+              'OpenAI key literal': r'sk-(?:proj-)?[A-Za-z0-9_-]{20,}',
+              'Tailscale key literal': r'tskey-(?:auth|api|client)-[A-Za-z0-9_-]{16,}',
+              'private key literal': r'BEGIN\s+(?:RSA|OPENSSH|EC)\s+PRIVATE\s+KEY',
+          }
+          for label, pattern in forbidden.items():
+              if re.search(pattern, combined, re.IGNORECASE):
+                  raise SystemExit(f'forbidden:{label}')
+
+          print('pattern_promotion_contract=pass')
+          PY
+
+      - name: Confirm read-only CI
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          text = Path('.github/workflows/openclaw-pattern-promotion-validation.yml').read_text(encoding='utf-8')
+          assert 'contents: read' in text
+          forbidden = (
+              'supabase functions ' + 'deploy',
+              'vercel ' + '--prod',
+              'gh pr ' + 'merge',
+              'git push ' + 'origin main',
+              'contents:' + ' write',
+          )
+          for marker in forbidden:
+              assert marker not in text, marker
+          print('production_mutation=off')
+          PY

@@ -1,0 +1,144 @@
+name: Supabase model retry and delivery pipeline
+
+on:
+  pull_request:
+    paths:
+      - "supabase/functions/model-retry-worker/**"
+      - "supabase/functions/pi-result-delivery-queue/**"
+      - "supabase/migrations/20260820005000_openclaw_model_retry_delivery_pipeline.sql"
+      - "pi/openclaw-telegram-delivery-worker.py"
+      - "pi/install-openclaw-telegram-delivery-worker.sh"
+      - ".github/workflows/supabase-model-retry-delivery.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Type-check Edge Functions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          deno check supabase/functions/model-retry-worker/index.ts
+          deno check supabase/functions/pi-result-delivery-queue/index.ts
+
+      - name: Validate Pi worker and installer
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m py_compile pi/openclaw-telegram-delivery-worker.py
+          bash -n pi/install-openclaw-telegram-delivery-worker.sh
+          python3 pi/openclaw-telegram-delivery-worker.py --self-test | tee /tmp/pi-delivery-self-test.json
+          python3 - <<'PY'
+          import json
+          data = json.load(open('/tmp/pi-delivery-self-test.json', encoding='utf-8'))
+          assert data['ok'] is True
+          assert data['outbound_only'] is True
+          assert data['second_poller_created'] is False
+          assert not any(data['forbidden'].values())
+          PY
+
+      - name: Validate database and delivery contracts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          retry = Path('supabase/functions/model-retry-worker/index.ts').read_text(encoding='utf-8')
+          delivery = Path('supabase/functions/pi-result-delivery-queue/index.ts').read_text(encoding='utf-8')
+          migration = Path('supabase/migrations/20260820005000_openclaw_model_retry_delivery_pipeline.sql').read_text(encoding='utf-8')
+          pi_worker = Path('pi/openclaw-telegram-delivery-worker.py').read_text(encoding='utf-8')
+          installer = Path('pi/install-openclaw-telegram-delivery-worker.sh').read_text(encoding='utf-8')
+
+          retry_required = [
+              'bridge_verify_model_retry_worker_token',
+              'bridge_claim_model_retry_task',
+              'Opencode-api-key',
+              'telegram_result_delivery',
+              'BACKOFF_SECONDS = [120, 300, 900, 2700, 7200]',
+              'provider_secret_returned: false',
+              'raw_provider_error_stored: false',
+          ]
+          for marker in retry_required:
+              assert marker in retry, marker
+
+          delivery_required = [
+              'bridge_claim_telegram_delivery_task',
+              'pi-gateway-client',
+              'telegram_result_delivery',
+              'delivery_mode: "openclaw_message_send"',
+              'secret_like_evidence_rejected',
+              'server_secret_returned: false',
+          ]
+          for marker in delivery_required:
+              assert marker in delivery, marker
+
+          migration_required = [
+              'vault.create_secret',
+              'gen_random_bytes(32)',
+              'bridge_verify_model_retry_worker_token',
+              'bridge_claim_model_retry_task',
+              'bridge_claim_telegram_delivery_task',
+              'bridge_invoke_model_retry_worker',
+              "'*/5 * * * *'",
+              'for update skip locked',
+              "q.task_type = 'model_request_retry'",
+              "q.task_type = 'telegram_result_delivery'",
+          ]
+          for marker in migration_required:
+              haystack = migration.lower() if marker == 'for update skip locked' else migration
+              assert marker in haystack, marker
+
+          assert 'openclaw message send' in pi_worker
+          assert 'channels.telegram.allowFrom' in pi_worker
+          assert 'OnUnitActiveSec=2min' in installer
+          assert 'Type=oneshot' in installer
+
+          combined = '\n'.join([retry, delivery, migration, pi_worker, installer])
+          forbidden = [
+              'get' + 'Updates',
+              'TELEGRAM_' + 'BOT_TOKEN',
+              'shell=True',
+              'eval(task',
+              'exec(task',
+              'pkill',
+              'kill -9',
+              'curl | sh',
+              'curl | bash',
+          ]
+          for marker in forbidden:
+              assert marker not in combined, marker
+
+          credential_value_patterns = [
+              r'sk-proj-[A-Za-z0-9_-]{16,}',
+              r'ghp_[A-Za-z0-9]{20,}',
+              r'tskey-(?:auth|api|client)-[A-Za-z0-9_-]{16,}',
+              r'xox[baprs]-[A-Za-z0-9-]{20,}',
+          ]
+          for pattern in credential_value_patterns:
+              assert re.search(pattern, combined) is None, pattern
+          PY
+
+      - name: Confirm non-destructive rollout boundaries
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          grep -Fq 'single_telegram_poller' supabase/migrations/20260820005000_openclaw_model_retry_delivery_pipeline.sql
+          grep -Fq 'second_telegram_poller' supabase/migrations/20260820005000_openclaw_model_retry_delivery_pipeline.sql
+          ! grep -ERn '(git merge|gh pr merge|vercel --prod|supabase db reset|drop table|truncate table)' \
+            supabase/functions/model-retry-worker \
+            supabase/functions/pi-result-delivery-queue \
+            pi/openclaw-telegram-delivery-worker.py \
+            pi/install-openclaw-telegram-delivery-worker.sh

@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "project_id": "dpllasnpfskyyyzebyal",
+  "generated_for": "OpenClaw Pi5 Telegram recovery",
+  "root_cause": "The previous local minimum of 20 characters rejected valid current-format Supabase refresh tokens before Supabase Auth could validate them.",
+  "functions": {
+    "pi-auth-refresh": {
+      "version": 5,
+      "status": "ACTIVE",
+      "verify_jwt": false,
+      "source": "supabase/functions/deployed/pi-auth-refresh-v5/index.ts",
+      "ezbr_sha256": "aa44010cee4d26dbd35774bc14c664f648e3c5e0f45e7ed83e0004fe1da82b8c",
+      "local_minimum_refresh_token_chars": 8,
+      "upstream_validator": "Supabase Auth refresh-token exchange"
+    },
+    "pi-infra-bootstrap": {
+      "version": 7,
+      "status": "ACTIVE",
+      "verify_jwt": false,
+      "source": "supabase/functions/deployed/pi-infra-bootstrap-v7/index.ts",
+      "ezbr_sha256": "35781ccb3a2209fba93b80de4f4d5843546ad65bb9bb18b76332cdcc9be8911e",
+      "local_minimum_refresh_token_chars": 8,
+      "canonical_gateway": "https://dpllasnpfskyyyzebyal.supabase.co/functions/v1/pi-model-gateway-guardian/v1"
+    }
+  },
+  "e2e": {
+    "gate": "pi_auth_refresh_current_format_e2e",
+    "result": "pass",
+    "password_exchange_status": 200,
+    "pi_auth_refresh_status": 200,
+    "bootstrap_status": 200,
+    "pi_gateway_role_verified": true,
+    "guardian_route_verified": true,
+    "queue_on_overload": true,
+    "single_telegram_poller_preserved": true,
+    "provider_secret_exported": false,
+    "tailscale_key_returned_without_request": false,
+    "temporary_user_count_after_cleanup": 0,
+    "temporary_ledger_count_after_cleanup": 0,
+    "token_values_retained": false
+  },
+  "security": {
+    "opencode_secret_location": "supabase_edge_only",
+    "raw_provider_secret_returned_to_pi": false,
+    "paid_api_fallback": false,
+    "second_telegram_poller": false,
+    "vercel_production_deployment": false,
+    "physical_pi_mutation": false,
+    "secret_values_included": false
+  },
+  "physical_gate": {
+    "pi_openclaw_model_activation": "pending",
+    "pi_recovery_queue_worker_active": "pending",
+    "reason": "The verified master installer has not yet been executed on the physical Raspberry Pi."
+  }
+}

@@ -1,0 +1,96 @@
+name: Pi Telegram delivery worker
+
+on:
+  pull_request:
+    paths:
+      - "pi/openclaw-telegram-delivery-worker.py"
+      - "pi/install-openclaw-telegram-delivery-worker.sh"
+      - ".github/workflows/pi-telegram-delivery-worker.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate syntax and self-test
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m py_compile pi/openclaw-telegram-delivery-worker.py
+          bash -n pi/install-openclaw-telegram-delivery-worker.sh
+          python3 pi/openclaw-telegram-delivery-worker.py --self-test | tee /tmp/delivery-self-test.json
+          python3 - <<'PY'
+          import json
+          payload = json.load(open('/tmp/delivery-self-test.json', encoding='utf-8'))
+          assert payload['ok'] is True
+          assert payload['outbound_only'] is True
+          assert payload['second_poller_created'] is False
+          assert payload['task_type'] == 'telegram_result_delivery'
+          assert payload['delivery_command'] == 'openclaw message send'
+          assert not any(payload['forbidden'].values())
+          PY
+
+      - name: Enforce bounded delivery contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          worker = Path('pi/openclaw-telegram-delivery-worker.py').read_text(encoding='utf-8')
+          installer = Path('pi/install-openclaw-telegram-delivery-worker.sh').read_text(encoding='utf-8')
+          combined = worker + '\n' + installer
+
+          required = [
+              'pi-result-delivery-queue',
+              'telegram_result_delivery',
+              'openclaw',
+              'message',
+              'send',
+              '--channel',
+              'telegram',
+              '--target',
+              '--message',
+              'PI_REFRESH_TOKEN',
+              'second_poller_created',
+          ]
+          for marker in required:
+              assert marker in combined, marker
+
+          forbidden = [
+              'shell=True',
+              'eval(task',
+              'exec(task',
+              'get' + 'Updates',
+              'TELEGRAM_' + 'BOT_TOKEN',
+              'pkill',
+              'kill -9',
+              'curl | sh',
+              'rm -rf /',
+          ]
+          for marker in forbidden:
+              assert marker not in combined, marker
+
+          assert 'OPENCLAW_TELEGRAM_TARGET' in combined
+          assert 'channels.telegram.allowFrom' in worker
+          assert 'Type=oneshot' in installer
+          assert 'OnUnitActiveSec=2min' in installer
+          PY
+
+      - name: Reject credential literals
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if grep -ERn --exclude='pi-telegram-delivery-worker.yml' \
+            '(sk-proj-[A-Za-z0-9_-]{16,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|tskey-(auth|api|client)-[A-Za-z0-9_-]{16,})' \
+            pi/openclaw-telegram-delivery-worker.py \
+            pi/install-openclaw-telegram-delivery-worker.sh; then
+            echo 'credential-like literal detected' >&2
+            exit 1
+          fi

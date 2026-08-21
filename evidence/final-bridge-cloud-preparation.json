@@ -1,0 +1,31 @@
+{
+  "branch": "feat/supabase-emergency-bridge-20260819",
+  "checks": {
+    "canonical_sources_match_final_snapshots": true,
+    "final_migration_contracts_present": true,
+    "forbidden_execution_scan": true,
+    "migration_versions_unique": true,
+    "pi_agent_python_compile": true,
+    "pi_installer_shell_syntax": true,
+    "second_telegram_poller_scan": true,
+    "secret_literal_scan": true
+  },
+  "commit_sha": "1e12085bb9cec01957a869a3ba00409f2e38ab7a",
+  "generated_at": "2026-08-20T10:42:20.344360+00:00",
+  "physical_gates": {
+    "phone_t3": false,
+    "pi_authenticated_receipt": false,
+    "telegram_t4": false
+  },
+  "repository": "mnwersdfppa/no-cost-ai",
+  "result": "cloud_preparation_pass",
+  "safe_defaults": {
+    "credential_rotation_performed": false,
+    "paid_api_fallback": false,
+    "public_shell_execution": false,
+    "second_telegram_poller_created": false,
+    "vercel_deployment_performed": false
+  },
+  "schema_version": 1,
+  "secret_values_included": false
+}

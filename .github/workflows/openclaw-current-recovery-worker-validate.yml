@@ -1,0 +1,105 @@
+name: Validate current-format OpenClaw recovery worker
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'pi/openclaw-recovery-worker-current.py'
+      - 'pi/install-openclaw-recovery-worker-current.sh'
+      - '.github/workflows/openclaw-current-recovery-worker-validate.yml'
+  push:
+    branches:
+      - feat/supabase-emergency-bridge-20260819
+    paths:
+      - 'pi/openclaw-recovery-worker-current.py'
+      - 'pi/install-openclaw-recovery-worker-current.sh'
+      - '.github/workflows/openclaw-current-recovery-worker-validate.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openclaw-current-recovery-worker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Compile and self-test worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile pi/openclaw-recovery-worker-current.py
+          python3 pi/openclaw-recovery-worker-current.py --self-test
+
+      - name: Validate installer and immutable source pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n pi/install-openclaw-recovery-worker-current.sh
+          test "$(sha256sum pi/openclaw-recovery-worker-current.py | awk '{print $1}')" = \
+            'bef134f66bb3da5187c3842db3e765471e02c0a058c70c7b79c57cf989112589'
+          grep -Fq \
+            'c90ad40bd2ef8a8430cdf78bd5f1a394d2812eab/pi/openclaw-recovery-worker-current.py' \
+            pi/install-openclaw-recovery-worker-current.sh
+          grep -Fq \
+            'SOURCE_SHA256="bef134f66bb3da5187c3842db3e765471e02c0a058c70c7b79c57cf989112589"' \
+            pi/install-openclaw-recovery-worker-current.sh
+          grep -Fq 'MIN_REFRESH_TOKEN_CHARS = 8' pi/openclaw-recovery-worker-current.py
+          grep -Fq 'pi-recovery-installer-current-format-verified' pi/openclaw-recovery-worker-current.py
+
+      - name: Enforce safety boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          worker = Path('pi/openclaw-recovery-worker-current.py').read_text(encoding='utf-8')
+          installer = Path('pi/install-openclaw-recovery-worker-current.sh').read_text(encoding='utf-8')
+          combined = worker + '\n' + installer
+
+          forbidden = {
+              'secret literal': r'(sk-proj-[A-Za-z0-9_-]{16,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|tskey-(?:auth|api|client)-[A-Za-z0-9_-]{16,})',
+              'second Telegram poller': r'getUpdates',
+              'curl pipe shell': r'curl\s*\|\s*(?:sh|bash)',
+              'shell true': r'shell\s*=\s*True',
+              'process kill': r'(?:kill\s+-9|pkill)',
+          }
+          for label, pattern in forbidden.items():
+              assert re.search(pattern, combined, re.IGNORECASE) is None, label
+
+          assert 'ALLOWED_TASKS = frozenset' in worker
+          assert 'EXECUTABLE_PAYLOAD_FIELD_REJECTED' in worker
+          assert 'second_telegram_poller_created": False' in worker
+          assert 'paid_fallback_enabled": False' in worker
+          assert 'arbitrary_payload_execution": False' in installer
+          assert 'provider_secret_exported": False' in installer
+          PY
+
+      - name: Write validation summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## Current-format recovery worker'
+            echo
+            echo '- Python compile: checked'
+            echo '- Worker self-test: checked'
+            echo '- Immutable worker SHA: checked'
+            echo '- Refresh-token boundary: 8 chars before Supabase Auth validation'
+            echo '- Arbitrary payload execution: OFF'
+            echo '- Provider secret export: OFF'
+            echo '- Second Telegram poller: OFF'
+            echo '- Repository mutation: OFF'
+          } >> "$GITHUB_STEP_SUMMARY"

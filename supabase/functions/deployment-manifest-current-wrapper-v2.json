@@ -1,0 +1,37 @@
+{
+  "project_id": "dpllasnpfskyyyzebyal",
+  "recorded_at": "2026-08-20T02:01:00Z",
+  "canonical_public_installer": "pi-openclaw-current-master-recovery-verified",
+  "canonical_public_url": "https://dpllasnpfskyyyzebyal.supabase.co/functions/v1/pi-openclaw-current-master-recovery-verified",
+  "artifact_sha256": "d8e4792e759d898a2a3c7434e973b82fdeddd10e291ac1d4973276ece7216419",
+  "artifact_bytes": 2973,
+  "wrapper_version": 2,
+  "wrapper_ezbr_sha256": "1d85341ab02223453e8a2d02c42f798a21de6aa165368c76fc1e2e41c2bba18b",
+  "source_function": "pi-openclaw-master-recovery-installer",
+  "source_function_version": 6,
+  "source_ezbr_sha256": "c5915029da98e65caf5459dace22fc7dc3e6c198e0553ad486c8c4f80c6a38b4",
+  "layers": {
+    "model_auth": {
+      "function": "pi-recovery-installer-current-format-verified",
+      "sha256": "0754e14b097578edfc2659390456162f88053c70d9610578d686438faa389f54"
+    },
+    "recovery_queue_worker": {
+      "function": "pi-recovery-worker-current-format-verified",
+      "sha256": "56094db3aeb87a757d433f29e8857fdde59d29a476415bd7928e6a218b086b92"
+    },
+    "telegram_delivery_worker": {
+      "function": "pi-telegram-delivery-worker-installer",
+      "sha256": "1db248ffbc0fea0bf22bcf17e2908134c9554f64539e1fe908dc0e2939268e97"
+    }
+  },
+  "refresh_token_minimum_chars": 8,
+  "server_retry_schedule": "*/2 * * * *",
+  "pi_recovery_schedule": "2min+jitter",
+  "pi_delivery_schedule": "2min+jitter",
+  "cloud_required_gate_failures": 0,
+  "physical_execution_pending": true,
+  "paid_api_fallback": false,
+  "second_telegram_poller": false,
+  "provider_secret_returned": false,
+  "secret_values_included": false
+}

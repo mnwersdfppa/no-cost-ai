@@ -1,0 +1,92 @@
+{
+  "project_id": "dpllasnpfskyyyzebyal",
+  "recorded_date": "2026-08-20",
+  "state": "CLOUD_RESEARCH_WORKER_ACTIVE_PHYSICAL_PI_PENDING",
+  "canonical_query_queue": "openclaw_research_queries",
+  "source_run_table": "openclaw_research_source_runs",
+  "compatibility_intake_queue": "bridge_research_queue",
+  "function": {
+    "name": "pattern-research-worker",
+    "version": 1,
+    "status": "ACTIVE",
+    "verify_jwt": false,
+    "authentication": "supabase_vault_bearer_sha256_verification",
+    "maximum_tasks_per_run": 2,
+    "maximum_github_results_per_task": 5,
+    "enabled_sources": [
+      "official_github",
+      "internal_catalog"
+    ],
+    "disabled_sources_until_dedicated_validation": [
+      "official_docs",
+      "mcp_registry",
+      "template_catalog",
+      "technical_papers",
+      "docker_hub",
+      "manual"
+    ]
+  },
+  "scheduler": {
+    "job": "openclaw-pattern-research-worker-v1",
+    "schedule": "5,20,35,50 * * * *",
+    "canonicalization_job": "openclaw-bridge-research-canonicalize-v1",
+    "canonicalization_schedule": "13,43 * * * *",
+    "source_expansion_job": "openclaw-research-source-expand-v1",
+    "source_expansion_schedule": "14,44 * * * *"
+  },
+  "database_contracts": {
+    "canonicalize_rpc": "openclaw_canonicalize_bridge_research_queue",
+    "expand_rpc": "openclaw_expand_research_source_runs",
+    "claim_rpc": "openclaw_claim_research_source_run",
+    "complete_rpc": "openclaw_complete_research_source_run",
+    "readiness_rpc": "openclaw_research_source_readiness",
+    "token_verify_rpc": "bridge_verify_pattern_research_worker_token",
+    "vault_invoke_rpc": "bridge_invoke_pattern_research_worker",
+    "non_downgrade_trigger": "openclaw_pattern_source_match_non_downgrade"
+  },
+  "e2e": {
+    "state": "PASS",
+    "unauthorized_status": 401,
+    "vault_invocation": true,
+    "internal_catalog_atomic_claim": true,
+    "source_run_completed": true,
+    "positive_result_count": true,
+    "source_match_non_downgrade": true,
+    "temporary_query_rows_remaining": 0,
+    "temporary_source_run_rows_remaining": 0,
+    "temporary_auth_users_remaining": 0
+  },
+  "research_boundary": {
+    "repository_metadata_only": true,
+    "repository_clone": false,
+    "repository_archive_download": false,
+    "readme_execution": false,
+    "arbitrary_url_fetch": false,
+    "automatic_install": false,
+    "automatic_skill_activation": false,
+    "automatic_merge": false,
+    "production_deployment": false,
+    "provider_credential_returned": false,
+    "discovered_repository_default_state": "research_only",
+    "license_review_required": true,
+    "maintainer_review_required": true,
+    "static_security_required": true,
+    "compatibility_validation_required": true,
+    "rollback_required": true
+  },
+  "safety": {
+    "rls_enabled": true,
+    "anon_table_access": false,
+    "authenticated_table_mutation": false,
+    "queue_payload_command_execution": false,
+    "secret_values_included": false,
+    "credential_scope_auto_increase": false,
+    "automatic_paid_api": false,
+    "second_telegram_poller": false,
+    "hidden_infrastructure": false,
+    "unauthorized_access": false,
+    "automatic_pr_merge": false,
+    "vercel_production_deployment": false,
+    "physical_pi_completion_reported": false
+  }
+}

@@ -1,0 +1,114 @@
+name: Validate OpenClaw recovery worker
+
+on:
+  pull_request:
+    paths:
+      - "pi/openclaw-recovery-worker.py"
+      - "pi/openclaw-recovery-worker-v2.py"
+      - "pi/install-openclaw-recovery-worker-v2.sh"
+      - "pi/recover-openclaw-telegram-models.sh"
+      - ".github/workflows/openclaw-recovery-worker-validate.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compile Python
+        run: |
+          python3 -m py_compile \
+            pi/openclaw-recovery-worker.py \
+            pi/openclaw-recovery-worker-v2.py
+
+      - name: Validate shell syntax
+        run: |
+          bash -n pi/install-openclaw-recovery-worker-v2.sh
+          bash -n pi/recover-openclaw-telegram-models.sh
+
+      - name: Run canonical launcher self-test
+        run: |
+          test_root="$(mktemp -d)"
+          mkdir -p "$test_root/lib"
+          cp pi/openclaw-recovery-worker.py "$test_root/lib/openclaw-recovery-worker-core.py"
+          OPENCLAW_ROOT="$test_root" \
+          OPENCLAW_RECOVERY_WORKER_CORE="$test_root/lib/openclaw-recovery-worker-core.py" \
+            python3 pi/openclaw-recovery-worker-v2.py --self-test
+
+      - name: Enforce bounded task contract
+        run: |
+          python3 - <<'PY'
+          import ast
+          from pathlib import Path
+
+          path = Path("pi/openclaw-recovery-worker.py")
+          source = path.read_text(encoding="utf-8")
+          tree = ast.parse(source)
+
+          expected = {
+              "pi_supabase_auth_model_recovery",
+              "worker_liveness_guardian",
+              "telegram_model_failover_repair",
+          }
+          allowed = None
+          for node in tree.body:
+              if isinstance(node, ast.Assign):
+                  for target in node.targets:
+                      if isinstance(target, ast.Name) and target.id == "ALLOWED_TASKS":
+                          allowed = set(ast.literal_eval(node.value))
+          if allowed != expected:
+              raise SystemExit(f"unexpected ALLOWED_TASKS: {allowed!r}")
+
+          forbidden = {
+              "shell_true": "shell=True" in source.replace(
+                  'assert "shell=True" not in pathlib.Path(__file__).read_text(encoding="utf-8")',
+                  "",
+              ),
+              "payload_eval": "eval(task" in source or "exec(task" in source,
+              "kill_unknown": "kill -9" in source or "pkill" in source,
+              "telegram_poller": "getUpdates" in source or "TELEGRAM_BOT_TOKEN" in source,
+              "curl_pipe_shell": "curl | sh" in source or "curl|sh" in source,
+          }
+          active = [name for name, value in forbidden.items() if value]
+          if active:
+              raise SystemExit(f"forbidden behavior: {active}")
+          PY
+
+      - name: Scan committed files for secret literals
+        run: |
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          paths = [
+              Path("pi/openclaw-recovery-worker.py"),
+              Path("pi/openclaw-recovery-worker-v2.py"),
+              Path("pi/install-openclaw-recovery-worker-v2.sh"),
+              Path(".github/workflows/openclaw-recovery-worker-validate.yml"),
+          ]
+          patterns = [
+              re.compile(r"sk-proj-[A-Za-z0-9_-]{16,}"),
+              re.compile(r"ghp_[A-Za-z0-9]{20,}"),
+              re.compile(r"xox[baprs]-[A-Za-z0-9-]{20,}"),
+              re.compile(r"tskey-(?:auth|api|client)-[A-Za-z0-9_-]{16,}"),
+          ]
+          for path in paths:
+              text = path.read_text(encoding="utf-8")
+              for pattern in patterns:
+                  if pattern.search(text):
+                      raise SystemExit(f"secret-like literal in {path}: {pattern.pattern}")
+          PY
+
+      - name: Confirm non-deployment workflow
+        run: |
+          ! grep -R -nE 'gh pr merge|supabase functions deploy|vercel --prod|git push +origin +main' \
+            pi/openclaw-recovery-worker.py \
+            pi/openclaw-recovery-worker-v2.py \
+            pi/install-openclaw-recovery-worker-v2.sh \
+            .github/workflows/openclaw-recovery-worker-validate.yml
+          git diff --check

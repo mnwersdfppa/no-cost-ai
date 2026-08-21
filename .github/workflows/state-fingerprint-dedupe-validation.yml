@@ -1,0 +1,250 @@
+name: Validate state fingerprint dedupe
+
+on:
+  pull_request:
+    paths:
+      - 'supabase/migrations/20260820060700_state_fingerprint_dedupe.sql'
+      - 'supabase/functions/state-fingerprint-dedupe/**'
+      - 'supabase/functions/deployment-manifest-state-fingerprint-dedupe.json'
+      - 'skills/state-fingerprint-dedupe/SKILL.md'
+      - '.github/workflows/state-fingerprint-dedupe-validation.yml'
+  push:
+    branches:
+      - feat/supabase-emergency-bridge-20260819
+    paths:
+      - 'supabase/migrations/20260820060700_state_fingerprint_dedupe.sql'
+      - 'supabase/functions/state-fingerprint-dedupe/**'
+      - 'supabase/functions/deployment-manifest-state-fingerprint-dedupe.json'
+      - 'skills/state-fingerprint-dedupe/SKILL.md'
+      - '.github/workflows/state-fingerprint-dedupe-validation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: state-fingerprint-dedupe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Type-check Edge Function
+        run: |
+          set -euo pipefail
+          deno check supabase/functions/state-fingerprint-dedupe/index.ts
+
+      - name: Validate active deployment manifest
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          data = json.loads(
+              Path('supabase/functions/deployment-manifest-state-fingerprint-dedupe.json')
+              .read_text(encoding='utf-8')
+          )
+
+          assert data['schema_version'] == 1
+          assert data['project_id'] == 'dpllasnpfskyyyzebyal'
+          assert data['state'] == 'ACTIVE'
+
+          function = data['function']
+          assert function['name'] == 'state-fingerprint-dedupe'
+          assert function['status'] == 'ACTIVE'
+          assert function['verify_jwt'] is True
+          assert set(function['allowed_roles']) == {
+              'pi-gateway-client',
+              'pattern-observer',
+          }
+          assert function['execution_key_required'] is True
+          assert function['canonical_payload_returned'] is False
+
+          database = data['database']
+          assert database['rls_enabled'] is True
+          assert database['anon_access'] is False
+          assert database['authenticated_direct_table_access'] is False
+          assert database['service_role_only_mutation'] is True
+          assert database['exact_match_only'] is True
+          assert database['similar_items_auto_merged'] is False
+
+          normalization = data['normalization']
+          assert normalization['secret_key_redaction'] is True
+          assert normalization['secret_like_string_redaction'] is True
+          assert normalization['request_secret_rejection'] is True
+          assert normalization['caller_custom_ignore_keys'] is False
+
+          e2e = data['live_e2e']
+          assert e2e['state'] == 'pass'
+          assert e2e['unauthenticated_status'] == 401
+          assert e2e['first_status'] == 200
+          assert e2e['replay_status'] == 200
+          assert e2e['exact_replay_same_fingerprint'] is True
+          assert e2e['replay_seen_count'] == 2
+          assert e2e['similar_state_preserved'] is True
+          assert e2e['duplicate_execution_status'] == 409
+          assert e2e['secret_like_content_status'] == 400
+          assert e2e['canonical_payload_returned'] is False
+          assert e2e['temporary_users_remaining'] == 0
+          assert e2e['temporary_state_rows_remaining'] == 0
+          assert e2e['temporary_ledger_rows_remaining'] == 0
+
+          skill = data['skill']
+          assert skill['state'] == 'active'
+          assert skill['version'] == 1
+          assert skill['canary_duration_minutes'] >= skill['minimum_canary_minutes']
+          assert skill['canary_success_runs'] >= 3
+          assert skill['canary_failed_runs'] == 0
+          assert skill['canary_rollback_runs'] == 0
+          assert skill['missing_gates'] == 0
+          assert skill['forbidden_permissions'] == 0
+          assert skill['source_status_locked'] is True
+
+          github = data['github']
+          assert github['repository'] == 'mnwersdfppa/no-cost-ai'
+          assert github['pull_request'] == 5
+          assert github['workflow_success'] == github['workflow_total'] == 33
+          assert github['draft'] is True
+          assert github['merged'] is False
+
+          security = data['security']
+          assert all(
+              security[key] is False
+              for key in (
+                  'secret_values_included',
+                  'provider_secret_returned',
+                  'canonical_payload_returned',
+                  'arbitrary_code_execution',
+                  'automatic_similar_merge',
+                  'automatic_data_delete',
+                  'credential_scope_auto_increase',
+                  'automatic_paid_api',
+                  'second_telegram_poller',
+                  'automatic_merge',
+                  'production_deployment',
+                  'physical_pi_complete',
+              )
+          )
+          print('active_manifest_contract=pass')
+          PY
+
+      - name: Validate SQL and permission boundary
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          sql = Path(
+              'supabase/migrations/20260820060700_state_fingerprint_dedupe.sql'
+          ).read_text(encoding='utf-8')
+          lowered = sql.lower()
+
+          required = (
+              'create table if not exists public.bridge_state_fingerprints',
+              'unique(namespace,normalizer_version,fingerprint)',
+              'enable row level security',
+              'revoke all on table public.bridge_state_fingerprints from public,anon,authenticated',
+              'grant all on table public.bridge_state_fingerprints to service_role',
+              'function public.bridge_redact_state_jsonb',
+              'function public.bridge_normalize_state_payload',
+              'function public.bridge_state_fingerprint',
+              'function public.bridge_upsert_state_fingerprint',
+              "'exact_match_only',true",
+              "'similar_items_auto_merged',false",
+              "'secret_values_included',false",
+              'state_fingerprint_dedupe_e2e',
+          )
+          for marker in required:
+              assert marker.lower() in lowered, marker
+
+          assert 'grant execute on function public.bridge_upsert_state_fingerprint' in lowered
+          assert re.search(
+              r'grant\s+execute\s+on\s+function\s+public\.bridge_upsert_state_fingerprint.*?to\s+(anon|authenticated)',
+              lowered,
+              flags=re.DOTALL,
+          ) is None
+          assert "v_secret_a text:='sk-'||'proj-'" in sql
+          assert "canonical_payload::text not like '%'||v_secret_a||'%'" in sql
+          assert 'delete from public.bridge_state_fingerprints where namespace=v_namespace' in lowered
+          print('sql_permission_boundary=pass')
+          PY
+
+      - name: Reject arbitrary execution and secret literals
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          paths = [
+              Path('supabase/functions/state-fingerprint-dedupe/index.ts'),
+              Path('supabase/migrations/20260820060700_state_fingerprint_dedupe.sql'),
+              Path('skills/state-fingerprint-dedupe/SKILL.md'),
+          ]
+          texts = {path: path.read_text(encoding='utf-8') for path in paths}
+          edge = texts[paths[0]]
+          combined = '\n'.join(texts.values())
+
+          for pattern in (
+              r'Deno\.Command\s*\(',
+              r'new\s+Function\s*\(',
+              r'\beval\s*\(',
+              r'getUpdates',
+              r'curl\s*\|\s*(?:sh|bash)',
+          ):
+              assert re.search(pattern, edge, re.IGNORECASE) is None, pattern
+
+          for pattern in (
+              r'sk-proj-[A-Za-z0-9_-]{20,}',
+              r'ghp_[A-Za-z0-9]{20,}',
+              r'github_pat_[A-Za-z0-9_]{20,}',
+              r'xox[baprs]-[A-Za-z0-9-]{20,}',
+              r'tskey-(?:auth|api|client)-[A-Za-z0-9_-]{20,}',
+              r'dckr_(?:pat|oat)_[A-Za-z0-9_-]{20,}',
+          ):
+              assert re.search(pattern, combined) is None, pattern
+
+          assert 'SECRET_LIKE' in edge
+          assert 'secret_like_content_rejected' in edge
+          assert 'canonical_payload_returned: false' in edge
+          assert 'similar_items_auto_merged: false' in edge
+          assert 'ALLOWED_ROLES' in edge
+          assert 'ALLOWED_PREFIXES' in edge
+          print('execution_and_secret_boundary=pass')
+          PY
+
+      - name: Confirm non-production workflow
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          workflow = Path(
+              '.github/workflows/state-fingerprint-dedupe-validation.yml'
+          ).read_text(encoding='utf-8')
+          forbidden = (
+              'supabase functions ' + 'deploy',
+              'vercel ' + '--prod',
+              'gh pr ' + 'merge',
+              'git push ' + 'origin main',
+              'contents:' + ' write',
+          )
+          for marker in forbidden:
+              assert marker not in workflow, marker
+          assert 'contents: read' in workflow
+          assert 'persist-credentials: false' in workflow
+          print('production_mutation=off')
+          PY

@@ -1,0 +1,180 @@
+{
+  "project_id": "dpllasnpfskyyyzebyal",
+  "functions": {
+    "emergency-bridge": {
+      "verify_jwt": true,
+      "entrypoint": "supabase/functions/emergency-bridge/index.ts",
+      "purpose": "JWT-protected status, policy, heartbeat and queue inspection"
+    },
+    "credential-readiness": {
+      "verify_jwt": true,
+      "entrypoint": "supabase/functions/credential-readiness/index.ts",
+      "purpose": "Boolean-only credential presence refresh"
+    },
+    "canonical-client-config": {
+      "verify_jwt": true,
+      "entrypoint": "supabase/functions/canonical-client-config/index.ts",
+      "purpose": "Single modern Supabase client configuration and canonical Vercel management metadata"
+    },
+    "pi-infra-bootstrap": {
+      "verify_jwt": false,
+      "auth_mode": "custom_pi_access_or_refresh_token",
+      "entrypoint": "supabase/functions/pi-infra-bootstrap/index.ts",
+      "refresh_token_minimum_chars": 8,
+      "auth_server_validation_required": true,
+      "purpose": "Refresh scoped Pi sessions and return Guardian routing metadata without returning the OpenCode provider secret"
+    },
+    "pi-container-bootstrap": {
+      "verify_jwt": false,
+      "auth_mode": "custom_pi_access_or_refresh_token",
+      "entrypoint": "supabase/functions/pi-container-bootstrap/index.ts",
+      "version": 3,
+      "refresh_token_minimum_chars": 8,
+      "auth_server_validation_required": true,
+      "architecture_normalization": true,
+      "typed_execution_steps_only": true,
+      "purpose": "Select an exact-digest multiarch Docker preflight, local BuildKit, verified native recovery, Supabase Edge queue, or a fail-closed route from the Pi host fingerprint"
+    },
+    "pi-model-gateway-guardian": {
+      "verify_jwt": false,
+      "auth_mode": "custom_pi_gateway_client_role",
+      "entrypoint": "supabase/functions/pi-model-gateway-guardian/index.ts",
+      "purpose": "Canonical OpenAI Responses-compatible model proxy with bounded fallback, per-model quarantine and durable queue acknowledgement"
+    },
+    "pi-work-queue": {
+      "verify_jwt": true,
+      "auth_mode": "platform_jwt_plus_pi_gateway_client_role",
+      "entrypoint": "supabase/functions/pi-work-queue/index.ts",
+      "purpose": "Secret-safe work queue with deterministic recovery-task claims, bounded leases and a DB-enforced task contract"
+    },
+    "pi-auth-refresh": {
+      "verify_jwt": false,
+      "auth_mode": "supabase_refresh_token_exchange",
+      "entrypoint": "supabase/functions/pi-auth-refresh/index.ts",
+      "refresh_token_minimum_chars": 8,
+      "auth_server_validation_required": true,
+      "purpose": "Rotate the short-lived Pi access token without exposing server credentials"
+    },
+    "model-retry-worker": {
+      "verify_jwt": false,
+      "auth_mode": "supabase_vault_sha256_verification",
+      "entrypoint": "supabase/functions/model-retry-worker/index.ts",
+      "schedule": "*/2 * * * *",
+      "canonical_cron_job": "openclaw-model-retry-worker-v2",
+      "max_tasks_per_run": 2,
+      "purpose": "Vault-authenticated server retry worker that persists safe Telegram delivery tasks through the existing single OpenClaw poller"
+    },
+    "pi-openclaw-master-recovery-installer": {
+      "verify_jwt": false,
+      "auth_mode": "public_composed_integrity_snapshot_source",
+      "entrypoint": "supabase/functions/pi-openclaw-master-recovery-installer/index.ts",
+      "canonical": false,
+      "lifecycle_status": "verified_source",
+      "purpose": "Compose exact SHA-pinned current-format model/auth, deterministic recovery worker and outbound Telegram delivery installers"
+    },
+    "pi-openclaw-current-master-recovery-verified": {
+      "verify_jwt": false,
+      "auth_mode": "public_integrity_pinned_artifact",
+      "entrypoint": "supabase/functions/pi-openclaw-current-master-recovery-verified/index.ts",
+      "canonical": false,
+      "lifecycle_status": "native_rollback",
+      "version": 2,
+      "artifact_sha256": "d8e4792e759d898a2a3c7434e973b82fdeddd10e291ac1d4973276ece7216419",
+      "artifact_bytes": 2973,
+      "purpose": "Verified native recovery stack retained as the post-container execution layer and independent rollback path"
+    },
+    "pi-openclaw-docker-compat-installer-verified": {
+      "verify_jwt": false,
+      "auth_mode": "public_integrity_pinned_artifact",
+      "entrypoint": "supabase/functions/pi-openclaw-docker-compat-installer-verified/index.ts",
+      "canonical": true,
+      "version": 1,
+      "artifact_sha256": "f00e9b5bb8169bad33f6e89dd2b97faf004644dcd9b05f735e728438d65ed329",
+      "artifact_bytes": 6961,
+      "agent_sha256": "fab29d2a9ec3417b881b4e9735afac0e78f03d74d09f5310301d08ec7db76188",
+      "image_digest": "sha256:6c6df789c26cb0400171818fb0903d27ff799f9642d6e8c2eaf2b1c8e2e2894b",
+      "purpose": "Canonical physical Pi installer: constrained Docker repair, immutable multiarch preflight, deterministic agent and the existing SHA-verified native recovery stack"
+    },
+    "pi-openclaw-guardian-master-installer-verified": {
+      "verify_jwt": false,
+      "auth_mode": "public_integrity_pinned_artifact",
+      "entrypoint": "supabase/functions/pi-openclaw-guardian-master-installer-verified/index.ts",
+      "canonical": false,
+      "lifecycle_status": "compatibility",
+      "purpose": "Compatibility installer retained for rollback"
+    }
+  },
+  "canonical_supabase_client_key": "SUPABASE_PUBLISHABLE_KEYS.default",
+  "canonical_supabase_server_key": "SUPABASE_SECRET_KEYS.default",
+  "canonical_model_gateway": "pi-model-gateway-guardian",
+  "canonical_model_provider": "supabase-opencode",
+  "provider_secret_location": "supabase_edge_only",
+  "raw_provider_secret_returned_to_pi": false,
+  "queue_on_provider_failure": true,
+  "max_immediate_provider_attempts": 2,
+  "canonical_server_retry_schedule": "*/2 * * * *",
+  "canonical_server_retry_job": "openclaw-model-retry-worker-v2",
+  "server_retry_auth": "supabase_vault_sha256_verification",
+  "server_retry_raw_token_persisted": false,
+  "recovery_queue_contract_guard": "openclaw_recovery_task_contract_guard",
+  "recovery_queue_contract_migration": "supabase/migrations/20260820021200_enforce_openclaw_recovery_task_contract_v1.sql",
+  "pi_refresh_token_minimum_chars": 8,
+  "pi_refresh_current_format_e2e": true,
+  "canonical_container_bootstrap": "pi-container-bootstrap",
+  "canonical_container_bootstrap_version": 3,
+  "canonical_pi_installer": "pi-openclaw-docker-compat-installer-verified",
+  "canonical_pi_installer_source_commit": "f491bf2e0a23ebad7302ce2e586e21021eb63f47",
+  "canonical_pi_installer_url": "https://dpllasnpfskyyyzebyal.supabase.co/functions/v1/pi-openclaw-docker-compat-installer-verified",
+  "canonical_pi_installer_sha256": "f00e9b5bb8169bad33f6e89dd2b97faf004644dcd9b05f735e728438d65ed329",
+  "canonical_pi_installer_bytes": 6961,
+  "canonical_docker_agent_commit": "a71db8946d4658f90b28c3fd51e67dc98f6b54a2",
+  "canonical_docker_agent_sha256": "fab29d2a9ec3417b881b4e9735afac0e78f03d74d09f5310301d08ec7db76188",
+  "canonical_container_image": "docker.io/odifool/openclaw-compat:2026.08.20",
+  "canonical_container_image_by_digest": "docker.io/odifool/openclaw-compat@sha256:6c6df789c26cb0400171818fb0903d27ff799f9642d6e8c2eaf2b1c8e2e2894b",
+  "canonical_container_digest": "sha256:6c6df789c26cb0400171818fb0903d27ff799f9642d6e8c2eaf2b1c8e2e2894b",
+  "canonical_container_platforms": [
+    "linux/amd64",
+    "linux/arm64"
+  ],
+  "canonical_docker_registry": "docker_hub",
+  "docker_registry_credential_alias": "Docker-api-key",
+  "docker_registry_credential_location": "supabase_edge_only",
+  "docker_runtime_pull_auth": "anonymous_public_repository",
+  "docker_automatic_branch_publish": false,
+  "docker_manual_candidate_publish_only": true,
+  "docker_qemu_default": false,
+  "docker_privileged_default": false,
+  "docker_socket_mount": false,
+  "docker_provider_secret_mount": false,
+  "container_decision_order": [
+    "native_host_required",
+    "docker_multiarch",
+    "docker_qemu_explicit",
+    "supabase_edge",
+    "blocked"
+  ],
+  "host_native_exceptions": [
+    "tailscale_tun",
+    "systemd_service_management",
+    "usb_devices",
+    "gpio",
+    "gpu_driver",
+    "single_telegram_poller"
+  ],
+  "native_recovery_installer": "pi-openclaw-current-master-recovery-verified",
+  "native_recovery_installer_sha256": "d8e4792e759d898a2a3c7434e973b82fdeddd10e291ac1d4973276ece7216419",
+  "canonical_model_auth_installer_sha256": "0754e14b097578edfc2659390456162f88053c70d9610578d686438faa389f54",
+  "canonical_recovery_worker_installer_sha256": "56094db3aeb87a757d433f29e8857fdde59d29a476415bd7928e6a218b086b92",
+  "canonical_telegram_delivery_installer_sha256": "1db248ffbc0fea0bf22bcf17e2908134c9554f64539e1fe908dc0e2939268e97",
+  "compatibility_pi_installer": "pi-openclaw-guardian-master-installer-verified",
+  "physical_pi_execution_pending": true,
+  "legacy_anon_fallback": false,
+  "vercel_canonical_auth": "connected_connector",
+  "vercel_visible_project_count": 0,
+  "vercel_runtime_worker": false,
+  "vercel_raw_token_fallback": false,
+  "secret_values_embedded": false,
+  "paid_provider_calls": false,
+  "public_shell_execution": false,
+  "telegram_single_poller_enforced": true
+}

@@ -1,0 +1,201 @@
+name: Validate canonical pattern-to-skill control plane
+
+on:
+  pull_request:
+    paths:
+      - 'docs/pattern-to-skill-evolution-system.md'
+      - 'supabase/functions/pattern-observation-intake/**'
+      - 'supabase/functions/pattern-skill-readiness/**'
+      - 'supabase/functions/pattern-research-worker/**'
+      - 'supabase/functions/deployment-manifest-pattern-skill.json'
+      - 'supabase/migrations/20260820003000_pattern_to_skill_schema.sql'
+      - 'supabase/migrations/20260820003100_pattern_to_skill_functions.sql'
+      - 'supabase/migrations/20260820003200_pattern_to_skill_seed_schedule.sql'
+      - 'supabase/migrations/20260820003300_repair_canonical_pattern_sweep.sql'
+      - 'supabase/migrations/20260820003400_suppress_redundant_pattern_research.sql'
+      - '.github/workflows/pattern-skill-control-plane-validation.yml'
+  push:
+    branches:
+      - feat/supabase-emergency-bridge-20260819
+    paths:
+      - 'docs/pattern-to-skill-evolution-system.md'
+      - 'supabase/functions/pattern-observation-intake/**'
+      - 'supabase/functions/pattern-skill-readiness/**'
+      - 'supabase/functions/pattern-research-worker/**'
+      - 'supabase/functions/deployment-manifest-pattern-skill.json'
+      - 'supabase/migrations/20260820003000_pattern_to_skill_schema.sql'
+      - 'supabase/migrations/20260820003100_pattern_to_skill_functions.sql'
+      - 'supabase/migrations/20260820003200_pattern_to_skill_seed_schedule.sql'
+      - 'supabase/migrations/20260820003300_repair_canonical_pattern_sweep.sql'
+      - 'supabase/migrations/20260820003400_suppress_redundant_pattern_research.sql'
+      - '.github/workflows/pattern-skill-control-plane-validation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: canonical-pattern-skill-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Type-check canonical and compatibility endpoints
+        run: |
+          set -euo pipefail
+          deno check supabase/functions/pattern-observation-intake/index.ts
+          deno check supabase/functions/pattern-skill-readiness/index.ts
+          deno check supabase/functions/pattern-research-worker/index.ts
+          grep -F 'retired_use_openclaw_pattern_engine_observe' supabase/functions/pattern-observation-intake/index.ts
+          grep -F 'retired_use_openclaw_pattern_engine_status' supabase/functions/pattern-skill-readiness/index.ts
+          grep -F 'bridge_verify_pattern_research_worker_token' supabase/functions/pattern-research-worker/index.ts
+          grep -F 'repository_content_downloaded: false' supabase/functions/pattern-research-worker/index.ts
+          grep -F 'automatic_skill_activation: false' supabase/functions/pattern-research-worker/index.ts
+
+      - name: Validate manifest and migration contracts
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+
+          manifest = json.loads(
+              Path('supabase/functions/deployment-manifest-pattern-skill.json')
+              .read_text(encoding='utf-8')
+          )
+          assert manifest['project_id'] == 'dpllasnpfskyyyzebyal'
+          architecture = manifest['canonical_pattern_architecture']
+          assert architecture['canonical_api'] == 'openclaw-pattern-engine'
+          assert architecture['single_candidate_authority'] is True
+          assert manifest['functions']['pattern-observation-intake']['status'] == 'RETIRED_410'
+          assert manifest['functions']['pattern-skill-readiness']['status'] == 'RETIRED_410'
+          worker = manifest['functions']['pattern-research-worker']
+          assert worker['status'] == 'ACTIVE'
+          assert worker['enabled_providers'] == ['github', 'internal_catalog']
+          assert worker['github_metadata_only'] is True
+          assert worker['repository_content_download'] is False
+          assert worker['readme_execution'] is False
+          assert worker['automatic_install'] is False
+          assert worker['automatic_skill_activation'] is False
+          assert manifest['scheduler']['canonical_sweep_job']['schedule'] == '19 * * * *'
+          assert manifest['scheduler']['research_housekeeping_job']['schedule'] == '24 * * * *'
+          research_job = manifest['scheduler']['allowlisted_research_worker_job']
+          assert research_job['schedule'] == '6,21,36,51 * * * *'
+          assert research_job['providers'] == ['github', 'internal_catalog']
+          assert manifest['verified_state']['internal_catalog_tasks_completed'] == 13
+          assert manifest['verified_state']['redundant_external_tasks_suppressed'] == 52
+          assert manifest['verified_state']['research_tasks_queued'] == 0
+          assert manifest['verified_state']['research_tasks_failed'] == 0
+          assert manifest['verified_state']['allowlisted_worker_failed'] == 0
+          assert manifest['notion_migration']['active_items_copied'] == 7
+          assert manifest['notion_migration']['completed_items_retained'] == 3
+          assert manifest['notion_migration']['source_retained'] is True
+          assert manifest['docker_compatibility']['anonymous_public_pull'] is True
+          assert manifest['docker_compatibility']['digest_verified'] is True
+          assert sorted(manifest['docker_compatibility']['platforms']) == ['linux/amd64', 'linux/arm64']
+          assert manifest['credential_selection']['github']['edge_fallback_alias'] == 'Github-api-delicate-key'
+          assert manifest['credential_selection']['github']['broad_alias_selected'] is False
+
+          for key, value in manifest['security'].items():
+              if key in {
+                  'secret_values_included', 'automatic_credential_scope_increase',
+                  'automatic_paid_api', 'automatic_merge', 'production_deployment',
+                  'second_telegram_poller', 'hidden_infrastructure',
+                  'unauthorized_access', 'jailbreak_or_safeguard_bypass',
+              }:
+                  assert value is False, key
+
+          paths = [
+              Path('supabase/migrations/20260820003000_pattern_to_skill_schema.sql'),
+              Path('supabase/migrations/20260820003100_pattern_to_skill_functions.sql'),
+              Path('supabase/migrations/20260820003200_pattern_to_skill_seed_schedule.sql'),
+              Path('supabase/migrations/20260820003300_repair_canonical_pattern_sweep.sql'),
+              Path('supabase/migrations/20260820003400_suppress_redundant_pattern_research.sql'),
+          ]
+          text = '\n'.join(path.read_text(encoding='utf-8') for path in paths)
+          for marker in (
+              'bridge_pattern_observations', 'bridge_pattern_candidates',
+              'bridge_research_queue', 'bridge_solution_catalog',
+              'bridge_skill_registry', 'bridge_skill_versions',
+              'bridge_skill_evaluations', 'bridge_automation_runs',
+              'bridge_source_bindings', 'bridge_capability_registry',
+              'openclaw_harvest_operational_patterns',
+              'openclaw_refresh_pattern_scores',
+              'bridge_sync_openclaw_pattern_engine',
+              'bridge_process_internal_research_tasks',
+              'bridge_suppress_redundant_external_research_tasks',
+              "'trace-to-pattern-feedback'",
+              "'reuse-first-solution-composer'",
+              "'metadata_only_promotion',true",
+              "'external_api_called',false",
+              "'paid_api_used',false",
+          ):
+              assert marker in text, marker
+
+          for pattern in (
+              r'sk-proj-[A-Za-z0-9_-]{20,}',
+              r'ghp_[A-Za-z0-9]{20,}',
+              r'github_pat_[A-Za-z0-9_]{20,}',
+              r'xox[baprs]-[A-Za-z0-9-]{20,}',
+              r'tskey-(?:auth|api|client)-[A-Za-z0-9_-]{20,}',
+              r'dckr_(?:pat|oat)_[A-Za-z0-9_-]{20,}',
+          ):
+              assert re.search(pattern, text, re.IGNORECASE) is None, pattern
+          print('manifest_and_migrations=pass')
+          PY
+
+      - name: Reject executable Edge code and Production mutation
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          edge = '\n'.join(
+              Path(path).read_text(encoding='utf-8')
+              for path in (
+                  'supabase/functions/pattern-observation-intake/index.ts',
+                  'supabase/functions/pattern-skill-readiness/index.ts',
+                  'supabase/functions/pattern-research-worker/index.ts',
+              )
+          )
+          for pattern in (
+              r'Deno\.Command\s*\(',
+              r'new\s+Function\s*\(',
+              r'\beval\s*\(',
+              r'fetch\s*\([^\n]*getUpdates',
+              r'curl\s*\|\s*(?:sh|bash)',
+          ):
+              assert re.search(pattern, edge, re.IGNORECASE) is None, pattern
+          assert 'api.github.com/search/repositories' in edge
+          assert 'repository_content_downloaded: false' in edge
+          assert 'readme_executed: false' in edge
+          assert 'automatic_install: false' in edge
+          assert 'automatic_skill_activation: false' in edge
+
+          workflow = Path('.github/workflows/pattern-skill-control-plane-validation.yml').read_text(encoding='utf-8')
+          for marker in (
+              'supabase functions ' + 'deploy',
+              'vercel ' + '--prod',
+              'gh pr ' + 'merge',
+              'git push ' + 'origin main',
+              'contents:' + ' write',
+          ):
+              assert marker not in workflow, marker
+          assert 'contents: read' in workflow
+          assert 'persist-credentials: false' in workflow
+          print('execution_and_production_boundary=pass')
+          PY

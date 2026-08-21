@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-08-20T04:20:00Z",
+  "project_id": "dpllasnpfskyyyzebyal",
+  "canonical_function": "openclaw-reuse-engine",
+  "endpoint": "https://dpllasnpfskyyyzebyal.supabase.co/functions/v1/openclaw-reuse-engine",
+  "function": {
+    "status": "ACTIVE",
+    "version": 1,
+    "source": "supabase/functions/openclaw-reuse-engine/index.ts",
+    "verify_jwt": false,
+    "auth_mode": "custom_scoped_pi_gateway_client_jwt",
+    "read_only": true,
+    "actions": [
+      "status",
+      "sources",
+      "reuse_queue",
+      "research_queries",
+      "projection_status"
+    ],
+    "promotion_exposed": false,
+    "queue_claim_exposed": false
+  },
+  "database": {
+    "tables": [
+      "openclaw_solution_sources",
+      "openclaw_pattern_source_matches",
+      "openclaw_research_queries",
+      "openclaw_ssot_projection_queue"
+    ],
+    "view": "openclaw_reuse_first_queue",
+    "functions": [
+      "openclaw_generate_research_queries",
+      "openclaw_enqueue_projection",
+      "openclaw_claim_research_query",
+      "openclaw_complete_research_query",
+      "openclaw_claim_projection",
+      "openclaw_complete_projection"
+    ],
+    "research_schedule": "23 */6 * * *",
+    "rls": true,
+    "service_role_only_mutations": true
+  },
+  "e2e": {
+    "result": "pass",
+    "unauthorized_status": 401,
+    "authenticated_status": 200,
+    "enabled_sources": 23,
+    "source_matches": 29,
+    "queued_research_queries": 15,
+    "runtime_compatibility_source": "docker.buildx",
+    "projection_exact_dedupe": true,
+    "research_claim_complete": true,
+    "projection_claim_complete": true,
+    "temporary_identity_deleted": true
+  },
+  "orchestrator_owners": {
+    "ssot": "supabase",
+    "durable_queue": "supabase_queues",
+    "short_scheduler": "supabase_cron",
+    "external_api_fanout": "n8n_candidate",
+    "long_interruptible_agent_workflow": "langgraph_candidate",
+    "telemetry": "opentelemetry_candidate",
+    "portable_compatibility": "docker",
+    "host_control": "native_systemd_adapter",
+    "inbound_telegram": "existing_openclaw_single_poller",
+    "human_projection": "notion"
+  },
+  "safety": {
+    "secret_values_included": false,
+    "provider_secret_returned": false,
+    "server_secret_returned": false,
+    "automatic_merge": false,
+    "automatic_production_deploy": false,
+    "automatic_paid_fallback": false,
+    "second_telegram_poller": false,
+    "arbitrary_payload_execution": false,
+    "covert_or_unauthorized_methods": false
+  },
+  "physical_pi": {
+    "skill_install": "pending",
+    "notion_projection_worker": "pending",
+    "telegram_round_trip": "pending"
+  }
+}

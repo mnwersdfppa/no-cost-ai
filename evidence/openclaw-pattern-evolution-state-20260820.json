@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-08-20T04:30:00Z",
+  "state": "CLOUD_ACTIVE_PHYSICAL_PI_PENDING",
+  "authoritative_store": "supabase",
+  "supabase_project_ref": "dpllasnpfskyyyzebyal",
+  "apis": {
+    "pattern_engine": "openclaw-pattern-engine",
+    "evolution_readiness": "openclaw-evolution-readiness",
+    "recovery_readiness": "openclaw-recovery-readiness",
+    "model_gateway": "pi-model-gateway-guardian/v1",
+    "work_queue": "pi-work-queue"
+  },
+  "pattern_system": {
+    "existing_pattern_observations": 161,
+    "existing_pattern_candidates": 15,
+    "bridge_pattern_observations": 15,
+    "bridge_pattern_candidates": 15,
+    "research_tasks_queued_at_snapshot": 65,
+    "active_bridge_skills": [
+      "artifact-integrity-validator",
+      "durable-queue-retry",
+      "provider-failover-guardian",
+      "runtime-compatibility-resolver"
+    ],
+    "loop": [
+      "observe",
+      "fingerprint",
+      "deduplicate",
+      "score",
+      "translate_to_english",
+      "search_existing_solution",
+      "compose",
+      "sandbox",
+      "evaluate",
+      "canary",
+      "activate",
+      "feedback",
+      "rollback_or_upgrade"
+    ]
+  },
+  "notion_migration_index": {
+    "total_bindings": 7,
+    "staged": 4,
+    "discovered": 3,
+    "raw_content_bulk_copied": false,
+    "historical_pages_deleted": false,
+    "automatic_delete": false,
+    "projection_key": "openclaw-evolution-system-v1",
+    "projection_mode": "idempotent_additive_upsert"
+  },
+  "reuse_first": {
+    "search_before_build": true,
+    "english_queries": true,
+    "official_docs_first": true,
+    "official_github_first": true,
+    "license_check_required": true,
+    "validation_before_selection": true,
+    "catalog_families": [
+      "Supabase Auth, Queues, Cron and Edge Functions",
+      "PostgreSQL integrity and locking",
+      "GitHub API and Actions",
+      "Docker Buildx and BuildKit",
+      "OpenClaw Gateway API",
+      "Model Context Protocol",
+      "Notion API",
+      "LangGraph, LangChain and LangSmith",
+      "n8n",
+      "OpenTelemetry Collector",
+      "pgvector",
+      "systemd and D-Bus",
+      "Temporal, Prefect, Kestra, Node-RED and Windmill"
+    ]
+  },
+  "docker_compatibility": {
+    "image": "docker.io/odifool/openclaw-compat:2026.08.20",
+    "index_digest": "sha256:6c6df789c26cb0400171818fb0903d27ff799f9642d6e8c2eaf2b1c8e2e2894b",
+    "platforms": [
+      "linux/arm64",
+      "linux/amd64"
+    ],
+    "run_as_non_root": true,
+    "read_only_rootfs_supported": true,
+    "docker_socket_required": false,
+    "telegram_poller_in_image": false,
+    "image_contains_credentials": false
+  },
+  "promotion_policy": {
+    "automatic_low_risk_metadata_promotion": true,
+    "static_security_required": true,
+    "deterministic_e2e_required": true,
+    "rollback_required": true,
+    "canary_successes_required": 3,
+    "canary_minimum_minutes": 30,
+    "high_risk_auto_promotion": false,
+    "arbitrary_code_execution": false,
+    "credential_scope_auto_increase": false,
+    "automatic_merge": false,
+    "production_deploy": false
+  },
+  "physical_pi": {
+    "master_installer_execution": "pending",
+    "telegram_t4_round_trip": "pending",
+    "tailscale_enrollment": "optional_pending",
+    "cloud_completion_is_not_physical_completion": true
+  },
+  "safety": {
+    "secret_values_included": false,
+    "provider_key_exported_to_pi": false,
+    "second_telegram_poller_created": false,
+    "automatic_paid_fallback_enabled": false,
+    "hidden_or_covert_infrastructure": false,
+    "malware_or_biological_capability": false,
+    "automatic_pr_merge": false,
+    "vercel_production_deployment": false
+  }
+}

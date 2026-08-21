@@ -1,0 +1,150 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-08-20T04:50:00Z",
+  "state": "CLOUD_CONTROL_PLANE_ACTIVE_EXTERNAL_RESEARCH_AND_PHYSICAL_PI_PENDING",
+  "supabase": {
+    "project_id": "dpllasnpfskyyyzebyal",
+    "canonical_receipt": "bridge_canonical_config:pattern_skill.current_receipt",
+    "completion_gate": "pattern_skill_cloud_control_plane",
+    "completion_gate_state": "pass",
+    "tables": [
+      "bridge_pattern_observations",
+      "bridge_pattern_candidates",
+      "bridge_research_queue",
+      "bridge_solution_catalog",
+      "bridge_pattern_solution_matches",
+      "bridge_skill_registry",
+      "bridge_skill_versions",
+      "bridge_skill_evaluations",
+      "bridge_automation_runs",
+      "bridge_source_bindings",
+      "bridge_api_capability_registry_v1"
+    ],
+    "edge_functions": {
+      "pattern-observation-intake": {
+        "version": 1,
+        "verify_jwt": true,
+        "roles": [
+          "pi-gateway-client",
+          "pattern-observer"
+        ],
+        "execution_key_required": true,
+        "secret_like_content_rejected": true,
+        "raw_logs_accepted": false
+      },
+      "pattern-skill-readiness": {
+        "version": 1,
+        "verify_jwt": true,
+        "read_only": true,
+        "provider_secret_returned": false
+      }
+    },
+    "scheduler": {
+      "job_name": "openclaw-pattern-skill-sweeper-v1",
+      "schedule": "*/30 * * * *",
+      "active": true,
+      "metadata_only_promotion": true,
+      "arbitrary_code_execution": false
+    },
+    "scoring": {
+      "frequency": 0.24,
+      "recency": 0.08,
+      "user_impact": 0.22,
+      "reasoning_cost": 0.16,
+      "automation_fit": 0.14,
+      "reversibility": 0.06,
+      "confidence": 0.10,
+      "security_risk_penalty": 0.18
+    },
+    "promotion": {
+      "minimum_gates": [
+        "static_security",
+        "deterministic_e2e",
+        "rollback"
+      ],
+      "minimum_canary_minutes": 30,
+      "minimum_canary_successes": 3,
+      "maximum_canary_failures": 0,
+      "automatic_high_risk_promotion": false,
+      "automatic_credential_scope_increase": false,
+      "automatic_code_download_or_execution": false
+    },
+    "api_first_router": {
+      "registry": "bridge_api_capability_registry_v1",
+      "resolver": "bridge_resolve_api_capability_v1",
+      "state": "canary",
+      "selected_routes": [
+        "supabase.postgres.rpc",
+        "supabase.edge.functions",
+        "github.connected.connector",
+        "docker.registry.api"
+      ],
+      "credential_presence_is_not_validation": true,
+      "unverified_n8n_selected": false,
+      "unverified_openclaw_gateway_selected": false,
+      "paid_route_selected": false
+    },
+    "docker": {
+      "image": "docker.io/odifool/openclaw-compat:2026.08.20",
+      "index_digest": "sha256:6c6df789c26cb0400171818fb0903d27ff799f9642d6e8c2eaf2b1c8e2e2894b",
+      "platforms": [
+        "linux/arm64",
+        "linux/amd64"
+      ],
+      "anonymous_public_pull_verified": true,
+      "run_as_non_root": true,
+      "docker_socket_required": false,
+      "image_contains_credentials": false,
+      "telegram_poller_in_image": false
+    },
+    "notion_migration": {
+      "operational_ssot": "supabase",
+      "notion_role": "human_readable_knowledge_and_retained_source",
+      "source_bindings": "bridge_source_bindings",
+      "automatic_source_delete": false,
+      "secret_migration": false,
+      "item_level_classification_required": true
+    },
+    "credential_readiness": {
+      "github_connected_connector_selected": true,
+      "github_edge_pat_selected": false,
+      "n8n_selected": false,
+      "perplexity_selected": false,
+      "automatic_scope_increase": false,
+      "automatic_paid_calls": false
+    }
+  },
+  "github": {
+    "repository": "mnwersdfppa/no-cost-ai",
+    "pull_request": 5,
+    "branch": "feat/supabase-emergency-bridge-20260819",
+    "draft_preserved": true,
+    "automatic_merge": false,
+    "production_deployment": false,
+    "validation_workflow": ".github/workflows/pattern-skill-control-plane-validation.yml"
+  },
+  "pending": {
+    "external_research_fetch_worker": "SOURCE_ALLOWLIST_LICENSE_COST_AND_NO_SIDE_EFFECT_E2E_REQUIRED",
+    "n8n_api": "READ_ONLY_ENDPOINT_VALIDATION_REQUIRED_UNLESS_ALREADY_PASSED",
+    "perplexity_api": "COST_AND_SCOPE_VALIDATION_REQUIRED",
+    "physical_pi": "CURRENT_MASTER_INSTALLER_EXECUTION_REQUIRED",
+    "openclaw_gateway": "PHYSICAL_PI_E2E_REQUIRED",
+    "tailscale": "PHYSICAL_PI_NODE_ENROLLMENT_REQUIRED",
+    "telegram_round_trip": "PHYSICAL_PI_REQUIRED"
+  },
+  "security": {
+    "rls_enabled": true,
+    "direct_anon_mutation": false,
+    "direct_authenticated_mutation": false,
+    "provider_secret_exported": false,
+    "secret_values_included": false,
+    "second_telegram_poller": false,
+    "automatic_paid_api": false,
+    "automatic_pr_merge": false,
+    "production_deploy": false,
+    "hidden_infrastructure": false,
+    "unauthorized_access": false,
+    "jailbreak_or_safeguard_bypass": false,
+    "biological_harm_assistance": false
+  }
+}

@@ -1,0 +1,207 @@
+name: Validate final Supabase bridge branch
+
+on:
+  pull_request:
+    paths:
+      - 'supabase/functions/**'
+      - 'supabase/migrations/**'
+      - 'pi/install-openclaw-docker-compat.sh'
+      - '.github/workflows/normalize-final-bridge-branch.yml'
+  push:
+    branches:
+      - feat/supabase-emergency-bridge-20260819
+    paths:
+      - 'supabase/functions/**'
+      - 'supabase/migrations/**'
+      - 'pi/install-openclaw-docker-compat.sh'
+      - '.github/workflows/normalize-final-bridge-branch.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-final-supabase-bridge-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Assert unique migration versions and current source safety
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from collections import Counter
+          from pathlib import Path
+          import json
+          import re
+
+          migration_dir = Path('supabase/migrations')
+          migration_files = sorted(migration_dir.glob('*.sql'))
+          alias_path = migration_dir / 'migration-version-aliases.json'
+          alias_doc = json.loads(alias_path.read_text(encoding='utf-8'))
+          aliases = alias_doc.get('aliases', {})
+
+          assert alias_doc.get('schema_version') == 1
+          assert alias_doc.get('project_id') == 'dpllasnpfskyyyzebyal'
+          assert isinstance(aliases, dict)
+          security = alias_doc.get('security', {})
+          assert security.get('changes_sql_content') is False
+          assert security.get('automatic_database_mutation') is False
+          assert security.get('automatic_migration_replay') is False
+          assert security.get('automatic_merge') is False
+          assert security.get('production_deployment') is False
+          assert security.get('secret_values_included') is False
+
+          effective_versions = []
+          aliased_files = set()
+          for path in migration_files:
+              match = re.match(r'^(\d{14})_', path.name)
+              if not match:
+                  continue
+              raw_version = match.group(1)
+              alias = aliases.get(path.name)
+              if alias is None:
+                  effective_version = raw_version
+              else:
+                  assert isinstance(alias, dict), path.name
+                  effective_version = alias.get('effective_version', '')
+                  assert re.fullmatch(r'\d{14}', effective_version), path.name
+                  assert alias.get('supabase_migration_name', '').strip(), path.name
+                  assert alias.get('reason', '').strip(), path.name
+                  assert effective_version != raw_version, path.name
+                  aliased_files.add(path.name)
+              effective_versions.append(effective_version)
+
+          for filename, alias in aliases.items():
+              target = migration_dir / filename
+              assert target.is_file(), f'alias target missing: {filename}'
+              assert filename in aliased_files, f'alias not consumed: {filename}'
+              assert re.fullmatch(r'\d{14}', alias['effective_version'])
+
+          duplicates = sorted(
+              version
+              for version, count in Counter(effective_versions).items()
+              if count > 1
+          )
+          if duplicates:
+              raise SystemExit(
+                  f'duplicate effective migration versions: {duplicates}'
+              )
+
+          manifest = json.loads(
+              Path('supabase/functions/manifest.json').read_text(encoding='utf-8')
+          )
+          assert manifest['canonical_supabase_server_key'] == 'SUPABASE_SECRET_KEYS.default'
+          assert manifest['canonical_model_gateway'] == 'pi-model-gateway-guardian'
+          assert manifest['canonical_pi_installer'] == 'pi-openclaw-docker-compat-installer-verified'
+          assert manifest['native_recovery_installer'] == 'pi-openclaw-current-master-recovery-verified'
+          assert manifest['canonical_container_bootstrap'] == 'pi-container-bootstrap'
+          assert manifest['canonical_container_bootstrap_version'] == 3
+          assert manifest['canonical_container_platforms'] == ['linux/amd64', 'linux/arm64']
+          assert re.fullmatch(r'sha256:[0-9a-f]{64}', manifest['canonical_container_digest'])
+          assert manifest['docker_qemu_default'] is False
+          assert manifest['docker_privileged_default'] is False
+          assert manifest['docker_socket_mount'] is False
+          assert manifest['docker_provider_secret_mount'] is False
+          assert manifest['paid_provider_calls'] is False
+          assert manifest['telegram_single_poller_enforced'] is True
+
+          required = {
+              'canonical-client-config': (
+                  'parseDictionary("SUPABASE_SECRET_KEYS")',
+                  'bridge_admit_request',
+                  'raw_vercel_token_returned: false',
+              ),
+              'credential-readiness': (
+                  'bridge_admit_request',
+                  'execution_key_required',
+                  'values_returned: false',
+              ),
+              'emergency-bridge': (
+                  'resolve_route',
+                  'bridge_record_runtime_key_selection',
+                  'paid_api_fallback: false',
+              ),
+              'command-center': (
+                  'secret_like_payload_rejected',
+                  'bridge_record_runtime_key_selection',
+                  'production_auto_route: false',
+              ),
+              'pi-container-bootstrap': (
+                  'typedExecutionPlan',
+                  'docker_socket_mount: false',
+                  'provider_secret_mount: false',
+              ),
+              'pi-openclaw-docker-compat-installer-verified': (
+                  'IMAGE_DIGEST',
+                  'docker_registry_secret_returned',
+                  'x-second-telegram-poller',
+              ),
+          }
+          for name, needles in required.items():
+              path = Path(f'supabase/functions/{name}/index.ts')
+              assert path.is_file(), path
+              text = path.read_text(encoding='utf-8')
+              for needle in needles:
+                  assert needle in text, f'{name}: missing {needle}'
+              for forbidden in ('Deno.Command(', 'child_process', '/bin/sh', 'eval('):
+                  assert forbidden not in text, f'{name}: forbidden {forbidden}'
+
+          installer = Path('pi/install-openclaw-docker-compat.sh')
+          assert installer.is_file()
+          installer_text = installer.read_text(encoding='utf-8')
+          for marker in (
+              'NoNewPrivileges=true',
+              'ProtectSystem=strict',
+              'provider_secret_exported": False',
+              'docker_registry_secret_exported": False',
+              'second_telegram_poller_created": False',
+              'paid_api_fallback": False',
+          ):
+              assert marker in installer_text, marker
+          for pattern in (
+              r'curl\s*\|\s*(?:sh|bash)',
+              r'docker\s+run[^\n]*--privileged',
+              r'/var/run/docker\.sock',
+              r'getUpdates',
+          ):
+              assert re.search(pattern, installer_text, re.IGNORECASE) is None, pattern
+
+          # Historical deployed snapshots remain rollback evidence only.
+          assert Path('supabase/functions/deployed/final-v1').is_dir()
+          print(
+              'FINAL_BRANCH_VALIDATION=PASS '
+              f'migrations={len(effective_versions)} aliases={len(aliases)} '
+              'repository_mutation=false'
+          )
+          PY
+
+      - name: Confirm workflow is read-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          text = Path('.github/workflows/normalize-final-bridge-branch.yml').read_text(
+              encoding='utf-8'
+          )
+          runtime = text.split('- name: Confirm workflow is read-only', 1)[0]
+          forbidden = (
+              'contents:' + ' write',
+              'persist-credentials:' + ' true',
+              'git ' + 'commit',
+              'git ' + 'push',
+              'gh pr ' + 'comment',
+          )
+          assert all(marker not in runtime for marker in forbidden)
+          PY
