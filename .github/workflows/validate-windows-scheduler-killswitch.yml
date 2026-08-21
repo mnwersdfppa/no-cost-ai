@@ -49,17 +49,22 @@ jobs:
           if ($errors.Count -gt 0) { exit 1 }
           Write-Host 'POWERSHELL_PARSE_PASS'
 
-      - name: Verify immutable hashes
+      - name: Verify immutable LF-normalized hashes
         shell: pwsh
         run: |
           $expected = @{
             'scripts/Disable-ProjectSchedulers-v2.ps1' = 'd9af97d7668df2e68f3903b9397695df5dcbf24bfe736eff1b9ce943a4689c7c'
             'scripts/Restore-ProjectSchedulers-v2.ps1' = 'a05043910f667e8c3fc6d184e4af94d0d7c8a85f123e7ed8ba2692fbb34fb385'
           }
+          $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
           foreach ($entry in $expected.GetEnumerator()) {
-            $actual = (Get-FileHash -Algorithm SHA256 $entry.Key).Hash.ToLowerInvariant()
+            $content = [System.IO.File]::ReadAllText((Resolve-Path $entry.Key))
+            $normalized = $content.Replace("`r`n", "`n").Replace("`r", "`n")
+            $bytes = $utf8NoBom.GetBytes($normalized)
+            $hash = [System.Security.Cryptography.SHA256]::HashData($bytes)
+            $actual = [Convert]::ToHexString($hash).ToLowerInvariant()
             if ($actual -ne $entry.Value) {
-              throw "SHA256 mismatch: $($entry.Key)"
+              throw "SHA256 mismatch: $($entry.Key) actual=$actual"
             }
           }
           Write-Host 'WINDOWS_KILLSWITCH_HASH_PASS'
