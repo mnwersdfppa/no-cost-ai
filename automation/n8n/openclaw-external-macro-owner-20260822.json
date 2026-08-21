@@ -1,0 +1,69 @@
+{
+  "schema": "openclaw.external-macro-owner/v1",
+  "recorded_at": "2026-08-22T01:48:34+09:00",
+  "state": "N8N_PRIMARY_WITH_SUPABASE_FAILOVER",
+  "instance": {
+    "host": "mnwersdfppap.app.n8n.cloud",
+    "raw_api_key_included": false
+  },
+  "workflows": [
+    {
+      "id": "lg1S5kVrslcQBS2m",
+      "name": "[EXTERNAL][ACTIVE] OpenClaw Recovery Core v1",
+      "action": "recovery_core",
+      "schedule": "*/2 * * * *",
+      "active": true,
+      "published": true,
+      "rpc_count": 5
+    },
+    {
+      "id": "twRFmRDAIzEd9PJr",
+      "name": "[EXTERNAL][ACTIVE] OpenClaw Pattern Core v1",
+      "action": "pattern_core",
+      "schedule": "7,22,37,52 * * * *",
+      "active": true,
+      "published": true,
+      "rpc_count": 7
+    },
+    {
+      "id": "iTEN8WXRd8r0hWbE",
+      "name": "[EXTERNAL][ACTIVE] OpenClaw Research Core v1",
+      "action": "research_core",
+      "schedule": "12,42 * * * *",
+      "active": true,
+      "published": true,
+      "rpc_count": 6
+    }
+  ],
+  "migration": {
+    "supabase_recovery_crons_disabled": 5,
+    "legacy_n8n_pi_scheduler": {
+      "id": "vSkP5JDKecPhHZpX",
+      "name": "ODI Pi Cron Migration Scheduler v1",
+      "active_before": true,
+      "active_after": false
+    },
+    "first_scheduled_receipt": {
+      "correlation_id": "n8n:recovery_core:6987",
+      "outcome": "succeeded",
+      "duration_ms": 1625
+    }
+  },
+  "ownership": {
+    "deterministic_scheduler": "n8n_cloud",
+    "durable_state_and_queue": "supabase_postgres",
+    "automatic_failover": "supabase_pg_cron_after_8_minutes_without_n8n_heartbeat",
+    "code_docker_pr_validation": "github_actions",
+    "long_interruptible_agent_workflows": "langgraph_pending_runtime",
+    "tracing_and_evaluation": "langsmith_pending_credentials",
+    "google_workflows": "secondary_candidate_not_activated"
+  },
+  "safety": {
+    "single_owner_enforced": true,
+    "automatic_reboot": false,
+    "unknown_process_kill": false,
+    "paid_api_fallback": false,
+    "second_telegram_poller": false,
+    "secret_values_included": false
+  }
+}
