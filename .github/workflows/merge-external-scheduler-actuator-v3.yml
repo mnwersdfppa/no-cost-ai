@@ -1,0 +1,83 @@
+name: Merge validated external scheduler actuator v3.1
+
+on:
+  push:
+    branches:
+      - ops/external-scheduler-actuator-v3-1-20260822
+    paths:
+      - ".github/workflows/merge-external-scheduler-actuator-v3.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  merge-after-artifacts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Wait for synchronized artifact commit
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for attempt in $(seq 1 24); do
+            status="$(curl --silent --show-error --location --write-out '%{http_code}' --output /tmp/manifest.json \
+              'https://raw.githubusercontent.com/mnwersdfppa/no-cost-ai/ops/external-scheduler-actuator-v3-1-20260822/receipts/external-scheduler-actuator-v3.1-manifest.json')"
+            if [[ "$status" == "200" ]]; then
+              python3 - <<'PY'
+          import json
+          from pathlib import Path
+          data=json.loads(Path('/tmp/manifest.json').read_text())
+          assert data['native_openclaw_jobs_json_supported'] is True
+          assert data['rollback_ready'] is True
+          assert data['automatic_reboot'] is False
+          assert data['arbitrary_command_execution'] is False
+          assert data['secret_values_included'] is False
+          assert len(data['files']) == 3
+          print('MANIFEST_GATE_PASS')
+          PY
+              exit 0
+            fi
+            sleep 10
+          done
+          echo 'validated artifact manifest did not appear' >&2
+          exit 40
+
+      - name: Locate or create pull request
+        id: pr
+        env:
+          GH_TOKEN: "${{ github.token }}"
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          number="$(gh pr list \
+            --repo mnwersdfppa/no-cost-ai \
+            --head ops/external-scheduler-actuator-v3-1-20260822 \
+            --state open \
+            --json number \
+            --jq '.[0].number // empty')"
+          if [[ -z "$number" ]]; then
+            gh pr create \
+              --repo mnwersdfppa/no-cost-ai \
+              --base main \
+              --head ops/external-scheduler-actuator-v3-1-20260822 \
+              --title 'ops: persist external scheduler actuator v3.1 artifacts' \
+              --body 'Byte-verified disable, rollback, and installer artifacts. Native OpenClaw jobs.json support, reversible local scheduler shutdown, no reboot, no arbitrary shell payload.'
+            number="$(gh pr list --repo mnwersdfppa/no-cost-ai --head ops/external-scheduler-actuator-v3-1-20260822 --state open --json number --jq '.[0].number')"
+          fi
+          test -n "$number"
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+
+      - name: Merge only after manifest gate
+        env:
+          GH_TOKEN: "${{ github.token }}"
+          PR_NUMBER: "${{ steps.pr.outputs.number }}"
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          gh pr merge "$PR_NUMBER" \
+            --repo mnwersdfppa/no-cost-ai \
+            --merge \
+            --auto \
+          echo "AUTO_MERGE_ARMED pr=$PR_NUMBER"
