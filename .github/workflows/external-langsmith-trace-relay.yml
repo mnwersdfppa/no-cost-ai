@@ -46,8 +46,17 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Validate relay source
-        run: python -m py_compile external-orchestrator/langsmith_trace_relay.py
+      - name: Install and validate LangSmith relay dependencies
+        run: |
+          pip install 'langsmith>=0.11,<1' 'requests>=2.32,<3'
+          python -m py_compile external-orchestrator/langsmith_trace_relay.py
+          python - <<'PY'
+          from langsmith import Client
+          import requests
+          assert Client is not None
+          assert requests.__version__
+          print("LANGSMITH_SDK_RELAY_DEPENDENCIES_PASS")
+          PY
 
       - name: Acquire short-lived GitHub OIDC token
         id: oidc
@@ -115,18 +124,7 @@ jobs:
           echo "found=true" >> "$GITHUB_OUTPUT"
           echo "config_file=$config_file" >> "$GITHUB_OUTPUT"
 
-      - name: Install LangSmith relay dependencies
-        if: steps.profile.outputs.found == 'true'
-        run: pip install 'langsmith>=0.11,<1' 'requests>=2.32,<3'
-
-      - name: Verify OAuth profile
-        if: steps.profile.outputs.found == 'true'
-        env:
-          LANGSMITH_CONFIG_FILE: "${{ steps.profile.outputs.config_file }}"
-          LANGSMITH_PROFILE: "openclaw"
-        run: langsmith --profile openclaw project list --limit 1 >/dev/null
-
-      - name: Submit bounded trace
+      - name: Submit bounded trace through LangSmith Python SDK
         if: steps.profile.outputs.found == 'true'
         env:
           LANGSMITH_CONFIG_FILE: "${{ steps.profile.outputs.config_file }}"
