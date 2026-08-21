@@ -1,0 +1,112 @@
+name: Validate Windows scheduler kill switch
+
+on:
+  push:
+    branches:
+      - ops/windows-native-cron-killswitch-20260822
+    paths:
+      - "scripts/Disable-ProjectSchedulers-v2.ps1"
+      - "scripts/Restore-ProjectSchedulers-v2.ps1"
+      - ".github/workflows/validate-windows-scheduler-killswitch.yml"
+  pull_request:
+    paths:
+      - "scripts/Disable-ProjectSchedulers-v2.ps1"
+      - "scripts/Restore-ProjectSchedulers-v2.ps1"
+      - ".github/workflows/validate-windows-scheduler-killswitch.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse PowerShell source
+        shell: pwsh
+        run: |
+          $errors = @()
+          foreach ($path in @(
+            'scripts/Disable-ProjectSchedulers-v2.ps1',
+            'scripts/Restore-ProjectSchedulers-v2.ps1'
+          )) {
+            $tokens = $null
+            $parseErrors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path),
+              [ref]$tokens,
+              [ref]$parseErrors
+            ) | Out-Null
+            if ($parseErrors.Count -gt 0) {
+              $parseErrors | ForEach-Object { Write-Error $_.Message }
+              $errors += $parseErrors
+            }
+          }
+          if ($errors.Count -gt 0) { exit 1 }
+          Write-Host 'POWERSHELL_PARSE_PASS'
+
+      - name: Verify immutable LF-normalized hashes
+        shell: pwsh
+        run: |
+          $expected = @{
+            'scripts/Disable-ProjectSchedulers-v2.ps1' = 'd9af97d7668df2e68f3903b9397695df5dcbf24bfe736eff1b9ce943a4689c7c'
+            'scripts/Restore-ProjectSchedulers-v2.ps1' = 'a05043910f667e8c3fc6d184e4af94d0d7c8a85f123e7ed8ba2692fbb34fb385'
+          }
+          $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+          foreach ($entry in $expected.GetEnumerator()) {
+            $content = [System.IO.File]::ReadAllText((Resolve-Path $entry.Key))
+            $normalized = $content.Replace("`r`n", "`n").Replace("`r", "`n")
+            $bytes = $utf8NoBom.GetBytes($normalized)
+            $hash = [System.Security.Cryptography.SHA256]::HashData($bytes)
+            $actual = [Convert]::ToHexString($hash).ToLowerInvariant()
+            if ($actual -ne $entry.Value) {
+              throw "SHA256 mismatch: $($entry.Key) actual=$actual"
+            }
+          }
+          Write-Host 'WINDOWS_KILLSWITCH_HASH_PASS'
+
+      - name: Verify contract
+        shell: pwsh
+        run: |
+          $disable = Get-Content -Raw scripts/Disable-ProjectSchedulers-v2.ps1
+          $restore = Get-Content -Raw scripts/Restore-ProjectSchedulers-v2.ps1
+          foreach ($required in @(
+            'OPENCLAW_SKIP_CRON',
+            'OpenClaw',
+            'ODI',
+            'n8n',
+            'LangGraph',
+            'LangChain',
+            'LangSmith',
+            'Recovery',
+            'Session Refresh',
+            'Telegram Delivery',
+            'External Scheduler Actuator',
+            'automatic_host_reboot',
+            'unknown_process_kill'
+          )) {
+            if (-not $disable.Contains($required)) {
+              throw "missing contract marker: $required"
+            }
+          }
+          if (-not $restore.Contains('SetEnvironmentVariable')) {
+            throw 'rollback environment restoration missing'
+          }
+          foreach ($forbidden in @(
+            'Stop-Computer',
+            'Restart-Computer',
+            'Stop-Process',
+            'taskkill',
+            'Remove-ScheduledTask',
+            'Unregister-ScheduledTask'
+          )) {
+            if ($disable -match [regex]::Escape($forbidden) -or
+                $restore -match [regex]::Escape($forbidden)) {
+              throw "forbidden operation: $forbidden"
+            }
+          }
+          Write-Host 'WINDOWS_SCHEDULER_KILLSWITCH_CONTRACT_PASS'
