@@ -22,6 +22,7 @@ on:
 permissions:
   contents: read
   issues: write
+  id-token: write
 
 concurrency:
   group: external-langgraph-orchestrator-${{ github.ref }}
@@ -36,8 +37,11 @@ jobs:
       LANGGRAPH_STRICT_MSGPACK: "true"
       SUPABASE_URL: "https://dpllasnpfskyyyzebyal.supabase.co"
       SUPABASE_PUBLISHABLE_KEY: "sb_publishable_viagFw0ulnaiKvQbW_Bccg_eVnHQzct"
+      SUPABASE_CHECKPOINT_URL: "https://dpllasnpfskyyyzebyal.supabase.co/functions/v1/github-langgraph-checkpoint-20260822"
+      SUPABASE_CHECKPOINT_AUDIENCE: "openclaw-supabase-langgraph"
       LANGSMITH_API_KEY: "${{ secrets.LANGSMITH_API_KEY }}"
       LANGSMITH_PROJECT: "openclaw-external-orchestrator"
+      LANGSMITH_ENDPOINT: "https://api.smith.langchain.com"
       LANGGRAPH_CHECKPOINT_PATH: ".cache/langgraph/external-orchestrator.sqlite"
       ORCHESTRATOR_RECEIPT_PATH: "receipts/external-langgraph-orchestrator.json"
 
@@ -52,13 +56,72 @@ jobs:
           cache: pip
           cache-dependency-path: external-orchestrator/requirements.txt
 
-      - name: Restore latest LangGraph checkpoint
+      - name: Restore secondary GitHub checkpoint cache
         uses: actions/cache@v4
         with:
           path: .cache/langgraph
           key: langgraph-checkpoint-${{ github.ref_name }}-${{ github.run_id }}
           restore-keys: |
             langgraph-checkpoint-${{ github.ref_name }}-
+
+      - name: Acquire short-lived GitHub OIDC token
+        id: checkpoint_oidc
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          response="$(curl --fail --silent --show-error \
+            --header "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${SUPABASE_CHECKPOINT_AUDIENCE}")"
+          token="$(python -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<<"$response")"
+          test -n "$token"
+          echo "::add-mask::$token"
+          printf 'token=%s\n' "$token" >> "$GITHUB_OUTPUT"
+
+      - name: Restore primary Supabase durable checkpoint
+        id: supabase_restore
+        shell: bash
+        env:
+          CHECKPOINT_OIDC_TOKEN: "${{ steps.checkpoint_oidc.outputs.token }}"
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$(dirname "$LANGGRAPH_CHECKPOINT_PATH")"
+          response_file="${RUNNER_TEMP}/supabase-checkpoint-response.json"
+          status="$(curl --silent --show-error \
+            --output "$response_file" \
+            --write-out '%{http_code}' \
+            --header "Authorization: Bearer ${CHECKPOINT_OIDC_TOKEN}" \
+            "$SUPABASE_CHECKPOINT_URL")"
+          test "$status" = "200"
+          python - "$response_file" "$LANGGRAPH_CHECKPOINT_PATH" <<'PY'
+          import base64
+          import hashlib
+          import json
+          import pathlib
+          import sys
+
+          response = pathlib.Path(sys.argv[1])
+          target = pathlib.Path(sys.argv[2])
+          data = json.loads(response.read_text(encoding="utf-8"))
+          if data.get("secret_values_included") is True:
+              raise SystemExit("secret_boundary_failed")
+          if not data.get("checkpoint_found"):
+              print("SUPABASE_CHECKPOINT_EMPTY")
+              raise SystemExit(0)
+          raw = base64.b64decode(data["checkpoint_base64"], validate=True)
+          expected_bytes = int(data["checkpoint_bytes"])
+          expected_sha = str(data["checkpoint_sha256"])
+          if len(raw) != expected_bytes:
+              raise SystemExit("checkpoint_length_mismatch")
+          if hashlib.sha256(raw).hexdigest() != expected_sha:
+              raise SystemExit("checkpoint_sha256_mismatch")
+          target.parent.mkdir(parents=True, exist_ok=True)
+          target.write_bytes(raw)
+          print(
+              "SUPABASE_CHECKPOINT_RESTORED "
+              f"bytes={len(raw)} sha256={expected_sha} version={data.get('version')}"
+          )
+          PY
+          rm -f "$response_file"
 
       - name: Install LangGraph, LangChain, and LangSmith client
         run: pip install --requirement external-orchestrator/requirements.txt
@@ -68,9 +131,11 @@ jobs:
         run: |
           if [[ -n "${LANGSMITH_API_KEY:-}" ]]; then
             echo "LANGSMITH_TRACING=true" >> "$GITHUB_ENV"
+            echo "LANGCHAIN_TRACING_V2=true" >> "$GITHUB_ENV"
             echo "LANGSMITH_STATUS=configured" >> "$GITHUB_ENV"
           else
             echo "LANGSMITH_TRACING=false" >> "$GITHUB_ENV"
+            echo "LANGCHAIN_TRACING_V2=false" >> "$GITHUB_ENV"
             echo "LANGSMITH_STATUS=pending_credentials" >> "$GITHUB_ENV"
           fi
 
@@ -83,6 +148,83 @@ jobs:
       - name: Run durable read-only LangGraph control loop
         id: graph
         run: python external-orchestrator/orchestrator.py
+
+      - name: Persist checkpoint to Supabase
+        id: supabase_persist
+        if: always()
+        shell: bash
+        env:
+          CHECKPOINT_OIDC_TOKEN: "${{ steps.checkpoint_oidc.outputs.token }}"
+        run: |
+          set -Eeuo pipefail
+          test -s "$LANGGRAPH_CHECKPOINT_PATH"
+          upload_file="${RUNNER_TEMP}/supabase-checkpoint-upload.json"
+          python - "$LANGGRAPH_CHECKPOINT_PATH" "$ORCHESTRATOR_RECEIPT_PATH" "$upload_file" <<'PY'
+          import base64
+          import hashlib
+          import json
+          import pathlib
+          import sys
+
+          checkpoint = pathlib.Path(sys.argv[1])
+          receipt_path = pathlib.Path(sys.argv[2])
+          output = pathlib.Path(sys.argv[3])
+          raw = checkpoint.read_bytes()
+          if len(raw) > 2 * 1024 * 1024:
+              raise SystemExit("checkpoint_too_large")
+          receipt = {}
+          if receipt_path.is_file():
+              receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+          safe_state = {
+              "schema": receipt.get("schema"),
+              "run_id": receipt.get("run_id"),
+              "event_name": receipt.get("event_name"),
+              "thread_id": receipt.get("thread_id"),
+              "decision": receipt.get("decision"),
+              "rationale": receipt.get("rationale"),
+              "result": receipt.get("result"),
+              "error": receipt.get("error"),
+              "langsmith_configured": receipt.get("langsmith_configured"),
+              "langsmith_tracing_enabled": receipt.get("langsmith_tracing_enabled"),
+              "secret_values_included": False,
+          }
+          payload = {
+              "checkpoint_base64": base64.b64encode(raw).decode("ascii"),
+              "checkpoint_sha256": hashlib.sha256(raw).hexdigest(),
+              "checkpoint_bytes": len(raw),
+              "orchestrator_state": safe_state,
+          }
+          output.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+          output.chmod(0o600)
+          PY
+          response_file="${RUNNER_TEMP}/supabase-checkpoint-save-response.json"
+          status="$(curl --silent --show-error \
+            --output "$response_file" \
+            --write-out '%{http_code}' \
+            --request POST \
+            --header "Authorization: Bearer ${CHECKPOINT_OIDC_TOKEN}" \
+            --header "Content-Type: application/json" \
+            --data-binary "@$upload_file" \
+            "$SUPABASE_CHECKPOINT_URL")"
+          test "$status" = "200"
+          python - "$response_file" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          data = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+          if data.get("ok") is not True or data.get("state") != "persisted":
+              raise SystemExit("supabase_checkpoint_persist_failed")
+          if data.get("secret_values_included") is True:
+              raise SystemExit("secret_boundary_failed")
+          print(
+              "SUPABASE_CHECKPOINT_PERSISTED "
+              f"bytes={data.get('checkpoint_bytes')} "
+              f"sha256={data.get('checkpoint_sha256')} "
+              f"version={data.get('version')}"
+          )
+          PY
+          rm -f "$upload_file" "$response_file"
 
       - name: Upload receipt and checkpoint
         if: always()
@@ -105,10 +247,12 @@ jobs:
             echo "- LangGraph: active"
             echo "- LangChain: active"
             echo "- LangSmith: ${LANGSMITH_STATUS}"
+            echo "- Primary durable checkpoint: Supabase Postgres through GitHub OIDC"
+            echo "- Secondary checkpoint: GitHub cache + artifact"
+            echo "- Long-lived checkpoint credential: none"
             echo "- LLM calls: none"
             echo "- Mutating control: disabled in GitHub runtime"
-            echo "- Durable checkpoint: GitHub cache + artifact"
-            echo "- Supabase SSOT: read-only"
+            echo "- Supabase SSOT control read: read-only"
             echo
             if [[ -f receipts/external-langgraph-orchestrator.json ]]; then
               echo '```json'
