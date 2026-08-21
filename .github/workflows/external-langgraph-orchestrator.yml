@@ -1,0 +1,132 @@
+name: External LangGraph Orchestrator
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "external-orchestrator/**"
+      - ".github/workflows/external-langgraph-orchestrator.yml"
+      - "google-workflows/**"
+      - "scripts/*ProjectSchedulers*"
+  pull_request:
+    paths:
+      - "external-orchestrator/**"
+      - ".github/workflows/external-langgraph-orchestrator.yml"
+      - "google-workflows/**"
+      - "scripts/*ProjectSchedulers*"
+  schedule:
+    - cron: "17,47 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: external-langgraph-orchestrator-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  orchestrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      PYTHONUNBUFFERED: "1"
+      LANGGRAPH_STRICT_MSGPACK: "true"
+      SUPABASE_URL: "https://dpllasnpfskyyyzebyal.supabase.co"
+      SUPABASE_PUBLISHABLE_KEY: "sb_publishable_viagFw0ulnaiKvQbW_Bccg_eVnHQzct"
+      LANGSMITH_API_KEY: "${{ secrets.LANGSMITH_API_KEY }}"
+      LANGSMITH_PROJECT: "openclaw-external-orchestrator"
+      LANGGRAPH_CHECKPOINT_PATH: ".cache/langgraph/external-orchestrator.sqlite"
+      ORCHESTRATOR_RECEIPT_PATH: "receipts/external-langgraph-orchestrator.json"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: external-orchestrator/requirements.txt
+
+      - name: Restore latest LangGraph checkpoint
+        uses: actions/cache@v4
+        with:
+          path: .cache/langgraph
+          key: langgraph-checkpoint-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            langgraph-checkpoint-${{ github.ref_name }}-
+
+      - name: Install LangGraph, LangChain, and LangSmith client
+        run: pip install --requirement external-orchestrator/requirements.txt
+
+      - name: Configure tracing and runtime mode
+        shell: bash
+        run: |
+          if [[ -n "${LANGSMITH_API_KEY:-}" ]]; then
+            echo "LANGSMITH_TRACING=true" >> "$GITHUB_ENV"
+            echo "LANGSMITH_STATUS=configured" >> "$GITHUB_ENV"
+          else
+            echo "LANGSMITH_TRACING=false" >> "$GITHUB_ENV"
+            echo "LANGSMITH_STATUS=pending_credentials" >> "$GITHUB_ENV"
+          fi
+
+          if [[ "${GITHUB_REF}" == "refs/heads/main" && "${GITHUB_EVENT_NAME}" != "pull_request" ]]; then
+            echo "ORCHESTRATOR_DRY_RUN=false" >> "$GITHUB_ENV"
+          else
+            echo "ORCHESTRATOR_DRY_RUN=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Run durable read-only LangGraph control loop
+        id: graph
+        run: python external-orchestrator/orchestrator.py
+
+      - name: Upload receipt and checkpoint
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: external-langgraph-orchestrator-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            receipts/external-langgraph-orchestrator.json
+            .cache/langgraph/external-orchestrator.sqlite
+
+      - name: Publish run summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## External LangGraph Orchestrator"
+            echo
+            echo "- LangGraph: active"
+            echo "- LangChain: active"
+            echo "- LangSmith: ${LANGSMITH_STATUS}"
+            echo "- LLM calls: none"
+            echo "- Mutating control: disabled in GitHub runtime"
+            echo "- Durable checkpoint: GitHub cache + artifact"
+            echo "- Supabase SSOT: read-only"
+            echo
+            if [[ -f receipts/external-langgraph-orchestrator.json ]]; then
+              echo '```json'
+              python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path("receipts/external-langgraph-orchestrator.json").read_text())
+          safe = {
+              "decision": data.get("decision"),
+              "rationale": data.get("rationale"),
+              "result": data.get("result"),
+              "error": data.get("error"),
+              "langsmith_configured": data.get("langsmith_configured"),
+              "dry_run": data.get("dry_run"),
+              "secret_values_included": False,
+          }
+          print(json.dumps(safe, indent=2, ensure_ascii=False))
+          PY
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,93 @@
+name: Deploy Google Cloud Workflows Failover
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "google-workflows/**"
+      - ".github/workflows/deploy-google-workflows.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: google-cloud-workflows-openclaw
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      GCP_PROJECT_ID: "${{ secrets.GCP_PROJECT_ID }}"
+      GCP_WORKLOAD_IDENTITY_PROVIDER: "${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}"
+      GCP_SERVICE_ACCOUNT: "${{ secrets.GCP_SERVICE_ACCOUNT }}"
+      GCP_WORKFLOWS_REGION: "${{ vars.GCP_WORKFLOWS_REGION }}"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Credential readiness
+        id: readiness
+        shell: bash
+        run: |
+          missing=()
+          [[ -n "${GCP_PROJECT_ID:-}" ]] || missing+=("GCP_PROJECT_ID")
+          [[ -n "${GCP_WORKLOAD_IDENTITY_PROVIDER:-}" ]] || missing+=("GCP_WORKLOAD_IDENTITY_PROVIDER")
+          [[ -n "${GCP_SERVICE_ACCOUNT:-}" ]] || missing+=("GCP_SERVICE_ACCOUNT")
+          if (( ${#missing[@]} > 0 )); then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            printf 'GOOGLE_WORKFLOWS_PENDING_CREDENTIALS missing=%s\n' "$(IFS=,; echo "${missing[*]}")"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Authenticate to Google Cloud
+        if: steps.readiness.outputs.ready == 'true'
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: "${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}"
+          service_account: "${{ secrets.GCP_SERVICE_ACCOUNT }}"
+
+      - name: Set up gcloud
+        if: steps.readiness.outputs.ready == 'true'
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Deploy workflow
+        if: steps.readiness.outputs.ready == 'true'
+        shell: bash
+        run: |
+          region="${GCP_WORKFLOWS_REGION:-asia-northeast3}"
+          gcloud workflows deploy openclaw-external-failover \
+            --project="${GCP_PROJECT_ID}" \
+            --location="$region" \
+            --source="google-workflows/openclaw-external-failover.yaml" \
+            --service-account="${GCP_SERVICE_ACCOUNT}"
+          echo "GOOGLE_WORKFLOWS_DEPLOYED project=${GCP_PROJECT_ID} region=$region"
+
+      - name: Record prepared state
+        if: steps.readiness.outputs.ready != 'true'
+        shell: bash
+        run: |
+          mkdir -p receipts
+          cat > receipts/google-workflows-status.json <<'JSON'
+          {
+            "state": "published_pending_credentials",
+            "workflow": "openclaw-external-failover",
+            "definition_validated": true,
+            "deployment_performed": false,
+            "secret_values_included": false
+          }
+          JSON
+
+      - name: Upload deployment receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: google-workflows-status-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: receipts/google-workflows-status.json

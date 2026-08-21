@@ -1,0 +1,27 @@
+main:
+  params: [args]
+  steps:
+    - validate:
+        switch:
+          - condition: ${args.callback_url == null}
+            raise: "callback_url_required"
+          - condition: ${not(text.match_regex(args.callback_url, "^https://dpllasnpfskyyyzebyal\\.supabase\\.co/functions/v1/"))}
+            raise: "callback_origin_not_allowed"
+    - invoke:
+        call: http.post
+        args:
+          url: ${args.callback_url}
+          auth:
+            type: OIDC
+            audience: ${args.audience}
+          headers:
+            content-type: application/json
+            x-openclaw-workflow: google-cloud-workflows
+          body:
+            operation: ${default(map.get(args, "operation"), "observe")}
+            correlation_id: ${default(map.get(args, "correlation_id"), sys.get_env("GOOGLE_CLOUD_WORKFLOW_EXECUTION_ID"))}
+        result: response
+    - return_result:
+        return:
+          status: ${response.code}
+          body: ${response.body}
