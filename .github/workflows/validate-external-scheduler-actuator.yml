@@ -1,0 +1,76 @@
+name: Validate external scheduler actuator
+
+on:
+  push:
+    branches:
+      - ops/supabase-physical-actuator-v1-20260822
+    paths:
+      - "pi/external-scheduler-actuator.py"
+      - "pi/install-external-scheduler-actuator.sh"
+      - "scripts/disable-project-schedulers-v2.sh"
+      - "scripts/rollback-project-schedulers-v2.sh"
+      - ".github/workflows/validate-external-scheduler-actuator.yml"
+  pull_request:
+    paths:
+      - "pi/external-scheduler-actuator.py"
+      - "pi/install-external-scheduler-actuator.sh"
+      - "scripts/disable-project-schedulers-v2.sh"
+      - "scripts/rollback-project-schedulers-v2.sh"
+      - ".github/workflows/validate-external-scheduler-actuator.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: external-scheduler-actuator-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Static syntax and self-test
+        run: |
+          python3 -m py_compile pi/external-scheduler-actuator.py
+          python3 pi/external-scheduler-actuator.py --self-test
+          bash -n pi/install-external-scheduler-actuator.sh
+          bash -n scripts/disable-project-schedulers-v2.sh
+          bash -n scripts/rollback-project-schedulers-v2.sh
+
+      - name: Verify pinned artifact digests
+        run: |
+          echo "0d68123302e0d74efe9ee86dc8ebc02b3e35861d7dbe77b193181669b8e08859  pi/external-scheduler-actuator.py" | sha256sum -c -
+          echo "d45c42e950c4b8f18be146bd5aeae185b72b43f84f114bf84d7cce26fc7a45b5  scripts/disable-project-schedulers-v2.sh" | sha256sum -c -
+          echo "413afa709b0b78e928b62ba218ba82edbe8fb8f848b8ea0175af53648840ec58  scripts/rollback-project-schedulers-v2.sh" | sha256sum -c -
+
+      - name: Verify fixed-function contract
+        run: |
+          grep -Fq 'external-local-scheduler-disable-v1' pi/external-scheduler-actuator.py
+          grep -Fq 'external_scheduler_reconcile' pi/external-scheduler-actuator.py
+          grep -Fq 'pi-external-scheduler-handoff-20260822' pi/external-scheduler-actuator.py
+          grep -Fq 'openclaw-external-scheduler-actuator.timer' scripts/disable-project-schedulers-v2.sh
+          grep -Fq 'openclaw-pi-recovery-worker-current.timer' scripts/disable-project-schedulers-v2.sh
+          grep -Fq 'openclaw-pi-session-refresh.timer' scripts/disable-project-schedulers-v2.sh
+          grep -Fq 'openclaw-telegram-delivery-worker.timer' scripts/disable-project-schedulers-v2.sh
+
+      - name: Reject destructive or secret-like additions
+        run: |
+          ! grep -ERn 'curl[[:space:]]*\|[[:space:]]*(sh|bash)|shell[[:space:]]*=[[:space:]]*True|getUpdates|rm[[:space:]]+-rf[[:space:]]+/' \
+            pi/external-scheduler-actuator.py \
+            pi/install-external-scheduler-actuator.sh \
+            scripts/disable-project-schedulers-v2.sh \
+            scripts/rollback-project-schedulers-v2.sh
+          ! grep -ERn 'sk-proj-[A-Za-z0-9_-]{16,}|github_pat_[A-Za-z0-9_]{20,}|tskey-(auth|api|client)-[A-Za-z0-9_-]{16,}' \
+            pi/external-scheduler-actuator.py \
+            pi/install-external-scheduler-actuator.sh \
+            scripts/disable-project-schedulers-v2.sh \
+            scripts/rollback-project-schedulers-v2.sh
+
+      - name: Report
+        run: |
+          echo 'EXTERNAL_SCHEDULER_ACTUATOR_VALIDATION_PASS'
