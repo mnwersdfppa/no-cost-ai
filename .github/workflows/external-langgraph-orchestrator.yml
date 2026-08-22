@@ -15,13 +15,10 @@ on:
       - ".github/workflows/external-langgraph-orchestrator.yml"
       - "google-workflows/**"
       - "scripts/*ProjectSchedulers*"
-  schedule:
-    - cron: "17,47 * * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
-  issues: write
   id-token: write
 
 concurrency:
@@ -44,6 +41,7 @@ jobs:
       LANGSMITH_ENDPOINT: "https://api.smith.langchain.com"
       LANGGRAPH_CHECKPOINT_PATH: ".cache/langgraph/external-orchestrator.sqlite"
       ORCHESTRATOR_RECEIPT_PATH: "receipts/external-langgraph-orchestrator.json"
+      ORCHESTRATOR_DRY_RUN: "true"
 
     steps:
       - name: Checkout
@@ -126,7 +124,7 @@ jobs:
       - name: Install LangGraph, LangChain, and LangSmith client
         run: pip install --requirement external-orchestrator/requirements.txt
 
-      - name: Configure tracing and runtime mode
+      - name: Configure tracing
         shell: bash
         run: |
           if [[ -n "${LANGSMITH_API_KEY:-}" ]]; then
@@ -139,11 +137,14 @@ jobs:
             echo "LANGSMITH_STATUS=pending_credentials" >> "$GITHUB_ENV"
           fi
 
-          if [[ "${GITHUB_REF}" == "refs/heads/main" && "${GITHUB_EVENT_NAME}" != "pull_request" ]]; then
-            echo "ORCHESTRATOR_DRY_RUN=false" >> "$GITHUB_ENV"
-          else
-            echo "ORCHESTRATOR_DRY_RUN=true" >> "$GITHUB_ENV"
-          fi
+      - name: Enforce GitHub validation-only ownership
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${ORCHESTRATOR_DRY_RUN}" = "true"
+          echo "SCHEDULER_OWNER=n8n"
+          echo "GITHUB_ROLE=source_validation"
+          echo "MUTATING_CONTROL=disabled"
 
       - name: Run durable read-only LangGraph control loop
         id: graph
@@ -244,6 +245,8 @@ jobs:
           {
             echo "## External LangGraph Orchestrator"
             echo
+            echo "- Scheduler owner: n8n"
+            echo "- GitHub role: source + validation"
             echo "- LangGraph: active"
             echo "- LangChain: active"
             echo "- LangSmith: ${LANGSMITH_STATUS}"
@@ -252,6 +255,7 @@ jobs:
             echo "- Long-lived checkpoint credential: none"
             echo "- LLM calls: none"
             echo "- Mutating control: disabled in GitHub runtime"
+            echo "- Dry-run: forced true"
             echo "- Supabase SSOT control read: read-only"
             echo
             if [[ -f receipts/external-langgraph-orchestrator.json ]]; then
