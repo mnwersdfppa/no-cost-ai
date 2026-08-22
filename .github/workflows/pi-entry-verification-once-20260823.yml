@@ -24,8 +24,8 @@ jobs:
       BROKER_URL: https://dpllasnpfskyyyzebyal.supabase.co/functions/v1/github-oidc-pi-entry-broker-once-20260823
       OIDC_AUDIENCE: odi-pi-entry-20260823-v1
       RUNNER_PATH: ops/pi-entry/physical-entry-runner.sh
-      RUNNER_BYTES: '11587'
-      RUNNER_SHA256: e20cbd2c1ee96a1fde36a64573a850636ee46d633d733cd662df8bdb543a2a37
+      RUNNER_BYTES: '11757'
+      RUNNER_SHA256: 1921bafb6e4a5c52876049e16813fdb05b32fb59e1950596a0043038dfb0e1d8
     steps:
       - name: Checkout exact workflow commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -58,20 +58,31 @@ jobs:
           unset OIDC_JSON
           python3 - "$PUBLIC_SPKI_B64" >/tmp/broker-body.json <<'PY'
           import json,sys
-          print(json.dumps({'public_spki_b64':sys.argv[1]},separators=(',',':')))
+          print(json.dumps({'mode':'open','public_spki_b64':sys.argv[1]},separators=(',',':')))
           PY
-          curl --fail --silent --show-error --request POST \
+          HTTP="$(curl --silent --show-error --request POST \
             --header "Authorization: Bearer ${OIDC_TOKEN}" \
             --header 'content-type: application/json' \
-            --data-binary @/tmp/broker-body.json "$BROKER_URL" -o /tmp/broker-response.json
+            --data-binary @/tmp/broker-body.json \
+            --output /tmp/broker-response.json --write-out '%{http_code}' "$BROKER_URL" || true)"
           unset OIDC_TOKEN PUBLIC_SPKI_B64
+          if [[ "$HTTP" != "200" ]]; then
+            python3 - /tmp/broker-response.json <<'PY'
+          import json,pathlib,sys
+          p=pathlib.Path(sys.argv[1]); error='broker_request_failed'
+          if p.is_file():
+              try: error=str(json.loads(p.read_text()).get('error') or error)
+              except Exception: pass
+          print(f'BROKER_BLOCKED error={error}')
+          PY
+            exit 30
+          fi
           python3 - <<'PY'
           import base64,json,os,pathlib
           data=json.loads(pathlib.Path('/tmp/broker-response.json').read_text())
           if data.get('ok') is not True: raise SystemExit('broker_response_not_ok')
           for field,path in [
             ('encrypted_auth_key_b64','/tmp/auth-key.bin'),
-            ('encrypted_bootstrap_token_b64','/tmp/bootstrap-token.bin'),
             ('encrypted_pi_password_b64','/tmp/pi-password.bin'),
           ]:
             pathlib.Path(path).write_bytes(base64.b64decode(data[field],validate=True))
@@ -80,32 +91,32 @@ jobs:
             'expected_pi':data.get('expected_pi',{}),
             'bootstrap_runner':data.get('bootstrap_runner',{}),
             'recipient_public_spki_sha256':data.get('recipient_public_spki_sha256'),
+            'bootstrap_capability_available':data.get('bootstrap_capability_available'),
+            'local_scoped_refresh_required':data.get('local_scoped_refresh_required'),
             'auth_key_ephemeral':data.get('auth_key_ephemeral'),
             'auth_key_expiry_seconds':data.get('auth_key_expiry_seconds'),
             'acl_permission_changed':data.get('acl_permission_changed'),
             'secret_values_included':False,
           }
           pathlib.Path('/tmp/broker-safe.json').write_text(json.dumps(safe,separators=(',',':')),encoding='utf-8')
+          pathlib.Path('artifacts/broker-open-safe.json').write_text(json.dumps(safe,separators=(',',':'))+'\n',encoding='utf-8')
           os.chmod('/tmp/broker-safe.json',0o600)
           PY
-          for spec in 'auth-key.bin:tailscale-auth-key' 'bootstrap-token.bin:bootstrap-token' 'pi-password.bin:pi-ssh-password'; do
+          for spec in 'auth-key.bin:tailscale-auth-key' 'pi-password.bin:pi-ssh-password'; do
             in="/tmp/${spec%%:*}"; out="/tmp/${spec##*:}"
             openssl pkeyutl -decrypt -inkey /tmp/recipient-private.pem -in "$in" \
               -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -out "$out"
             chmod 600 "$out"
           done
           AUTHKEY="$(cat /tmp/tailscale-auth-key)"
-          BOOTSTRAP="$(cat /tmp/bootstrap-token)"
           PI_PASSWORD="$(cat /tmp/pi-ssh-password)"
           [[ "$AUTHKEY" == tskey-auth-* ]]
-          [[ ${#BOOTSTRAP} -ge 32 ]]
           [[ ${#PI_PASSWORD} -ge 8 ]]
           echo "::add-mask::$AUTHKEY"
-          echo "::add-mask::$BOOTSTRAP"
           echo "::add-mask::$PI_PASSWORD"
           echo "authkey=$AUTHKEY" >> "$GITHUB_OUTPUT"
-          unset AUTHKEY BOOTSTRAP PI_PASSWORD
-          rm -f /tmp/recipient-private.pem /tmp/recipient-public.der /tmp/auth-key.bin /tmp/bootstrap-token.bin /tmp/pi-password.bin /tmp/broker-response.json /tmp/broker-body.json
+          unset AUTHKEY PI_PASSWORD
+          rm -f /tmp/recipient-private.pem /tmp/recipient-public.der /tmp/auth-key.bin /tmp/pi-password.bin /tmp/broker-response.json /tmp/broker-body.json
 
       - name: Join existing Tailnet ephemerally without ACL changes
         uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade
@@ -113,7 +124,7 @@ jobs:
           authkey: ${{ steps.broker.outputs.authkey }}
           hostname: odi-pi-entry-${{ github.run_id }}
           statedir: /tmp/tailscale-state/
-          version: 1.82.0
+          version: 1.102.3
           timeout: 2m
           retry: 5
 
@@ -123,7 +134,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           umask 077
-          trap 'rm -f /tmp/pi-askpass /tmp/pi-known-hosts /tmp/candidates.txt /tmp/remote-entry.sh /tmp/bootstrap-token /tmp/pi-ssh-password /tmp/tailscale-auth-key /tmp/broker-safe.json' EXIT
+          trap 'rm -f /tmp/pi-askpass /tmp/pi-known-hosts /tmp/candidates.txt /tmp/remote-entry.sh /tmp/pi-ssh-password /tmp/tailscale-auth-key /tmp/broker-safe.json' EXIT
           : > artifacts/standard-ssh-probe.log
           cat > /tmp/pi-askpass <<'SH'
           #!/bin/sh
@@ -153,7 +164,10 @@ jobs:
               -o ConnectTimeout=8 -o ConnectionAttempts=1 -o StrictHostKeyChecking=accept-new \
               -o UserKnownHostsFile=/tmp/pi-known-hosts -o LogLevel=ERROR \
               "${SSH_USER}@${candidate}" "$safe_probe" 2>/dev/null || true)"
-            [[ -n "$INFO" ]] || continue
+            if [[ -z "$INFO" ]]; then
+              printf 'SSH_BLOCKED target=%s login=%s\n' "$candidate" "$SSH_USER" >> artifacts/standard-ssh-probe.log
+              continue
+            fi
             printf '%s target=%s login=%s device=%s hostname_hint=%s\n' "$INFO" "$candidate" "$SSH_USER" \
               "$(printf '%s' "$device_name" | tr -cd 'A-Za-z0-9._-')" \
               "$(printf '%s' "$device_hostname" | tr -cd 'A-Za-z0-9._-')" >> artifacts/standard-ssh-probe.log
@@ -163,13 +177,7 @@ jobs:
             printf '{"result":"blocked","reason":"no_existing_standard_ssh_pi5_identity_path","secret_values_included":false}\n' > artifacts/route-result.json
             exit 20
           fi
-          python3 - "$(cat /tmp/bootstrap-token)" "$RUNNER_PATH" /tmp/remote-entry.sh <<'PY'
-          import pathlib,shlex,sys
-          token,source,target=sys.argv[1:]
-          script=pathlib.Path(source).read_text(encoding='utf-8')
-          pathlib.Path(target).write_text('export ODI_BOOTSTRAP_TOKEN='+shlex.quote(token)+'\n'+script,encoding='utf-8')
-          pathlib.Path(target).chmod(0o700)
-          PY
+          install -m 700 "$RUNNER_PATH" /tmp/remote-entry.sh
           timeout 12m env DISPLAY=:0 SSH_ASKPASS_REQUIRE=force SSH_ASKPASS=/tmp/pi-askpass \
             setsid -w ssh -o BatchMode=no -o PreferredAuthentications=password,keyboard-interactive \
             -o PubkeyAuthentication=no -o KbdInteractiveAuthentication=yes -o NumberOfPasswordPrompts=1 \
@@ -178,6 +186,20 @@ jobs:
             "${SSH_USER}@${TARGET}" 'bash -s' < /tmp/remote-entry.sh > artifacts/recovery-output.log 2>&1
           printf '{"result":"executed","mode":"standard_ssh_over_existing_tailnet","target":"%s","secret_values_included":false}\n' "$TARGET" > artifacts/route-result.json
           echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+
+      - name: Revoke ephemeral auth key
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          mkdir -p artifacts
+          OIDC="$(curl --fail --silent --show-error -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${OIDC_AUDIENCE}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+          curl --silent --show-error --request POST \
+            --header "Authorization: Bearer ${OIDC}" \
+            --header 'content-type: application/json' \
+            --data '{"mode":"cleanup"}' "$BROKER_URL" > artifacts/broker-cleanup-safe.json
+          unset OIDC
+          set -e
 
       - name: Collect only redacted evidence
         if: always()
@@ -196,17 +218,17 @@ jobs:
             for marker in ('PHYSICAL_ENTRY_VERIFIED','SEQUENCE_ADVANCED'):
               if marker in text: markers.append(marker)
             output.write_text('\n'.join(markers)+('\n' if markers else ''),encoding='utf-8')
-          summary={'route_result':route.get('result'),'route_reason':route.get('reason'),'markers':markers,'physical_command_executed':route.get('result')=='executed','acl_permission_changed':False,'host_rebooted':False,'data_or_volume_deleted':False,'second_telegram_poller_created':False,'secret_values_included':False}
+          summary={'route_result':route.get('result'),'route_reason':route.get('reason'),'markers':markers,'physical_command_executed':route.get('result')=='executed','bootstrap_capability_used':False,'local_scoped_refresh_only':True,'acl_permission_changed':False,'host_rebooted':False,'data_or_volume_deleted':False,'second_telegram_poller_created':False,'secret_values_included':False}
           pathlib.Path('artifacts/summary.json').write_text(json.dumps(summary,separators=(',',':')),encoding='utf-8')
           print(json.dumps(summary,separators=(',',':')))
           PY
-          rm -f /tmp/pi-askpass /tmp/pi-known-hosts /tmp/candidates.txt /tmp/remote-entry.sh /tmp/bootstrap-token /tmp/pi-ssh-password /tmp/tailscale-auth-key /tmp/broker-safe.json
+          rm -f /tmp/pi-askpass /tmp/pi-known-hosts /tmp/candidates.txt /tmp/remote-entry.sh /tmp/pi-ssh-password /tmp/tailscale-auth-key /tmp/broker-safe.json
 
       - name: Upload secret-free evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: pi-entry-verification-20260823-evidence
+          name: pi-entry-verification-20260823-evidence-${{ github.run_id }}
           path: artifacts/*
           if-no-files-found: warn
           retention-days: 3
