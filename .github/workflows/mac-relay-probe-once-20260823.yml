@@ -1,0 +1,183 @@
+name: Mac relay capability probe once 20260823
+
+on:
+  push:
+    branches:
+      - ops/mac-relay-probe-20260823
+    paths:
+      - '.github/workflows/mac-relay-probe-once-20260823.yml'
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: mac-relay-probe-20260823
+  cancel-in-progress: false
+
+jobs:
+  probe-mac-relay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      BROKER_URL: https://dpllasnpfskyyyzebyal.supabase.co/functions/v1/github-oidc-mac-relay-probe-once-20260823
+      OIDC_AUDIENCE: odi-mac-relay-probe-20260823-v1
+    steps:
+      - name: Checkout exact workflow commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Exchange exact GitHub OIDC identity for one ephemeral Tailnet key
+        id: broker
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          mkdir -p artifacts
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out /tmp/recipient-private.pem >/dev/null 2>&1
+          openssl pkey -in /tmp/recipient-private.pem -pubout -outform DER -out /tmp/recipient-public.der
+          PUBLIC_SPKI_B64="$(base64 -w0 /tmp/recipient-public.der)"
+          OIDC_JSON="$(curl --fail --silent --show-error -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${OIDC_AUDIENCE}")"
+          OIDC_TOKEN="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<<"$OIDC_JSON")"
+          unset OIDC_JSON
+          python3 - "$PUBLIC_SPKI_B64" >/tmp/broker-body.json <<'PY'
+          import json,sys
+          print(json.dumps({'mode':'open','public_spki_b64':sys.argv[1]},separators=(',',':')))
+          PY
+          curl --fail --silent --show-error --request POST \
+            --header "Authorization: Bearer ${OIDC_TOKEN}" \
+            --header 'content-type: application/json' \
+            --data-binary @/tmp/broker-body.json "$BROKER_URL" -o /tmp/broker-response.json
+          unset OIDC_TOKEN PUBLIC_SPKI_B64
+          python3 - <<'PY'
+          import base64,json,os,pathlib
+          data=json.loads(pathlib.Path('/tmp/broker-response.json').read_text())
+          if data.get('ok') is not True: raise SystemExit('broker_response_not_ok')
+          if data.get('credential_authentication_attempted') is not False: raise SystemExit('credential_attempt_contract_violation')
+          if data.get('remote_command_execution_allowed') is not False: raise SystemExit('remote_command_contract_violation')
+          if data.get('acl_or_policy_changed') is not False: raise SystemExit('acl_contract_violation')
+          value=data.get('encrypted_auth_key_b64')
+          if not isinstance(value,str): raise SystemExit('encrypted_auth_key_missing')
+          pathlib.Path('/tmp/auth-key.bin').write_bytes(base64.b64decode(value,validate=True))
+          safe={
+            'candidates':data.get('candidates',[]),
+            'recipient_public_spki_sha256':data.get('recipient_public_spki_sha256'),
+            'auth_key_ephemeral':data.get('auth_key_ephemeral'),
+            'auth_key_reusable':data.get('auth_key_reusable'),
+            'auth_key_expiry_seconds':data.get('auth_key_expiry_seconds'),
+            'credential_authentication_attempted':False,
+            'remote_command_execution_allowed':False,
+            'acl_or_policy_changed':False,
+            'recurring_execution_path':False,
+            'secret_values_included':False,
+          }
+          pathlib.Path('/tmp/broker-safe.json').write_text(json.dumps(safe,separators=(',',':')),encoding='utf-8')
+          os.chmod('/tmp/broker-safe.json',0o600)
+          PY
+          openssl pkeyutl -decrypt -inkey /tmp/recipient-private.pem -in /tmp/auth-key.bin \
+            -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -out /tmp/tailscale-auth-key
+          chmod 600 /tmp/tailscale-auth-key
+          AUTHKEY="$(cat /tmp/tailscale-auth-key)"
+          [[ "$AUTHKEY" == tskey-auth-* ]]
+          echo "::add-mask::$AUTHKEY"
+          echo "authkey=$AUTHKEY" >> "$GITHUB_OUTPUT"
+          unset AUTHKEY
+          rm -f /tmp/recipient-private.pem /tmp/recipient-public.der /tmp/auth-key.bin /tmp/tailscale-auth-key /tmp/broker-response.json /tmp/broker-body.json
+
+      - name: Join existing Tailnet ephemerally without ACL changes
+        uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade
+        with:
+          authkey: ${{ steps.broker.outputs.authkey }}
+          hostname: odi-mac-relay-${{ github.run_id }}
+          statedir: /tmp/tailscale-state/
+          version: 1.82.0
+          timeout: 2m
+          retry: 5
+
+      - name: Probe only ping and unauthenticated TCP capability
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          trap 'rm -f /tmp/broker-safe.json' EXIT
+          TARGET="$(python3 -c 'import json; d=json.load(open("/tmp/broker-safe.json")); print(d["candidates"][0]["addresses"][0])')"
+          TARGET_HASH="$(printf '%s' "$TARGET" | sha256sum | awk '{print $1}')"
+          PING_OK=false
+          TCP22=false
+          TCP18789=false
+          SSH_HOST_KEY_PRESENT=false
+          SSH_HOST_KEY_SHA256=""
+          if timeout 15s tailscale ping --c 2 --timeout 5s "$TARGET" >/dev/null 2>&1; then PING_OK=true; fi
+          if timeout 6s bash -c "exec 3<>/dev/tcp/${TARGET}/22" 2>/dev/null; then TCP22=true; fi
+          if timeout 6s bash -c "exec 3<>/dev/tcp/${TARGET}/18789" 2>/dev/null; then TCP18789=true; fi
+          if [[ "$TCP22" == true ]]; then
+            HOST_KEYS="$(timeout 8s ssh-keyscan -T 5 -p 22 "$TARGET" 2>/dev/null || true)"
+            if [[ -n "$HOST_KEYS" ]]; then
+              SSH_HOST_KEY_PRESENT=true
+              SSH_HOST_KEY_SHA256="$(printf '%s' "$HOST_KEYS" | sha256sum | awk '{print $1}')"
+            fi
+          fi
+          python3 - "$PING_OK" "$TCP22" "$TCP18789" "$SSH_HOST_KEY_PRESENT" "$SSH_HOST_KEY_SHA256" "$TARGET_HASH" <<'PY'
+          import datetime,json,pathlib,sys
+          ping,tcp22,tcp18789,hostkey,hostkey_sha,target_sha=sys.argv[1:]
+          summary={
+            'checked_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            'target_sha256':target_sha,
+            'tailnet_ping':ping.lower()=='true',
+            'tcp_22_open':tcp22.lower()=='true',
+            'tcp_18789_open':tcp18789.lower()=='true',
+            'ssh_host_key_present':hostkey.lower()=='true',
+            'ssh_host_key_sha256':hostkey_sha or None,
+            'credential_authentication_attempted':False,
+            'remote_command_executed':False,
+            'pi_command_executed':False,
+            'acl_or_policy_changed':False,
+            'host_rebooted':False,
+            'data_or_volume_deleted':False,
+            'unknown_process_killed':False,
+            'second_telegram_poller_created':False,
+            'recurring_execution_path':False,
+            'secret_values_included':False,
+          }
+          pathlib.Path('artifacts/mac-relay-capability.json').write_text(json.dumps(summary,separators=(',',':')),encoding='utf-8')
+          print(json.dumps(summary,separators=(',',':')))
+          PY
+
+      - name: Revoke one-time Tailnet key and close broker
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          OIDC_JSON="$(curl --fail --silent --show-error -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${OIDC_AUDIENCE}")"
+          OIDC_TOKEN="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<<"$OIDC_JSON")"
+          unset OIDC_JSON
+          curl --fail --silent --show-error --request POST \
+            --header "Authorization: Bearer ${OIDC_TOKEN}" \
+            --header 'content-type: application/json' \
+            --data '{"mode":"cleanup"}' "$BROKER_URL" -o /tmp/broker-cleanup-response.json
+          unset OIDC_TOKEN
+          python3 - <<'PY'
+          import json,pathlib
+          data=json.loads(pathlib.Path('/tmp/broker-cleanup-response.json').read_text())
+          if data.get('ok') is not True or data.get('state') != 'closed': raise SystemExit('broker_cleanup_not_verified')
+          safe={
+            'ok':True,'state':'closed',
+            'auth_key_revoke':data.get('auth_key_revoke'),
+            'auth_key_revoke_http_status':data.get('auth_key_revoke_http_status'),
+            'acl_or_policy_changed':False,
+            'secret_values_included':False,
+          }
+          pathlib.Path('artifacts/broker-cleanup.json').write_text(json.dumps(safe,separators=(',',':')),encoding='utf-8')
+          PY
+          rm -f /tmp/broker-cleanup-response.json /tmp/broker-safe.json
+
+      - name: Upload secret-free evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mac-relay-capability-probe-20260823-evidence
+          path: artifacts/*
+          if-no-files-found: warn
+          retention-days: 3
