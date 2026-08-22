@@ -1,0 +1,92 @@
+version: 1
+purpose: deterministic_priority_and_route_scoring
+hard_boundaries:
+  telegram_single_poller: true
+  paid_openai_auto_fallback: false
+  paid_budget_default_usd: 0
+  root_or_jailbreak: false
+  arbitrary_shell: false
+  generic_phone_ui_control: false
+  credential_mutation_without_gate: false
+score_components:
+  frequency:
+    max: 25
+    signals:
+      recurring: 25
+      daily_or_weekly: 20
+      repeated_same_week: 15
+      one_time: 5
+  impact:
+    max: 25
+    signals:
+      unlocks_pipeline_or_bridge: 25
+      prevents_blocker_or_cost_leak: 22
+      improves_common_workflow: 16
+      informational: 6
+  latency_gain:
+    max: 15
+    signals:
+      avoids_llm_call: 15
+      reduces_context_or_tool_chain: 12
+      batches_connector_reads: 8
+      no_speed_gain: 0
+  cost_saving:
+    max: 15
+    signals:
+      prevents_paid_api_fallback: 15
+      uses_local_or_free_model: 12
+      reduces_tokens: 10
+      neutral: 0
+  determinism:
+    max: 15
+    signals:
+      exact_static_check_or_sql: 15
+      bounded_connector_read: 12
+      low_risk_classification: 9
+      creative_or_open_ended: 2
+  safety_bonus:
+    max: 5
+    signals:
+      read_only_or_draft: 5
+      append_only_log: 4
+      reversible_change: 3
+penalties:
+  paid_api_or_billing: -40
+  credential_or_secret_write: -35
+  destructive_action: -35
+  merge_deploy_or_public_exposure: -30
+  second_telegram_poller: -30
+  generic_phone_control: -25
+  large_context_required: -10
+rank_thresholds:
+  S: 85
+  A: 70
+  B: 55
+  C: 35
+  D: 0
+routes:
+  cache_or_noop:
+    rank_floor: B
+    use_when: exact_duplicate_or_already_prepared
+  deterministic:
+    rank_floor: B
+    use_when: scoring_static_check_sql_shell_or_queue_inspection
+  connector_read:
+    rank_floor: B
+    use_when: metadata_or_status_read_without_mutation
+  local_ollama_qwen25_3b:
+    rank_floor: C
+    use_when: low_risk_text_classification_summary_or_plan
+  openrouter_free:
+    rank_floor: B
+    use_when: local_model_insufficient_and_free_model_available
+  phone_codex_cli_gpt56_sol:
+    rank_floor: S
+    use_when: high_value_complex_reasoning_after_phone_bridge_gates
+  approval_gate:
+    rank_floor: D
+    use_when: any_hard_boundary_is_crossed
+output_caps:
+  default_lines: 3
+  default_body_tokens: 160
+  expanded_body_tokens: 600

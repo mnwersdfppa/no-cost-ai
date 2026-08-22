@@ -1,0 +1,50 @@
+name: Ultra Compress Priority Skill CI
+
+on:
+  pull_request:
+    paths:
+      - 'skills/ultra-compress-priority/**'
+      - 'pi/install-ultra-compress-priority-skill.sh'
+      - '.github/workflows/ultra-compress-priority-skill-ci.yml'
+  push:
+    branches:
+      - feat/ultra-compress-priority-skill-v1
+    paths:
+      - 'skills/ultra-compress-priority/**'
+      - 'pi/install-ultra-compress-priority-skill.sh'
+      - '.github/workflows/ultra-compress-priority-skill-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Validate skill and scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile skills/ultra-compress-priority/scripts/score.py
+          python3 -m py_compile skills/ultra-compress-priority/scripts/quick_validate.py
+          bash -n pi/install-ultra-compress-priority-skill.sh
+          python3 skills/ultra-compress-priority/scripts/quick_validate.py skills/ultra-compress-priority
+      - name: Verify deterministic route examples
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 skills/ultra-compress-priority/scripts/score.py '매일 반복 작업을 무료 모델로 자동화해줘' | tee /tmp/score.json
+          python3 - <<'PY'
+          import json
+          data=json.load(open('/tmp/score.json'))
+          assert data['rank'] in {'S','A','B'}
+          assert 'paid' not in data['route'].lower() or data['route']=='approval_gate'
+          assert 'capsule' in data
+          PY
+      - name: Reject secret-like literals
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -RInE --exclude='*.md' '(sk-proj-|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' skills/ultra-compress-priority pi/install-ultra-compress-priority-skill.sh
