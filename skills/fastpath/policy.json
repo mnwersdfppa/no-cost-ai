@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "score_weights": {
+    "repeat_cache_potential": 25,
+    "deterministic_structure": 20,
+    "low_risk_reversible": 20,
+    "short_relevant_context": 15,
+    "stable_no_freshness": 10,
+    "no_side_effect": 10
+  },
+  "priority_priors": {
+    "exact_repeat_cache": 100,
+    "health_status_readonly": 98,
+    "routing_classification": 97,
+    "extraction_normalization": 95,
+    "deterministic_transform": 93,
+    "short_summary": 91,
+    "local_lookup": 88,
+    "fresh_lookup": 78,
+    "low_risk_tool_action": 74,
+    "multi_step_planning": 62,
+    "code_generation_patch": 55,
+    "high_stakes_advice": 25,
+    "destructive_payment_credential": 0
+  },
+  "lanes": [
+    {"id":"L0","min_score":90,"provider":"deterministic","max_output_tokens":0,"context_chars":2500},
+    {"id":"L1","min_score":75,"provider":"local_small","preferred":["ollama:qwen2.5:3b","llama.cpp"],"max_output_tokens":256,"context_chars":5000},
+    {"id":"L2","min_score":60,"provider":"free_or_subscription","preferred":["openrouter/free","subscription_oauth"],"max_output_tokens":512,"context_chars":8000},
+    {"id":"L3","min_score":40,"provider":"strong_compact","max_output_tokens":768,"context_chars":12000},
+    {"id":"L4","min_score":0,"provider":"strong_verified","max_output_tokens":1024,"context_chars":20000}
+  ],
+  "hard_caps": {
+    "destructive_or_credential_or_payment": 10,
+    "medical_legal_financial_high_stakes": 35,
+    "fresh_current_data_before_refresh": 65
+  },
+  "paid_api_automatic_fallback": false,
+  "chain_of_thought_storage": false,
+  "telemetry_fields_only": ["route","score","task_type","latency_ms","input_chars","output_chars","cache_hit","provider_alias","created_at"]
+}
