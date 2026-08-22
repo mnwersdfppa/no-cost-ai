@@ -1,0 +1,112 @@
+name: Emergency Pi5 Self-hosted Recovery
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/emergency-pi5-selfhosted-recovery-20260822.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: emergency-pi5-selfhosted-recovery
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 15
+    steps:
+      - name: Discover Pi5 and run bounded recovery
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $targets = @(
+            'raspberry5',
+            'raspberrypi',
+            'raspberry5.local',
+            'raspberrypi.local',
+            'mnwersdfppap@192.168.0.47'
+          )
+          $target = $null
+          foreach ($t in $targets) {
+            try {
+              $probe = & ssh -o BatchMode=yes -o ConnectTimeout=4 -o StrictHostKeyChecking=accept-new $t "tr -d '\0' </proc/device-tree/model 2>/dev/null; echo; hostname" 2>$null
+              if (($LASTEXITCODE -eq 0) -and (($probe -join "`n") -match 'Raspberry Pi 5')) {
+                $target = $t
+                break
+              }
+            } catch {}
+          }
+          if (-not $target) { throw 'PI5_SSH_TARGET_NOT_FOUND' }
+
+          $script = @'
+          set -Eeuo pipefail
+          export NO_COLOR=1
+          ROOT="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
+          mkdir -p "$ROOT/runtime"
+          before="$(uptime 2>/dev/null || true)"
+
+          # Stage 1: shed only local Supabase Studio/Analytics load. Preserve DB/data volumes.
+          if command -v docker >/dev/null 2>&1; then
+            mapfile -t shed < <(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^supabase_(studio|analytics)_' || true)
+            if [ "${#shed[@]}" -gt 0 ]; then
+              docker stop --time 10 "${shed[@]}" >/dev/null
+            fi
+          fi
+
+          sleep 3
+          after="$(uptime 2>/dev/null || true)"
+
+          # Stage 4: preserve and verify OpenClaw Gateway; one restart maximum.
+          gateway_ok=false
+          if command -v openclaw >/dev/null 2>&1; then
+            if openclaw gateway status >/dev/null 2>&1; then
+              gateway_ok=true
+            else
+              openclaw gateway restart >/dev/null 2>&1 || true
+              sleep 3
+              if openclaw gateway status >/dev/null 2>&1; then gateway_ok=true; fi
+            fi
+          fi
+
+          # Stage 5: use the already installed fixed actuator if present.
+          actuator_started=false
+          if systemctl --user list-unit-files openclaw-external-scheduler-actuator.service --no-legend 2>/dev/null | grep -q 'openclaw-external-scheduler-actuator.service'; then
+            systemctl --user start openclaw-external-scheduler-actuator.service || true
+            actuator_started=true
+          elif [ -x "$ROOT/bin/openclaw-disable-project-schedulers" ]; then
+            "$ROOT/bin/openclaw-disable-project-schedulers" || true
+            actuator_started=true
+          fi
+
+          # Stage 6: let the existing fixed recovery worker handle model/auth after scheduler handoff.
+          recovery_started=false
+          if systemctl --user list-unit-files openclaw-pi-recovery-worker-current.service --no-legend 2>/dev/null | grep -q 'openclaw-pi-recovery-worker-current.service'; then
+            systemctl --user start openclaw-pi-recovery-worker-current.service || true
+            recovery_started=true
+          fi
+
+          python3 - "$ROOT/runtime/emergency-pi5-selfhosted-recovery.json" "$before" "$after" "$gateway_ok" "$actuator_started" "$recovery_started" <<'PY'
+          import json, pathlib, sys, datetime
+          p=pathlib.Path(sys.argv[1])
+          p.write_text(json.dumps({
+            'timestamp': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            'pi5_attested': True,
+            'local_supabase_studio_analytics_shed_attempted': True,
+            'load_before': sys.argv[2],
+            'load_after': sys.argv[3],
+            'gateway_ok': sys.argv[4].lower() == 'true',
+            'external_actuator_started': sys.argv[5].lower() == 'true',
+            'recovery_worker_started': sys.argv[6].lower() == 'true',
+            'docker_volumes_deleted': False,
+            'host_rebooted': False,
+            'second_telegram_poller_created': False,
+            'secret_values_included': False,
+          }, indent=2) + '\n')
+          PY
+          cat "$ROOT/runtime/emergency-pi5-selfhosted-recovery.json"
+          '@
+          $script | & ssh -o BatchMode=yes -o ConnectTimeout=6 $target 'bash -s'
+          if ($LASTEXITCODE -ne 0) { throw "PI5_RECOVERY_FAILED_$LASTEXITCODE" }
