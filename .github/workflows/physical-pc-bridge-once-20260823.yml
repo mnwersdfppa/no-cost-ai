@@ -1,0 +1,235 @@
+name: Physical PC bridge once 20260823
+
+on:
+  push:
+    branches:
+      - ops/physical-pc-bridge-20260823-r1
+    paths:
+      - .github/workflows/physical-pc-bridge-once-20260823.yml
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: physical-pc-bridge-once-20260823-r1
+  cancel-in-progress: false
+
+env:
+  BROKER_URL: https://dpllasnpfskyyyzebyal.supabase.co/functions/v1/github-oidc-physical-pc-bridge-broker-once-20260823-r1
+  OIDC_AUDIENCE: odi-physical-pc-bridge-20260823-r1
+  PC_SCRIPT_URL: https://raw.githubusercontent.com/mnwersdfppa/no-cost-ai/00a1f2a8c04f6b44f7ef26108943410e5ad84692/scripts/Prepare-OpenClaw-PC-Primary.ps1
+
+jobs:
+  physical-bridge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    steps:
+      - name: Open exact encrypted one-shot bridge
+        id: bridge
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          mkdir -p artifacts
+
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 \
+            -out /tmp/recipient-private.pem >/dev/null 2>&1
+          openssl pkey -in /tmp/recipient-private.pem -pubout -outform DER \
+            -out /tmp/recipient-public.der
+          PUBLIC_SPKI_B64="$(base64 -w0 /tmp/recipient-public.der)"
+
+          OIDC_JSON="$(curl --fail --silent --show-error \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${OIDC_AUDIENCE}")"
+          OIDC_TOKEN="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<<"$OIDC_JSON")"
+          unset OIDC_JSON
+
+          python3 - "$PUBLIC_SPKI_B64" >/tmp/open-body.json <<'PY'
+          import json,sys
+          print(json.dumps({"mode":"open","public_spki_b64":sys.argv[1]},separators=(",",":")))
+          PY
+
+          curl --fail --silent --show-error \
+            --request POST \
+            --header "Authorization: Bearer ${OIDC_TOKEN}" \
+            --header 'content-type: application/json' \
+            --data-binary @/tmp/open-body.json \
+            "$BROKER_URL" -o /tmp/broker-response.json
+          unset OIDC_TOKEN PUBLIC_SPKI_B64
+
+          python3 - <<'PY'
+          import base64,json,pathlib
+          d=json.loads(pathlib.Path('/tmp/broker-response.json').read_text())
+          if d.get('ok') is not True or d.get('state') != 'open':
+              raise SystemExit('broker_not_open')
+          pathlib.Path('/tmp/auth-key.bin').write_bytes(base64.b64decode(d['encrypted_auth_key_b64'],validate=True))
+          safe={k:v for k,v in d.items() if k!='encrypted_auth_key_b64'}
+          pathlib.Path('/tmp/bridge-safe.json').write_text(json.dumps(safe,separators=(',',':')))
+          pathlib.Path('artifacts/bridge-open-safe.json').write_text(json.dumps(safe,separators=(',',':'))+'\n')
+          PY
+
+          openssl pkeyutl -decrypt \
+            -inkey /tmp/recipient-private.pem \
+            -in /tmp/auth-key.bin \
+            -pkeyopt rsa_padding_mode:oaep \
+            -pkeyopt rsa_oaep_md:sha256 \
+            -out /tmp/tailscale-auth-key
+          AUTHKEY="$(cat /tmp/tailscale-auth-key)"
+          [[ "$AUTHKEY" == tskey-auth-* ]]
+          echo "::add-mask::$AUTHKEY"
+          echo "authkey=$AUTHKEY" >> "$GITHUB_OUTPUT"
+
+          rm -f /tmp/recipient-private.pem /tmp/recipient-public.der \
+            /tmp/auth-key.bin /tmp/tailscale-auth-key /tmp/broker-response.json \
+            /tmp/open-body.json
+
+      - name: Join tailnet ephemerally
+        uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade
+        with:
+          authkey: ${{ steps.bridge.outputs.authkey }}
+          hostname: odi-physical-pc-bridge-${{ github.run_id }}
+          statedir: /tmp/tailscale-state/
+          version: 1.102.3
+          timeout: 2m
+          retry: 3
+          use-cache: false
+
+      - name: Probe physical nodes and execute Windows preflight only through verified WSL bridge
+        id: physical
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          : > artifacts/physical-probe.log
+          : > artifacts/windows-execution.log
+
+          python3 - <<'PY' >/tmp/targets.tsv
+          import json
+          d=json.load(open('/tmp/bridge-safe.json'))
+          for row in d.get('targets',[]):
+              print(str(row.get('address','')),str(row.get('hostname','')),sep='\t')
+          PY
+
+          cat >/tmp/windows-preflight.ps1 <<'PS'
+          $ErrorActionPreference = 'Stop'
+          $ProgressPreference = 'SilentlyContinue'
+          $uri = $env:ODI_PC_SCRIPT_URL
+          if ([string]::IsNullOrWhiteSpace($uri)) { throw 'PC_SCRIPT_URL_MISSING' }
+          $temp = Join-Path $env:TEMP ('Prepare-OpenClaw-PC-Primary-' + [Guid]::NewGuid().ToString('N') + '.ps1')
+          try {
+            Invoke-WebRequest -UseBasicParsing $uri -OutFile $temp
+            & $temp
+            $receiptPath = Join-Path $env:USERPROFILE '.openclaw\receipts\pc-primary-preflight-v1.json'
+            if (-not (Test-Path $receiptPath)) { throw 'PC_PRIMARY_RECEIPT_MISSING' }
+            $r = Get-Content -Raw $receiptPath | ConvertFrom-Json
+            [ordered]@{
+              marker = 'WINDOWS_PHYSICAL_PC_PRIMARY_RECEIPT'
+              result = [string]$r.result
+              completed_at = [string]$r.completed_at
+              openclaw_cli_present = [bool]$r.openclaw_cli_present
+              openclaw_installed_now = [bool]$r.openclaw_installed_now
+              doctor_exit_code = $r.doctor_exit_code
+              gateway_status_exit_code = $r.gateway_status_exit_code
+              openclaw_native_cron_disabled = [bool]$r.openclaw_native_cron_disabled
+              n8n_sole_operational_scheduler_required = [bool]$r.n8n_sole_operational_scheduler_required
+              telegram_poller_created = [bool]$r.telegram_poller_created
+              host_rebooted = [bool]$r.host_rebooted
+              secret_values_included = $false
+            } | ConvertTo-Json -Compress
+          } finally {
+            Remove-Item -Force $temp -ErrorAction SilentlyContinue
+          }
+          PS
+          PS_B64="$(python3 -c 'import base64,pathlib; print(base64.b64encode(pathlib.Path("/tmp/windows-preflight.ps1").read_text().encode("utf-16le")).decode())')"
+
+          safe_probe='set -eu; MODEL=unknown; if [ -r /proc/device-tree/model ]; then MODEL=$(tr -d "\000" </proc/device-tree/model | tr -cd "A-Za-z0-9 ._/-" | head -c 120); fi; WSL=false; if grep -Eqi "microsoft|wsl" /proc/sys/kernel/osrelease /proc/version 2>/dev/null; then WSL=true; fi; WINPS=false; if [ -x /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe ]; then WINPS=true; fi; OC=false; if command -v openclaw >/dev/null 2>&1 || [ -f "$HOME/.openclaw/openclaw.json" ]; then OC=true; fi; printf "SAFE host=%s user=%s arch=%s model=%s wsl=%s windows_powershell=%s openclaw=%s\n" "$(hostname | tr -cd "A-Za-z0-9._-")" "$(id -un | tr -cd "A-Za-z0-9._-")" "$(uname -m | tr -cd "A-Za-z0-9._/-")" "$MODEL" "$WSL" "$WINPS" "$OC"'
+
+          EXECUTED=false
+          TARGET_USED=''
+          LOGIN_USED=''
+          PI5_FOUND=false
+          while IFS=$'\t' read -r target hint; do
+            [[ "$target" =~ ^100\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+            if ! timeout 15s tailscale ping --c 2 --timeout 5s "$target" >/dev/null 2>&1; then
+              printf 'PING_BLOCKED target=%s hint=%s\n' "$target" "$hint" >> artifacts/physical-probe.log
+              continue
+            fi
+            for user in mnwersdfppap mnwersdfppa pi ubuntu admin root; do
+              INFO="$(timeout 25s tailscale ssh "${user}@${target}" "$safe_probe" 2>/dev/null || true)"
+              [[ -n "$INFO" ]] || continue
+              printf '%s target=%s login=%s hint=%s\n' "$INFO" "$target" "$user" "$hint" >> artifacts/physical-probe.log
+              if grep -Eqi 'model=Raspberry Pi 5' <<<"$INFO"; then PI5_FOUND=true; fi
+              if grep -Eqi 'wsl=true.*windows_powershell=true' <<<"$INFO"; then
+                REMOTE="export ODI_PC_SCRIPT_URL=$(printf '%q' "$PC_SCRIPT_URL"); /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $(printf '%q' "$PS_B64")"
+                OUTPUT="$(timeout 10m tailscale ssh "${user}@${target}" "$REMOTE" 2>&1 || true)"
+                printf '%s\n' "$OUTPUT" > artifacts/windows-execution.log
+                if grep -q 'WINDOWS_PHYSICAL_PC_PRIMARY_RECEIPT' <<<"$OUTPUT" \
+                   && grep -q 'pc_primary_preflight_complete' <<<"$OUTPUT"; then
+                  EXECUTED=true
+                  TARGET_USED="$target"
+                  LOGIN_USED="$user"
+                  break 2
+                fi
+              fi
+            done
+          done </tmp/targets.tsv
+
+          python3 - "$EXECUTED" "$TARGET_USED" "$LOGIN_USED" "$PI5_FOUND" <<'PY' > artifacts/summary.json
+          import json,sys,datetime
+          print(json.dumps({
+            'checked_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            'windows_physical_preflight_executed':sys.argv[1].lower()=='true',
+            'target_used':sys.argv[2] or None,
+            'login_used':sys.argv[3] or None,
+            'raspberry_pi5_detected':sys.argv[4].lower()=='true',
+            'host_rebooted':False,
+            'data_deleted':False,
+            'permissions_persistently_expanded':False,
+            'second_telegram_poller_created':False,
+            'secret_values_included':False,
+          },separators=(',',':')))
+          PY
+          echo "executed=$EXECUTED" >> "$GITHUB_OUTPUT"
+          rm -f /tmp/targets.tsv /tmp/windows-preflight.ps1
+          [[ "$EXECUTED" == true ]]
+
+      - name: Upload secret-free physical evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: physical-pc-bridge-evidence-${{ github.run_id }}
+          path: artifacts/*
+          if-no-files-found: warn
+          retention-days: 7
+          compression-level: 6
+
+      - name: Close exact bridge and revoke one-shot key
+        if: always() && steps.bridge.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          OIDC_JSON="$(curl --fail --silent --show-error \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${OIDC_AUDIENCE}")"
+          OIDC_TOKEN="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<<"$OIDC_JSON")"
+          curl --fail --silent --show-error \
+            --request POST \
+            --header "Authorization: Bearer ${OIDC_TOKEN}" \
+            --header 'content-type: application/json' \
+            --data '{"mode":"cleanup"}' \
+            "$BROKER_URL" | tee artifacts/bridge-cleanup-safe.json
+          unset OIDC_JSON OIDC_TOKEN
+          rm -f /tmp/bridge-safe.json
+
+      - name: Enforce physical receipt gate
+        if: always()
+        shell: bash
+        run: |
+          if [[ "${{ steps.physical.outputs.executed }}" != "true" ]]; then
+            echo 'PHYSICAL_WINDOWS_EXECUTION_NOT_ATTESTED'
+            exit 1
+          fi
+          echo 'PHYSICAL_WINDOWS_EXECUTION_ATTESTED'
