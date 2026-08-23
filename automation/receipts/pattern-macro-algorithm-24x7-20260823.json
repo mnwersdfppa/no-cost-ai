@@ -1,0 +1,82 @@
+{
+  "schema": "openclaw.pattern-macro-algorithm-receipt/v1",
+  "recorded_at": "2026-08-23T09:37:30Z",
+  "state": "LIVE_IN_USE",
+  "architecture": {
+    "layer_order": [
+      "signal",
+      "pattern",
+      "macro",
+      "algorithm",
+      "state_transition",
+      "evidence"
+    ],
+    "mode": "event_driven",
+    "polling_required": false,
+    "hot_path": "supabase_event_rpc",
+    "sole_recurring_scheduler": "n8n_cloud",
+    "new_recurring_path_created": false
+  },
+  "execution": {
+    "execution_key": "chatgpt:2026-08-23:pattern-macro-algorithm-24x7-v1",
+    "run_id": "51241952-3b3e-4d0b-af91-59a4f675792b",
+    "event_id": "a4d9e638-fc88-46a8-b5c6-7b949cff520d",
+    "algorithm_key": "event-contract-executor",
+    "algorithm_version": 1,
+    "primary_domain": "deterministic_control",
+    "decision": "ready_inline",
+    "state": "completed",
+    "current_step": "completed",
+    "step_count": 6,
+    "attempts": 0,
+    "plan_sha256": "e47786abbb15f731d0092667288c27026de44b398c2474993d6273857316937a",
+    "receipt_refs": [
+      "interaction_event_receipts_v1:a4d9e638-fc88-46a8-b5c6-7b949cff520d"
+    ],
+    "blocker_code": null,
+    "queue_backend": "none",
+    "llm_called": false,
+    "cost_ceiling_usd": 0
+  },
+  "idempotency": {
+    "replay_tested": true,
+    "duplicate_returned": true,
+    "reused_run_id": "51241952-3b3e-4d0b-af91-59a4f675792b",
+    "new_execution_created_on_replay": false
+  },
+  "n8n_quota_guard": {
+    "state": "quota_exhausted_protected",
+    "high_frequency_workflows_held": true,
+    "estimated_executions_per_day_before": 4039,
+    "estimated_executions_per_day_after": 7,
+    "high_frequency_count_after": 0,
+    "direct_supabase_rpc_live": true,
+    "second_scheduler_allowed": false
+  },
+  "surface_states": {
+    "openclaw": "active",
+    "supabase": "active",
+    "github": "active",
+    "linear": "active_projection",
+    "notion": "active_projection",
+    "vercel": "active_stateless",
+    "opencode": "ready_on_demand",
+    "n8n": "gated_quota_guard",
+    "tailscale": "gated_identity_signature",
+    "atlassian_twg": "gated_oauth_permissions",
+    "webcmd": "gated_physical_canary",
+    "semrush": "on_demand_only",
+    "butlerbrain": "cold_context_pointer_only",
+    "qlynk": "offline_build_evaluation_only"
+  },
+  "safety": {
+    "single_telegram_poller": true,
+    "paid_fallback": false,
+    "automatic_plan_upgrade": false,
+    "external_write_performed": false,
+    "physical_action_performed": false,
+    "physical_success_inferred": false,
+    "raw_text_stored": false,
+    "secret_values_included": false
+  }
+}
