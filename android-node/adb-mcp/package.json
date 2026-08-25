@@ -1,0 +1,18 @@
+{
+  "name": "openclaw-android-adb-safe-mcp",
+  "version": "1.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Task-scoped no-root Android ADB fallback tools for OpenClaw",
+  "scripts": {
+    "start": "node server.mjs",
+    "check": "node --check server.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "zod": "4.4.3"
+  },
+  "engines": {
+    "node": ">=22.22.3"
+  }
+}

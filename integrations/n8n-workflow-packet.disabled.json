@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "status": "disabled_template",
+  "name": "OpenClaw bounded automation queue",
+  "workflow_policy": {
+    "active": false,
+    "execution_order": "v1",
+    "save_success_execution": "none",
+    "save_error_execution": "all",
+    "timezone": "Asia/Seoul"
+  },
+  "nodes": [
+    {
+      "name": "Signed Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "purpose": "Receive a Make or local signed request"
+    },
+    {
+      "name": "Verify Signature",
+      "type": "n8n-nodes-base.code",
+      "purpose": "Canonicalize JSON and verify HMAC; never print the secret"
+    },
+    {
+      "name": "Validate Packet",
+      "type": "n8n-nodes-base.code",
+      "purpose": "Require version, proposal_id, execution_key, allowlisted action and bounded payload"
+    },
+    {
+      "name": "Idempotency Check",
+      "type": "n8n-nodes-base.postgres",
+      "purpose": "Reject an existing execution_key in the queue ledger"
+    },
+    {
+      "name": "Queue Only",
+      "type": "n8n-nodes-base.postgres",
+      "purpose": "Insert pending low-risk work; do not execute it from the webhook request"
+    },
+    {
+      "name": "Accepted",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "purpose": "Return 202 with non-secret identifiers"
+    }
+  ],
+  "allowlisted_actions": [
+    "health_check",
+    "queue_inspect",
+    "documentation_refresh",
+    "github_pr_status_read",
+    "supabase_usage_read"
+  ],
+  "denied_actions": [
+    "shell",
+    "phone_control",
+    "send_message",
+    "payment",
+    "credential_change",
+    "account_change",
+    "delete",
+    "merge",
+    "deploy",
+    "reboot"
+  ],
+  "required_credentials_by_name": [
+    "OpenClaw Queue Postgres",
+    "OpenClaw Webhook HMAC"
+  ],
+  "activation_gates": [
+    "credentials are created inside n8n, never embedded in workflow JSON",
+    "workflow remains inactive until one valid and three negative test cases pass",
+    "existing Telegram workflow remains the only polling owner",
+    "error workflow redacts Authorization, Cookie, API key and HMAC fields"
+  ],
+  "secret_values_embedded": false
+}

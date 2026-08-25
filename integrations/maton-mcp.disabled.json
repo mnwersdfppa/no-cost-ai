@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "status": "disabled_pending_runtime_secret",
+  "purpose": "Read-only Maton discovery through OpenClaw MCP",
+  "openclaw_server": {
+    "url": "https://mcp.maton.ai",
+    "transport": "streamable-http",
+    "enabled": false,
+    "headers": {
+      "Authorization": "Bearer $MATON_API_KEY"
+    },
+    "connectionTimeoutMs": 10000,
+    "requestTimeoutMs": 30000,
+    "toolFilter": {
+      "include": [
+        "whoami",
+        "search_apps",
+        "search_actions",
+        "get_action",
+        "get_connection",
+        "list_connections"
+      ],
+      "exclude": [
+        "run_action",
+        "api",
+        "create_connection",
+        "delete_connection"
+      ]
+    },
+    "codex": {
+      "defaultToolsApprovalMode": "prompt"
+    }
+  },
+  "activation_gates": [
+    "MATON_API_KEY is available to the Raspberry Pi OpenClaw Gateway process through a local secret reference; a Supabase Edge Function secret is not automatically visible on the Pi",
+    "openclaw mcp doctor maton-readonly --probe succeeds",
+    "whoami succeeds without logging the Authorization header",
+    "write tools remain excluded",
+    "existing Telegram poller remains unchanged"
+  ],
+  "secret_values_embedded": false
+}

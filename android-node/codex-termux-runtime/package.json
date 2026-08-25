@@ -1,0 +1,13 @@
+{
+  "name": "openclaw-phone-codex-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Reviewed Android/Termux runtime graph for official OpenAI Codex CLI",
+  "dependencies": {
+    "@openai/codex": "0.146.0",
+    "@openai/codex-linux-arm64": "0.146.0"
+  },
+  "engines": {
+    "node": ">=22.22.3"
+  }
+}

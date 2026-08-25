@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "status": "disabled_template",
+  "name": "openclaw-make-ingress",
+  "purpose": "Queue approved low-risk automation requests without exposing OpenClaw or phone control publicly",
+  "trigger": {
+    "type": "custom_webhook",
+    "url": "$MAKE_WEBHOOK_URL",
+    "method": "POST",
+    "content_type": "application/json"
+  },
+  "request_contract": {
+    "version": 1,
+    "proposal_id": "uuid",
+    "execution_key": "uuid",
+    "action": "allowlisted_action_name",
+    "payload": {},
+    "requested_at": "ISO-8601",
+    "signature": "HMAC-SHA256 over canonical body"
+  },
+  "processing": [
+    "verify HMAC using MAKE_WEBHOOK_SIGNING_SECRET",
+    "reject missing or duplicate execution_key",
+    "validate action against explicit allowlist",
+    "write queue record only; do not execute phone, billing, deletion, credential or production actions",
+    "return 202 with proposal_id and execution_key"
+  ],
+  "default_allowlist": [
+    "health_check",
+    "queue_inspect",
+    "documentation_refresh",
+    "github_pr_status_read",
+    "supabase_usage_read"
+  ],
+  "explicitly_denied": [
+    "arbitrary_shell",
+    "phone_ui_action",
+    "telegram_second_poller",
+    "payment",
+    "credential_change",
+    "account_change",
+    "delete",
+    "merge",
+    "deploy",
+    "reboot"
+  ],
+  "activation_gates": [
+    "MAKE_WEBHOOK_URL and MAKE_WEBHOOK_SIGNING_SECRET exist in the runtime secret store",
+    "one signed dry-run returns 202",
+    "one invalid signature returns 401 or 403",
+    "duplicate execution_key is rejected",
+    "no secret value is logged"
+  ],
+  "secret_values_embedded": false
+}

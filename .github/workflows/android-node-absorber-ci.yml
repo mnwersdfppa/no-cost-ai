@@ -1,0 +1,75 @@
+name: Android Node Absorber CI
+
+on:
+  pull_request:
+    paths:
+      - 'android-node/**'
+      - '.github/workflows/android-node-absorber-ci.yml'
+  push:
+    branches:
+      - feat/openclaw-android-node-absorber
+    paths:
+      - 'android-node/**'
+      - '.github/workflows/android-node-absorber-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22.23.2'
+      - name: Validate shell syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          find android-node -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+      - name: Validate locked packages and JavaScript syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          for dir in android-node/adb-mcp android-node/codex-phone-mcp android-node/phone-codex-cli-backend; do
+            test -s "$dir/package-lock.json"
+            node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "$dir/package.json"
+            (cd "$dir" && npm ci --ignore-scripts --no-audit --no-fund)
+          done
+          (cd android-node/adb-mcp && npm run check)
+          (cd android-node/codex-phone-mcp && npm run check)
+          node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' android-node/phone-codex-cli-backend/openclaw.plugin.json
+      - name: Reject embedded source secrets and high-risk primitives
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -RInE --exclude-dir=node_modules --exclude='*.md' --exclude='package-lock.json' '(sk-proj-|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' android-node; then
+            echo 'Secret-like literal detected in source.' >&2
+            exit 1
+          fi
+          if grep -RInE --exclude-dir=node_modules --exclude='*.md' '(adb[^\n]*shell[^\n]*(rm -rf|su\b|settings put|pm uninstall|am force-stop)|sendTextMessage|ACTION_CALL|ACTION_DIAL|PHONE_RELAY_ENABLED|openclaw[^\n]*mcp[^\n]*serve|phone_(launch_url|tap|swipe|type_text))' android-node; then
+            echo 'High-risk or duplicate-channel primitive detected.' >&2
+            exit 1
+          fi
+      - name: Confirm forced-command SSH, pinning and API-key stripping
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F 'restrict,command=' android-node/phone-termux-bootstrap.sh
+          grep -F 'DENIED=COMMAND_NOT_ALLOWLISTED' android-node/phone-termux-bootstrap.sh
+          grep -F 'PHONE_SSH_HOST_KEY_SHA256=' android-node/phone-termux-bootstrap.sh
+          grep -F 'PINNED_SSH_HOST_KEY_RECORD_COUNT_INVALID' android-node/verify-phone-bridge-secure.sh
+          grep -F 'TARGET_ALREADY_PRIMARY_WITHOUT_VALID_ROLLBACK_RECORD' android-node/verify-phone-bridge-secure.sh
+          grep -F -- '-u OPENAI_API_KEY' android-node/phone-codex-cli-backend/phone-codex-cli-backend.sh
+          grep -F 'StrictHostKeyChecking=yes' android-node/phone-codex-cli-backend/phone-codex-cli-backend.sh
+          grep -F 'T4_TELEGRAM=NOT_TESTED' android-node/verify-phone-bridge-secure.sh
+      - name: Summarize packet
+        shell: bash
+        run: |
+          printf 'scripts=%s\n' "$(find android-node -type f -name '*.sh' | wc -l)"
+          printf 'mcp_servers=%s\n' "$(find android-node -mindepth 2 -maxdepth 2 -name 'server.mjs' | wc -l)"
+          printf 'cli_backend_plugins=%s\n' "$(find android-node -name 'openclaw.plugin.json' | wc -l)"
