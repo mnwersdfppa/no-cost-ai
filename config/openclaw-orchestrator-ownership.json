@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "authoritative_store": "supabase",
+  "route_order": [
+    "native_api",
+    "mcp",
+    "connector",
+    "deterministic_macro",
+    "host_adapter",
+    "container",
+    "local_model",
+    "cloud_model",
+    "manual_review"
+  ],
+  "owners": {
+    "ssot": "supabase",
+    "durable_queue": "supabase_queues",
+    "short_scheduler": "supabase_cron",
+    "model_gateway": "supabase_guardian",
+    "runtime_status": "openclaw_gateway_api",
+    "inbound_telegram": "existing_openclaw_single_poller",
+    "host_control": "native_systemd_adapter",
+    "portable_compatibility": "docker",
+    "external_api_fanout": "n8n_candidate",
+    "long_interruptible_agent_workflow": "langgraph_candidate",
+    "telemetry_normalization": "opentelemetry_candidate",
+    "human_projection": "notion"
+  },
+  "activation_rules": {
+    "duplicate_owner": "blocked_until_migration_and_rollback_plan",
+    "n8n": "external_api_only_until_verified",
+    "langgraph": "checkpoint_interrupt_resume_only",
+    "docker": "portable_unprivileged_workloads_only",
+    "notion": "projection_only",
+    "unknown_intent": "manual_review"
+  },
+  "safety": {
+    "automatic_merge": false,
+    "automatic_production_deploy": false,
+    "automatic_paid_fallback": false,
+    "second_telegram_poller": false,
+    "arbitrary_payload_execution": false,
+    "provider_secret_export": false,
+    "covert_resource_use": false,
+    "unauthorized_access": false,
+    "security_bypass": false,
+    "unlicensed_sources": false
+  },
+  "secret_values_included": false
+}

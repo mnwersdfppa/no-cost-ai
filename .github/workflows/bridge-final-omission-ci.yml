@@ -1,0 +1,187 @@
+name: Final bridge omission checks
+
+on:
+  pull_request:
+    paths:
+      - 'pi/**'
+      - 'supabase/**'
+      - 'docs/**'
+      - '.github/workflows/bridge-final-omission-ci.yml'
+  push:
+    branches:
+      - feat/supabase-emergency-bridge-20260819
+    paths:
+      - 'pi/**'
+      - 'supabase/**'
+      - 'docs/**'
+      - '.github/workflows/bridge-final-omission-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Compile Pi clients and validate shell
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            pi/openclaw-bridge-agent.py \
+            pi/openclaw-recovery-queue-worker.py
+          bash -n pi/install-openclaw-bridge-agent.sh
+          bash -n pi/uninstall-openclaw-bridge-agent.sh
+          bash -n pi/install-openclaw-recovery-queue-worker.sh
+          bash -n pi/recover-opencode-first-tailscale-second.sh
+          bash -n pi/activate-opencode-tailscale.sh
+
+      - name: Validate migration version uniqueness
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from collections import Counter
+          from pathlib import Path
+          import re
+
+          versions=[]
+          for path in Path('supabase/migrations').glob('*.sql'):
+              match=re.match(r'^(\d+)_',path.name)
+              if match:
+                  versions.append(match.group(1))
+          duplicates=sorted(version for version,count in Counter(versions).items() if count>1)
+          if duplicates:
+              raise SystemExit(f'duplicate migration version prefixes: {duplicates}')
+          PY
+
+      - name: Validate no cloud or physical omission is hidden
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno check supabase/functions/pi-infra-bootstrap/index.ts
+          deno check supabase/functions/pi-model-gateway-guardian/index.ts
+          deno check supabase/functions/pi-work-queue/index.ts
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+
+          manifest = json.loads(
+              Path('supabase/functions/deployment-manifest-guardian.json').read_text(encoding='utf-8')
+          )
+          assert manifest['canonical_model_component'] == 'edge.pi-model-gateway-guardian'
+          assert manifest['functions']['pi-work-queue']['version'] == 9
+          assert manifest['e2e_gates']['pi_model_gateway_guardian_e2e'] == 'pass'
+          assert manifest['e2e_gates']['pi_recovery_queue_api_e2e'] == 'pass'
+
+          # Physical work must remain visible as pending until a Pi receipt exists.
+          assert manifest['physical_gates']['pi_openclaw_model_activation'] == 'pending'
+          assert manifest['physical_gates']['pi_recovery_queue_worker_active'] == 'pending'
+          assert manifest['physical_gates']['tailscale_pi_enrollment'] == 'pending_optional'
+
+          required_files = (
+              'supabase/functions/pi-infra-bootstrap/index.ts',
+              'supabase/functions/pi-model-gateway-guardian/index.ts',
+              'supabase/functions/pi-work-queue/index.ts',
+              'supabase/migrations/202608200001_openclaw_guardian_reconciliation.sql',
+              'supabase/migrations/202608200002_promote_openclaw_guardian_after_e2e.sql',
+              'supabase/migrations/202608200003_bind_ledger_execution_keys_to_actions.sql',
+              'pi/openclaw-recovery-queue-worker.py',
+              'pi/install-openclaw-recovery-queue-worker.sh',
+              'pi/recover-opencode-first-tailscale-second.sh',
+          )
+          for item in required_files:
+              path = Path(item)
+              assert path.is_file() and path.stat().st_size > 0, item
+
+          bootstrap = Path(required_files[0]).read_text(encoding='utf-8')
+          guardian = Path(required_files[1]).read_text(encoding='utf-8')
+          queue = Path(required_files[2]).read_text(encoding='utf-8')
+          worker = Path('pi/openclaw-recovery-queue-worker.py').read_text(encoding='utf-8')
+          installer = Path('pi/install-openclaw-recovery-queue-worker.sh').read_text(encoding='utf-8')
+
+          for marker in (
+              'refreshSession',
+              'pi-model-gateway-guardian/v1',
+              'export_original_provider_key_to_pi: false',
+              'start_second_telegram_poller: false',
+              'surface_raw_provider_error_to_telegram: false',
+          ):
+              assert marker in bootstrap, marker
+          for marker in (
+              'const MAX_ATTEMPTS = 2',
+              'async function queueRequest',
+              '요청을 안전하게 보존했습니다',
+              'provider_secret_returned: false',
+          ):
+              assert marker in guardian, marker
+          for marker in (
+              'contract_version: 2',
+              'claim_openclaw_recovery_task',
+              'secret_like_evidence_rejected',
+          ):
+              assert marker in queue, marker
+          for marker in (
+              'pull_recovery',
+              'pi_supabase_auth_model_recovery',
+              'worker_liveness_guardian',
+              'telegram_model_failover_repair',
+          ):
+              assert marker in worker, marker
+          for marker in ('NoNewPrivileges=true','ProtectSystem=strict','UMask=0077'):
+              assert marker in installer, marker
+          PY
+
+      - name: Reject secret literals, duplicate pollers and automatic deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          paths = [
+              *Path('supabase').rglob('*.ts'),
+              *Path('supabase').rglob('*.sql'),
+              *Path('pi').rglob('*.py'),
+              *Path('pi').rglob('*.sh'),
+          ]
+          text='\n'.join(path.read_text(encoding='utf-8',errors='ignore') for path in paths)
+          secret_patterns=(
+              r'sk-proj-[A-Za-z0-9_-]{20,}',
+              r'ghp_[A-Za-z0-9]{20,}',
+              r'github_pat_[A-Za-z0-9_]{20,}',
+              r'xox[baprs]-[A-Za-z0-9-]{20,}',
+              r'tskey-(?:auth|api|client)-[A-Za-z0-9_-]{20,}',
+              r'BEGIN (?:RSA|OPENSSH|EC) PRIVATE KEY',
+          )
+          for pattern in secret_patterns:
+              assert re.search(pattern,text) is None,pattern
+
+          assert re.search(r'(?:getUpdates|start_polling|run_polling)\(',text) is None
+          assert re.search(r'start_second_telegram_poller\s*:\s*true',text,re.I) is None
+          assert re.search(r'paid_fallback(?:_enabled)?\s*[:=]\s*true',text,re.I) is None
+          PY
+
+          workflow=.github/workflows/bridge-final-omission-ci.yml
+          python3 - <<'PY'
+          from pathlib import Path
+          text=Path('.github/workflows/bridge-final-omission-ci.yml').read_text(encoding='utf-8')
+          forbidden=(
+              'supabase functions '+'deploy',
+              'vercel '+'deploy',
+              'gh pr '+'merge',
+              'git '+'push',
+          )
+          assert not [item for item in forbidden if item in text]
+          PY

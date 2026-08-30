@@ -1,0 +1,7 @@
+*
+!Dockerfile
+!guardian.py
+!self_test.py
+!check_oci.py
+!compose.yaml
+!README.md

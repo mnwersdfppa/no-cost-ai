@@ -1,0 +1,103 @@
+{
+  "project_id": "dpllasnpfskyyyzebyal",
+  "recorded_at": "2026-08-20T03:55:39Z",
+  "authoritative_store": "supabase",
+  "notion_role": "human_projection_and_historical_evidence",
+  "function": {
+    "name": "openclaw-pattern-engine",
+    "version": 1,
+    "status": "ACTIVE",
+    "verify_jwt": false,
+    "custom_auth": "scoped_pi_gateway_client_jwt",
+    "ezbr_sha256": "c700f0db0e01f84216ad7c5428760d765afb4578bb17878572eadf6bb761b3f6",
+    "source": "supabase/functions/openclaw-pattern-engine/index.ts",
+    "actions": [
+      "status",
+      "candidates",
+      "resolve",
+      "observe",
+      "feedback"
+    ],
+    "promotion_action_exposed": false,
+    "mutation_rate_limit_per_hour": 60
+  },
+  "schedules": {
+    "openclaw-pattern-harvest-v1": "*/15 * * * *",
+    "openclaw-pattern-score-v1": "7 * * * *"
+  },
+  "counts": {
+    "rules": 19,
+    "patterns": 13,
+    "observations": 143,
+    "feedback": 0,
+    "capabilities": 25,
+    "evidence_links": 14
+  },
+  "top_patterns": [
+    {
+      "pattern_key": "provider-overload-failover",
+      "status": "verified",
+      "frequency_30d": 58,
+      "promotion_score": 80.0,
+      "ci_state": "pass",
+      "e2e_state": "pass"
+    },
+    {
+      "pattern_key": "durable-queue-retry",
+      "status": "verified",
+      "frequency_30d": 25,
+      "promotion_score": 80.0,
+      "ci_state": "pass",
+      "e2e_state": "pass"
+    },
+    {
+      "pattern_key": "pi-auth-device-identity-recovery",
+      "status": "skill_candidate",
+      "frequency_30d": 8,
+      "promotion_score": 76.97,
+      "ci_state": "pass",
+      "e2e_state": "pass"
+    },
+    {
+      "pattern_key": "state-fingerprint-dedupe",
+      "status": "skill_candidate",
+      "frequency_30d": 7,
+      "duplicate_count_90d": 7,
+      "promotion_score": 72.87,
+      "ci_state": "pending",
+      "e2e_state": "pending"
+    },
+    {
+      "pattern_key": "runtime-compatibility-resolver",
+      "status": "verified",
+      "frequency_30d": 9,
+      "promotion_score": 70.03,
+      "ci_state": "pass",
+      "e2e_state": "pass"
+    }
+  ],
+  "e2e": {
+    "state": "pass",
+    "unauthenticated_status": 401,
+    "authenticated_status": 200,
+    "capability_resolve_status": 200,
+    "safe_observation_status": 200,
+    "duplicate_execution_status": 409,
+    "secret_like_payload_status": 400,
+    "executable_payload_status": 400,
+    "feedback_status": 200,
+    "api_first_route_verified": true,
+    "temporary_identity_deleted": true,
+    "temporary_rows_deleted": true
+  },
+  "safety": {
+    "provider_secret_returned": false,
+    "server_secret_returned": false,
+    "token_values_retained": false,
+    "arbitrary_execution_allowed": false,
+    "high_risk_automatic_promotion": false,
+    "automatic_pull_request_merge": false,
+    "automatic_production_deployment": false,
+    "notion_history_auto_delete": false
+  }
+}

@@ -1,0 +1,97 @@
+name: Validate active OpenClaw pattern skills
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'skills/durable-queue-retry/**'
+      - 'skills/provider-failover-guardian/**'
+      - '.github/workflows/openclaw-active-pattern-skills-validate.yml'
+  push:
+    branches:
+      - feat/supabase-emergency-bridge-20260819
+    paths:
+      - 'skills/durable-queue-retry/**'
+      - 'skills/provider-failover-guardian/**'
+      - '.github/workflows/openclaw-active-pattern-skills-validate.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: active-openclaw-pattern-skills-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+
+      - name: Validate skill contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from __future__ import annotations
+
+          import pathlib
+          import re
+
+          expected = {
+              'skills/durable-queue-retry/SKILL.md': 'durable-queue-retry',
+              'skills/provider-failover-guardian/SKILL.md': 'provider-failover-guardian',
+          }
+          secret_pattern = re.compile(
+              r'(sk-proj-[A-Za-z0-9_-]{12,}|ghp_[A-Za-z0-9]{16,}|'
+              r'github_pat_[A-Za-z0-9_]{16,}|xox[baprs]-[A-Za-z0-9-]{16,}|'
+              r'tskey-(?:auth|api|client)-[A-Za-z0-9_-]{12,}|'
+              r'BEGIN\s+(?:RSA|OPENSSH|EC)\s+PRIVATE\s+KEY)',
+              re.IGNORECASE,
+          )
+          for path_text, expected_name in expected.items():
+              path = pathlib.Path(path_text)
+              text = path.read_text(encoding='utf-8')
+              assert text.startswith('---\n'), path
+              frontmatter = text.split('---', 2)[1]
+              name = re.search(r'^name:\s*([^\n]+)$', frontmatter, re.MULTILINE)
+              status = re.search(r'^status:\s*([^\n]+)$', frontmatter, re.MULTILINE)
+              assert name and name.group(1).strip() == expected_name
+              assert status and status.group(1).strip() == 'verified'
+              assert 'secret_values_included=false' in text
+              assert 'automatic merge' in text.lower()
+              assert 'second Telegram' in text or 'second telegram' in text
+              assert secret_pattern.search(text) is None
+          print('active_pattern_skill_contract=pass')
+          PY
+
+      - name: Confirm validation-only workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          text = Path('.github/workflows/openclaw-active-pattern-skills-validate.yml').read_text(encoding='utf-8')
+          forbidden = [
+              'contents: ' + 'write',
+              'gh pr ' + 'merge',
+              'vercel ' + '--prod',
+              'supabase functions ' + 'deploy',
+              'git push ' + 'origin main',
+          ]
+          for marker in forbidden:
+              assert marker not in text, marker
+          assert 'contents: read' in text
+          print('production_mutation=off')
+          PY

@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-08-20T04:45:00Z",
+  "state": "PASS",
+  "supabase_project_ref": "dpllasnpfskyyyzebyal",
+  "edge_function": "openclaw-research-queue",
+  "authentication": "custom_pi_gateway_client_jwt",
+  "actions": [
+    "status",
+    "claim",
+    "heartbeat",
+    "complete",
+    "fail"
+  ],
+  "e2e": {
+    "unauthenticated_status": 401,
+    "authenticated_status": 200,
+    "atomic_claim": true,
+    "expected_task_claimed": true,
+    "bounded_lease_heartbeat": true,
+    "safe_completion": true,
+    "candidate_solution_found": true,
+    "result_review_required": true,
+    "unsafe_result_summary_status": 400,
+    "unsafe_result_summary_rejected": true,
+    "temporary_identity_deleted": true,
+    "temporary_candidate_deleted": true,
+    "temporary_tasks_deleted": true,
+    "temporary_events_deleted": true
+  },
+  "queue_contract": {
+    "claim_lease_minutes_min": 1,
+    "claim_lease_minutes_max": 60,
+    "heartbeat_extension_minutes_max": 30,
+    "result_count_max": 1000,
+    "safe_summary_bytes_max": 32768,
+    "body_bytes_max": 49152,
+    "backoff_seconds": [
+      120,
+      300,
+      900,
+      2700,
+      7200
+    ],
+    "source_selection_review_gated": true,
+    "discovered_code_execution": false
+  },
+  "safety": {
+    "query_credentials_returned": false,
+    "provider_secret_returned": false,
+    "supabase_server_secret_returned": false,
+    "authorization_header_persisted": false,
+    "arbitrary_execution_allowed": false,
+    "secret_like_payload_accepted": false,
+    "automatic_source_installation": false,
+    "automatic_high_risk_promotion": false,
+    "second_telegram_poller_created": false,
+    "automatic_paid_fallback_enabled": false,
+    "automatic_pr_merge": false,
+    "production_deployment": false,
+    "secret_values_included": false
+  }
+}

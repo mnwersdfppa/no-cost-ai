@@ -1,0 +1,126 @@
+{
+  "branch": "feat/supabase-emergency-bridge-20260819",
+  "commit_sha": "e47370c5135cf4b16ae773a281c1e60f5540b9f8",
+  "functions": [
+    {
+      "classification": "mixed_or_unclassified",
+      "function_name": "canonical-client-config",
+      "legacy_service_role_reference": true,
+      "modern_default_pattern": true,
+      "modern_secret_keys_reference": true,
+      "runtime_key_receipt": false,
+      "secret_value_included": false
+    },
+    {
+      "classification": "modern_secret_default_first",
+      "function_name": "credential-readiness",
+      "legacy_service_role_reference": true,
+      "modern_default_pattern": true,
+      "modern_secret_keys_reference": true,
+      "runtime_key_receipt": true,
+      "secret_value_included": false
+    },
+    {
+      "classification": "legacy_service_role_only",
+      "function_name": "credential-readiness-admission-gated",
+      "legacy_service_role_reference": true,
+      "modern_default_pattern": false,
+      "modern_secret_keys_reference": false,
+      "runtime_key_receipt": false,
+      "secret_value_included": false
+    },
+    {
+      "classification": "legacy_service_role_only",
+      "function_name": "emergency-bridge",
+      "legacy_service_role_reference": true,
+      "modern_default_pattern": false,
+      "modern_secret_keys_reference": false,
+      "runtime_key_receipt": false,
+      "secret_value_included": false
+    },
+    {
+      "classification": "legacy_service_role_only",
+      "function_name": "emergency-bridge-rollout-ssot",
+      "legacy_service_role_reference": true,
+      "modern_default_pattern": false,
+      "modern_secret_keys_reference": false,
+      "runtime_key_receipt": false,
+      "secret_value_included": false
+    },
+    {
+      "classification": "modern_secret_default_first",
+      "function_name": "model-retry-worker",
+      "legacy_service_role_reference": true,
+      "modern_default_pattern": true,
+      "modern_secret_keys_reference": true,
+      "runtime_key_receipt": false,
+      "secret_value_included": false
+    },
+    {
+      "classification": "modern_secret_default_first",
+      "function_name": "pi-infra-bootstrap",
+      "legacy_service_role_reference": true,
+      "modern_default_pattern": true,
+      "modern_secret_keys_reference": true,
+      "runtime_key_receipt": false,
+      "secret_value_included": false
+    },
+    {
+      "classification": "modern_secret_default_first",
+      "function_name": "pi-model-gateway-guardian",
+      "legacy_service_role_reference": true,
+      "modern_default_pattern": true,
+      "modern_secret_keys_reference": true,
+      "runtime_key_receipt": false,
+      "secret_value_included": false
+    },
+    {
+      "classification": "no_server_admin_key",
+      "function_name": "pi-openclaw-guardian-master-installer-verified",
+      "legacy_service_role_reference": false,
+      "modern_default_pattern": false,
+      "modern_secret_keys_reference": false,
+      "runtime_key_receipt": false,
+      "secret_value_included": false
+    },
+    {
+      "classification": "modern_secret_default_first",
+      "function_name": "pi-result-delivery-queue",
+      "legacy_service_role_reference": true,
+      "modern_default_pattern": true,
+      "modern_secret_keys_reference": true,
+      "runtime_key_receipt": false,
+      "secret_value_included": false
+    },
+    {
+      "classification": "modern_secret_default_first",
+      "function_name": "pi-work-queue",
+      "legacy_service_role_reference": true,
+      "modern_default_pattern": true,
+      "modern_secret_keys_reference": true,
+      "runtime_key_receipt": true,
+      "secret_value_included": false
+    }
+  ],
+  "generated_at": "2026-08-20T00:54:56.182581+00:00",
+  "legacy_service_role_only_functions": [
+    "credential-readiness-admission-gated",
+    "emergency-bridge",
+    "emergency-bridge-rollout-ssot"
+  ],
+  "repository": "mnwersdfppa/no-cost-ai",
+  "required_functions_missing_from_source": [
+    "command-center",
+    "token-gateway"
+  ],
+  "result": "partial",
+  "schema_version": 1,
+  "secret_values_included": false,
+  "secret_values_read": false,
+  "summary": {
+    "legacy_service_role_only": 3,
+    "mixed_or_unclassified": 1,
+    "modern_secret_default_first": 6,
+    "no_server_admin_key": 1
+  }
+}

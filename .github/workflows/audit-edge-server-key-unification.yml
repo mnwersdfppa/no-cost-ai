@@ -1,0 +1,177 @@
+name: Audit Edge Function server-key unification
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'supabase/functions/**'
+      - '.github/workflows/audit-edge-server-key-unification.yml'
+  push:
+    branches:
+      - feat/supabase-emergency-bridge-20260819
+    paths:
+      - 'supabase/functions/**'
+      - '.github/workflows/audit-edge-server-key-unification.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audit-edge-server-key-unification-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Build and validate non-secret server-key source inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          manifest_path = Path('supabase/functions/manifest.json')
+          manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+          declared = manifest.get('functions', {})
+
+          declared_entrypoints = {
+              name: row['entrypoint']
+              for name, row in declared.items()
+              if isinstance(row, dict) and isinstance(row.get('entrypoint'), str)
+          }
+          missing_entrypoints = sorted(
+              name for name, entrypoint in declared_entrypoints.items()
+              if not Path(entrypoint).is_file()
+          )
+
+          rows = []
+          for function_name, entrypoint in sorted(declared_entrypoints.items()):
+              path = Path(entrypoint)
+              if not path.is_file():
+                  continue
+
+              text = path.read_text(encoding='utf-8')
+              has_modern = 'SUPABASE_SECRET_KEYS' in text
+              has_legacy = 'SUPABASE_SERVICE_ROLE_KEY' in text
+              modern_default = (
+                  'modern.default' in text
+                  or 'secretKeys.default' in text
+                  or 'parsed?.default' in text
+                  or 'parsed.default' in text
+              )
+              modern_before_legacy = (
+                  has_modern
+                  and has_legacy
+                  and text.find('SUPABASE_SECRET_KEYS')
+                  < text.find('SUPABASE_SERVICE_ROLE_KEY')
+              )
+              has_runtime_receipt = 'bridge_record_runtime_key_selection' in text
+              uses_admin_client = 'createClient(' in text and (has_modern or has_legacy)
+
+              if not uses_admin_client:
+                  classification = 'no_server_admin_key'
+              elif has_modern and modern_default and (not has_legacy or modern_before_legacy):
+                  classification = 'modern_secret_default_first'
+              elif has_modern and not has_legacy:
+                  classification = 'modern_secret_present_unproven_default'
+              elif has_legacy and not has_modern:
+                  classification = 'legacy_service_role_only'
+              else:
+                  classification = 'mixed_or_unclassified'
+
+              rows.append({
+                  'function_name': function_name,
+                  'entrypoint': entrypoint,
+                  'classification': classification,
+                  'modern_secret_keys_reference': has_modern,
+                  'legacy_service_role_reference': has_legacy,
+                  'modern_default_pattern': modern_default,
+                  'runtime_key_receipt': has_runtime_receipt,
+                  'secret_value_included': False,
+              })
+
+          summary = {}
+          for row in rows:
+              summary[row['classification']] = summary.get(row['classification'], 0) + 1
+
+          legacy_source_warnings = sorted(
+              row['function_name']
+              for row in rows
+              if row['classification'] == 'legacy_service_role_only'
+          )
+          mixed_source_warnings = sorted(
+              row['function_name']
+              for row in rows
+              if row['classification'] == 'mixed_or_unclassified'
+          )
+
+          canonical_server_key = manifest.get('canonical_supabase_server_key')
+          canonical_key_ok = canonical_server_key == 'SUPABASE_SECRET_KEYS.default'
+          result = 'pass' if not missing_entrypoints and canonical_key_ok else 'fail'
+
+          receipt = {
+              'schema_version': 3,
+              'result': result,
+              'repository': os.environ['GITHUB_REPOSITORY'],
+              'ref': os.environ['GITHUB_REF'],
+              'commit_sha': os.environ['GITHUB_SHA'],
+              'generated_at': datetime.now(timezone.utc).isoformat(),
+              'manifest_path': str(manifest_path),
+              'canonical_supabase_server_key': canonical_server_key,
+              'canonical_server_key_valid': canonical_key_ok,
+              'functions': rows,
+              'summary': summary,
+              'manifest_entrypoints_missing': missing_entrypoints,
+              'legacy_source_warnings': legacy_source_warnings,
+              'mixed_source_warnings': mixed_source_warnings,
+              'runtime_receipts_are_authoritative_for_deployed_key_selection': True,
+              'workflow_mutates_repository': False,
+              'secret_values_read': False,
+              'secret_values_included': False,
+          }
+          output = Path('evidence/edge-server-key-unification-audit.generated.json')
+          output.write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+          print(json.dumps({
+              'result': result,
+              'summary': summary,
+              'missing_entrypoints': missing_entrypoints,
+              'canonical_server_key_valid': canonical_key_ok,
+              'legacy_source_warnings': legacy_source_warnings,
+              'mixed_source_warnings': mixed_source_warnings,
+              'repository_mutation': False,
+          }, sort_keys=True))
+
+          if result != 'pass':
+              raise SystemExit(1)
+          PY
+
+      - name: Write audit summary
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo '## Edge server-key audit'
+            echo
+            echo '- Source scope: manifest-declared Edge Functions'
+            echo '- Canonical server key: SUPABASE_SECRET_KEYS.default'
+            echo '- Runtime deployment receipts: authoritative'
+            echo '- Repository mutation: OFF'
+            echo '- Secret values read: OFF'
+            echo '- Secret values included: OFF'
+          } >> "$GITHUB_STEP_SUMMARY"

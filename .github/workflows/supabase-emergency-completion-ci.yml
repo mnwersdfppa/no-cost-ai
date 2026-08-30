@@ -1,0 +1,107 @@
+name: Supabase emergency completion-gate checks
+
+on:
+  pull_request:
+    paths:
+      - 'supabase/migrations/20260819081000_authority_ownership_completion_gates.sql'
+      - 'supabase/migrations/20260819081102_authority_completion_selftest.sql'
+      - 'docs/SUPABASE_EMERGENCY_BRIDGE_COMPLETION.md'
+      - '.github/workflows/supabase-emergency-completion-ci.yml'
+  push:
+    branches:
+      - feat/supabase-emergency-bridge-20260819
+    paths:
+      - 'supabase/migrations/20260819081000_authority_ownership_completion_gates.sql'
+      - 'supabase/migrations/20260819081102_authority_completion_selftest.sql'
+      - 'docs/SUPABASE_EMERGENCY_BRIDGE_COMPLETION.md'
+      - '.github/workflows/supabase-emergency-completion-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Validate authority and completion contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          owners_path=Path('supabase/migrations/20260819081000_authority_ownership_completion_gates.sql')
+          selftest_path=Path('supabase/migrations/20260819081102_authority_completion_selftest.sql')
+          assert owners_path.is_file() and owners_path.stat().st_size > 0
+          assert selftest_path.is_file() and selftest_path.stat().st_size > 0
+
+          owners=owners_path.read_text()
+          selftest=selftest_path.read_text()
+
+          owner_required=(
+              'bridge_owner_registry',
+              'bridge_completion_gates',
+              "'telegram_poller'",
+              "'openclaw_gateway'",
+              "'single_writer'",
+              "'reject_duplicate_owner'",
+              "'vercel_deployment'",
+              "'disabled'",
+              'bridge_completion_summary',
+              'bridge_mark_completion_gate',
+          )
+          missing=[item for item in owner_required if item not in owners]
+          if missing:
+              raise SystemExit(f'owner/completion invariants missing: {missing}')
+
+          physical_gates=(
+              "'pi_authenticated_status'",
+              "'pi_heartbeat'",
+              "'canonical_config_pi_e2e'",
+              "'phone_t3'",
+              "'telegram_t4'",
+              "'rollback_verified'",
+          )
+          for gate in physical_gates:
+              if gate not in owners:
+                  raise SystemExit(f'physical gate missing: {gate}')
+
+          selftest_required=(
+              'v_telegram_owner_count',
+              'v_unproven_pass_count',
+              'v_completion_summary_consistent',
+              "'physical_completion_claimed', false",
+              'v_paid_route_enabled = 0',
+              "'supabase-first-emergency-bridge-v1.3'",
+          )
+          missing=[item for item in selftest_required if item not in selftest]
+          if missing:
+              raise SystemExit(f'self-test invariants missing: {missing}')
+
+          if "required_for_complete=false" in owners.replace(' ', '').lower():
+              raise SystemExit('unexpected compact required_for_complete assignment')
+          PY
+
+      - name: Confirm fail-closed grants and RLS
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner=supabase/migrations/20260819081000_authority_ownership_completion_gates.sql
+          selftest=supabase/migrations/20260819081102_authority_completion_selftest.sql
+          grep -F 'alter table public.bridge_owner_registry enable row level security' "$owner"
+          grep -F 'alter table public.bridge_completion_gates enable row level security' "$owner"
+          grep -F 'from anon, authenticated' "$owner"
+          grep -F 'to service_role' "$owner"
+          grep -F 'from public, anon, authenticated' "$selftest"
+          ! grep -Eiq '\bgrant\b[^;]*(anon|authenticated)' "$owner" "$selftest"
+
+      - name: Reject secret literals and false completion claims
+        shell: bash
+        run: |
+          set -euo pipefail
+          files='supabase/migrations/20260819081000_authority_ownership_completion_gates.sql supabase/migrations/20260819081102_authority_completion_selftest.sql docs/SUPABASE_EMERGENCY_BRIDGE_COMPLETION.md'
+          ! grep -E '(sk-proj-|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|sb_secret_[A-Za-z0-9_-]{20,}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' $files
+          ! grep -E 'PHYSICAL_(PI|PHONE|TELEGRAM)_COMPLETE=YES|OVERALL=COMPLETE' $files

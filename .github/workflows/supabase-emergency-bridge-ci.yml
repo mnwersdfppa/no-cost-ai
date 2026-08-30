@@ -1,0 +1,255 @@
+name: Supabase emergency bridge safety checks
+
+on:
+  pull_request:
+    paths:
+      - 'supabase/**'
+      - 'pi/**'
+      - 'scripts/**'
+      - '.github/workflows/supabase-emergency-bridge-ci.yml'
+  push:
+    branches:
+      - feat/supabase-emergency-bridge-20260819
+    paths:
+      - 'supabase/**'
+      - 'pi/**'
+      - 'scripts/**'
+      - '.github/workflows/supabase-emergency-bridge-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supabase-emergency-bridge-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Validate JSON, Python, shell and Edge syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m json.tool supabase/functions/manifest.json >/dev/null
+          python3 -m json.tool supabase/functions/deployment-manifest-guardian.json >/dev/null
+          python3 -m py_compile \
+            pi/canonical-config-agent.py \
+            pi/openclaw-recovery-queue-worker.py
+          bash -n pi/install-canonical-config-agent.sh
+          bash -n pi/install-openclaw-recovery-queue-worker.sh
+          bash -n pi/recover-opencode-first-tailscale-second.sh
+          bash -n pi/activate-opencode-tailscale.sh
+          bash -n scripts/install-supabase-emergency-bridge-on-pi.sh
+          bash -n scripts/test-supabase-emergency-bridge.sh
+          deno check supabase/functions/emergency-bridge/index.ts
+          deno check supabase/functions/credential-readiness/index.ts
+          deno check supabase/functions/canonical-client-config/index.ts
+          deno check supabase/functions/pi-infra-bootstrap/index.ts
+          deno check supabase/functions/pi-model-gateway-guardian/index.ts
+          deno check supabase/functions/pi-work-queue/index.ts
+
+      - name: Validate migrations and action-bound idempotency
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from collections import Counter
+          from pathlib import Path
+          import re
+
+          files = sorted(Path('supabase/migrations').glob('*.sql'))
+          versions = [path.name.split('_',1)[0] for path in files]
+          duplicates = sorted(version for version,count in Counter(versions).items() if count>1)
+          assert not duplicates, duplicates
+
+          by_name = {path.name:path.read_text(encoding='utf-8') for path in files}
+          required = {
+              '20260819080000_emergency_bridge_control_plane.sql',
+              '20260819080900_zero_cost_first_route_resolver.sql',
+              '202608200001_openclaw_guardian_reconciliation.sql',
+              '202608200002_promote_openclaw_guardian_after_e2e.sql',
+              '202608200003_bind_ledger_execution_keys_to_actions.sql',
+          }
+          assert not required.difference(by_name), sorted(required.difference(by_name))
+
+          corpus = re.sub(r'\s+','','\n'.join(by_name.values())).lower()
+          for marker in (
+              "('paid_api_fallback',false",
+              "('public_shell_execution',false",
+              "('telegram_single_poller_enforced',true",
+              'bridge_resolve_route',
+              "'stop_no_eligible_route'",
+              'bridge_model_health',
+              'bridge_record_model_result',
+              'claim_openclaw_recovery_task',
+              'pi_model_gateway_guardian_e2e',
+              'pi_recovery_queue_api_e2e',
+              'edge.pi-model-gateway-guardian',
+          ):
+              assert marker in corpus, marker
+
+          action_bound = re.sub(
+              r'\s+','',
+              by_name['202608200003_bind_ledger_execution_keys_to_actions.sql'],
+          ).lower()
+          for marker in (
+              'unique(user_id,action,execution_key)',
+              'onconflict(user_id,action,execution_key)donothing',
+              'whereuser_id=p_user_idandaction=p_actionandexecution_key=p_execution_key',
+              "'same_action_replay_safe',true",
+          ):
+              assert marker in action_bound, marker
+          assert 'unique(user_id,execution_key)' not in action_bound
+
+          promote = by_name['202608200002_promote_openclaw_guardian_after_e2e.sql']
+          for marker in (
+              "gate_key='pi_model_gateway_guardian_e2e'",
+              "gate_key='pi_recovery_queue_api_e2e'",
+              "component_key='edge.pi-model-gateway-guardian'",
+              "component_key='edge.pi-model-gateway'",
+              "component_key='edge.token-gateway'",
+              "lifecycle_status='compatibility'",
+              "'supabase.opencode_model_guardian'",
+              "mode='disabled'",
+          ):
+              assert marker in promote, marker
+          PY
+
+      - name: Validate manifest and authentication boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          import re
+
+          manifest = json.loads(Path('supabase/functions/manifest.json').read_text(encoding='utf-8'))
+          deployment = json.loads(Path('supabase/functions/deployment-manifest-guardian.json').read_text(encoding='utf-8'))
+          functions = manifest['functions']
+
+          for name in ('emergency-bridge','credential-readiness','canonical-client-config'):
+              assert functions[name]['verify_jwt'] is True,name
+          assert functions['pi-infra-bootstrap']['verify_jwt'] is False
+          assert functions['pi-infra-bootstrap']['auth_mode']=='custom_pi_access_or_refresh_token'
+          assert functions['pi-model-gateway-guardian']['verify_jwt'] is False
+          assert functions['pi-model-gateway-guardian']['auth_mode']=='custom_pi_gateway_client_role'
+          assert functions['pi-work-queue']['verify_jwt'] is True
+          assert manifest['canonical_model_gateway']=='pi-model-gateway-guardian'
+          assert manifest['provider_secret_location']=='supabase_edge_only'
+          assert manifest['raw_provider_secret_returned_to_pi'] is False
+          assert manifest['queue_on_provider_failure'] is True
+          assert manifest['max_immediate_provider_attempts']==2
+          assert manifest['paid_provider_calls'] is False
+          assert manifest['public_shell_execution'] is False
+          assert manifest['telegram_single_poller_enforced'] is True
+          assert deployment['functions']['pi-work-queue']['version']==9
+
+          bootstrap=Path('supabase/functions/pi-infra-bootstrap/index.ts').read_text(encoding='utf-8')
+          guardian=Path('supabase/functions/pi-model-gateway-guardian/index.ts').read_text(encoding='utf-8')
+          queue=Path('supabase/functions/pi-work-queue/index.ts').read_text(encoding='utf-8')
+
+          for marker in (
+              'refreshSession',
+              'pi-model-gateway-guardian/v1',
+              'export_original_provider_key_to_pi: false',
+              'start_second_telegram_poller: false',
+              'surface_raw_provider_error_to_telegram: false',
+              'provider_secret_returned: false',
+          ):
+              assert marker in bootstrap,marker
+          for marker in (
+              'const MAX_ATTEMPTS = 2',
+              'async function requirePi',
+              'async function queueRequest',
+              'function queuedResponse',
+              '요청을 안전하게 보존했습니다',
+          ):
+              assert marker in guardian,marker
+          for marker in (
+              'contract_version: 2',
+              'claim_openclaw_recovery_task',
+              'secret_like_evidence_rejected',
+              'runtime_server_key_type',
+              'server_secret_returned: false',
+          ):
+              assert marker in queue,marker
+          assert 'eyJ[A-Za-z0-9_-]{20,}' in queue
+
+          combined=bootstrap+'\n'+queue
+          forbidden={
+              'raw OpenCode return':r'OPENCODE_API_KEY\s*:',
+              'legacy Tailscale return':r'TAILSCALE_AUTHKEY\s*:',
+              'second poller':r'getUpdates|start_second_telegram_poller\s*:\s*true',
+              'automatic paid fallback':r'paid_fallback(?:_enabled)?\s*[:=]\s*true',
+          }
+          for label,pattern in forbidden.items():
+              assert re.search(pattern,combined,re.I) is None,label
+          PY
+
+      - name: Validate Pi recovery clients
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          wrapper=Path('pi/recover-opencode-first-tailscale-second.sh').read_text(encoding='utf-8')
+          legacy=Path('pi/activate-opencode-tailscale.sh').read_text(encoding='utf-8')
+          worker=Path('pi/openclaw-recovery-queue-worker.py').read_text(encoding='utf-8')
+          installer=Path('pi/install-openclaw-recovery-queue-worker.sh').read_text(encoding='utf-8')
+
+          for marker in (
+              'pi-recovery-installer-verified',
+              '4c21d9eab6fff335950f8a4c8c7a064a20b9aa00aead487b811cee779e8ae947',
+              'sha256sum --check --status',
+              'RECOVERY_MODE=SUPABASE_GUARDIAN_SCOPED_PI_JWT',
+              'SECOND_TELEGRAM_POLLER=false',
+              'PAID_API_FALLBACK=false',
+          ):
+              assert marker in wrapper,marker
+          assert re.search(r'^\s*(?:export\s+)?OPENCODE_API_KEY=',wrapper,re.M) is None
+          assert re.search(r'^\s*(?:export\s+)?TAILSCALE_AUTHKEY=',wrapper,re.M) is None
+          assert '| bash' not in wrapper
+          assert 'exec "$CANONICAL" "$@"' in legacy
+
+          for marker in (
+              'pull_recovery',
+              'pi_supabase_auth_model_recovery',
+              'worker_liveness_guardian',
+              'telegram_model_failover_repair',
+              'provider_secret_returned',
+              'secret_values_included',
+          ):
+              assert marker in worker,marker
+          for marker in ('ProtectSystem=strict','UMask=0077'):
+              assert marker in installer,marker
+          PY
+
+      - name: Reject embedded secret literals and destructive rollback
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -RInE \
+            --exclude='*.md' \
+            --exclude='package-lock.json' \
+            --exclude='*.yml' \
+            '(sk-proj-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|sb_secret_[A-Za-z0-9_-]{20,}|tskey-(auth|api|client)-[A-Za-z0-9_-]{20,}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' \
+            supabase pi scripts
+
+          rollback=supabase/rollback/20260819080000_emergency_bridge_disable.sql
+          test -s "$rollback"
+          grep -F 'set enabled=false' "$rollback"
+          grep -F "mode='disabled'" "$rollback"
+          ! grep -Eiq '\bdrop[[:space:]]+(table|schema|function)\b' "$rollback"

@@ -1,0 +1,27 @@
+services:
+  openclaw-pi-compat:
+    image: ghcr.io/mnwersdfppa/openclaw-pi-compat:edge
+    pull_policy: always
+    restart: unless-stopped
+    read_only: true
+    user: "10001:10001"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    env_file:
+      - ./openclaw-pi-compat.env
+    environment:
+      OPENCLAW_COMPAT_MODE: daemon
+      PROBE_INTERVAL_SECONDS: "120"
+      OLLAMA_URL: http://host.docker.internal:11434
+      RECEIPT_PATH: /data/openclaw-compat-receipt.json
+    volumes:
+      - openclaw-pi-compat-data:/data
+
+volumes:
+  openclaw-pi-compat-data:

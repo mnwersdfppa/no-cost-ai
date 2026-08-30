@@ -1,0 +1,50 @@
+{
+  "version": 3,
+  "project_id": "dpllasnpfskyyyzebyal",
+  "functions": {
+    "emergency-bridge": {
+      "source": "supabase/functions/emergency-bridge-rollout-ssot/index.ts",
+      "verify_jwt": true,
+      "actions": ["status", "heartbeat", "policy_check", "queue_status"],
+      "returns_rollout_ssot": true
+    },
+    "credential-readiness": {
+      "source": "supabase/functions/credential-readiness-admission-gated/index.ts",
+      "verify_jwt": true,
+      "actions": ["credential_readiness"],
+      "admission_rpc": "bridge_admit_request",
+      "returns_secret_values": false,
+      "returns_secret_names": false
+    },
+    "canonical-client-config": {
+      "source": "supabase/functions/canonical-client-config/index.ts",
+      "verify_jwt": true,
+      "returns_server_secret": false
+    },
+    "pi-work-queue": {
+      "source": "existing deployment",
+      "verify_jwt": true,
+      "mode": "bounded_queue"
+    },
+    "token-gateway": {
+      "source": "existing deployment",
+      "verify_jwt": true,
+      "active_source_modified_by_pr": false,
+      "ledger_hardened": true
+    }
+  },
+  "single_source_tables": {
+    "credential_runtime_status": "bridge_credentials",
+    "credential_alias_selection": "bridge_canonical_credentials",
+    "rollout_completion": "bridge_rollout_gates",
+    "security_review_backlog": "bridge_security_backlog"
+  },
+  "safe_defaults": {
+    "paid_api_fallback": false,
+    "external_write_actions": false,
+    "phone_write_actions": false,
+    "public_shell_execution": false,
+    "telegram_single_poller_enforced": true,
+    "vercel_deployments": false
+  }
+}

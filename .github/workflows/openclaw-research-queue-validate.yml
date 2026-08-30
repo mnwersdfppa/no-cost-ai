@@ -1,0 +1,189 @@
+name: Validate OpenClaw research queue API
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'supabase/functions/openclaw-research-queue/**'
+      - 'docs/openclaw-research-queue-api.md'
+      - 'evidence/openclaw-research-queue-e2e-20260820.json'
+      - '.github/workflows/openclaw-research-queue-validate.yml'
+  push:
+    branches:
+      - feat/supabase-emergency-bridge-20260819
+    paths:
+      - 'supabase/functions/openclaw-research-queue/**'
+      - 'docs/openclaw-research-queue-api.md'
+      - 'evidence/openclaw-research-queue-e2e-20260820.json'
+      - '.github/workflows/openclaw-research-queue-validate.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openclaw-research-queue-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate API source and E2E receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import re
+          from pathlib import Path
+
+          source_path = Path('supabase/functions/openclaw-research-queue/index.ts')
+          docs_path = Path('docs/openclaw-research-queue-api.md')
+          evidence_path = Path('evidence/openclaw-research-queue-e2e-20260820.json')
+          workflow_path = Path('.github/workflows/openclaw-research-queue-validate.yml')
+
+          for path in (source_path, docs_path, evidence_path, workflow_path):
+              if not path.is_file():
+                  raise SystemExit(f'missing required file: {path}')
+
+          source = source_path.read_text(encoding='utf-8')
+          docs = docs_path.read_text(encoding='utf-8')
+          evidence = json.loads(evidence_path.read_text(encoding='utf-8'))
+          workflow = workflow_path.read_text(encoding='utf-8')
+
+          required_source = [
+              'pi-gateway-client',
+              'bridge_claim_research_task',
+              'secret_like_payload_rejected',
+              'containsForbiddenKey',
+              'safe_result_contract_required',
+              'result_requires_review: true',
+              'research_task_claimed',
+              'research_task_completed',
+              'research_task_failed',
+              'arbitrary_execution_allowed: false',
+          ]
+          missing = [marker for marker in required_source if marker not in source]
+          if missing:
+              raise SystemExit(f'source contract missing: {missing}')
+
+          required_actions = {'status', 'claim', 'heartbeat', 'complete', 'fail'}
+          if set(evidence.get('actions', [])) != required_actions:
+              raise SystemExit('action contract mismatch')
+          if evidence.get('state') != 'PASS':
+              raise SystemExit('E2E state is not PASS')
+
+          e2e = evidence.get('e2e', {})
+          required_true = [
+              'atomic_claim',
+              'expected_task_claimed',
+              'bounded_lease_heartbeat',
+              'safe_completion',
+              'candidate_solution_found',
+              'result_review_required',
+              'unsafe_result_summary_rejected',
+              'temporary_identity_deleted',
+              'temporary_candidate_deleted',
+              'temporary_tasks_deleted',
+              'temporary_events_deleted',
+          ]
+          false_e2e = [key for key in required_true if e2e.get(key) is not True]
+          if false_e2e:
+              raise SystemExit(f'E2E evidence missing: {false_e2e}')
+          if e2e.get('unauthenticated_status') != 401 or e2e.get('authenticated_status') != 200:
+              raise SystemExit('authentication boundary mismatch')
+          if e2e.get('unsafe_result_summary_status') != 400:
+              raise SystemExit('unsafe result boundary mismatch')
+
+          safety = evidence.get('safety', {})
+          required_false = [
+              'query_credentials_returned',
+              'provider_secret_returned',
+              'supabase_server_secret_returned',
+              'authorization_header_persisted',
+              'arbitrary_execution_allowed',
+              'secret_like_payload_accepted',
+              'automatic_source_installation',
+              'automatic_high_risk_promotion',
+              'second_telegram_poller_created',
+              'automatic_paid_fallback_enabled',
+              'automatic_pr_merge',
+              'production_deployment',
+              'secret_values_included',
+          ]
+          invalid_safety = [key for key in required_false if safety.get(key) is not False]
+          if invalid_safety:
+              raise SystemExit(f'safety fields must be false: {invalid_safety}')
+
+          combined = '\n'.join([source, docs, json.dumps(evidence, sort_keys=True)])
+          actual_secret_patterns = [
+              r'sk-proj-[A-Za-z0-9_-]{20,}',
+              r'ghp_[A-Za-z0-9]{20,}',
+              r'github_pat_[A-Za-z0-9_]{20,}',
+              r'tskey-(?:auth|api|client)-[A-Za-z0-9_-]{20,}',
+              r'xox[baprs]-[A-Za-z0-9-]{20,}',
+              r'Bearer\s+[A-Za-z0-9._~+/-]{24,}',
+              r'BEGIN\s+(?:RSA|OPENSSH|EC)\s+PRIVATE\s+KEY-----',
+          ]
+          if any(re.search(pattern, combined, re.IGNORECASE) for pattern in actual_secret_patterns):
+              raise SystemExit('secret-like literal detected')
+
+          forbidden = [
+              r'shell\s*=\s*True',
+              r'\beval\s*\(',
+              r'\bexec\s*\(',
+              r'curl\s*\|\s*(?:sh|bash)',
+              r'getUpdates',
+          ]
+          if any(re.search(pattern, combined, re.IGNORECASE) for pattern in forbidden):
+              raise SystemExit('forbidden execution or Telegram poller construct detected')
+
+          if 'contents: read' not in workflow:
+              raise SystemExit('workflow must be read-only')
+          for forbidden_text in [
+              'contents:' + ' write',
+              'git ' + 'push',
+              'pull_request' + '_target:',
+              'supabase functions ' + 'deploy',
+              'vercel ' + '--prod',
+          ]:
+              if forbidden_text in workflow:
+                  raise SystemExit(f'workflow mutation boundary violated: {forbidden_text}')
+
+          if 'review-gated' not in docs or 'does not' not in docs.lower():
+              raise SystemExit('review and non-goal documentation missing')
+
+          print(json.dumps({
+              'result': 'PASS',
+              'actions': sorted(required_actions),
+              'source_selection_review_gated': True,
+              'repository_mutation': False,
+              'secret_values_included': False,
+          }, sort_keys=True))
+          PY
+
+      - name: Write validation summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## OpenClaw research queue API'
+            echo
+            echo '- Scoped Pi identity: enforced'
+            echo '- Atomic claim and bounded lease: enforced'
+            echo '- Safe result summary: enforced'
+            echo '- Source selection remains review-gated'
+            echo '- Arbitrary execution: OFF'
+            echo '- Provider and server credentials returned: OFF'
+            echo '- Repository mutation: OFF'
+          } >> "$GITHUB_STEP_SUMMARY"

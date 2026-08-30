@@ -1,0 +1,178 @@
+name: Validate OpenClaw reuse-first evolution engine
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'skills/pattern-promotion-engine/**'
+      - 'skills/reuse-first-solution-composer/**'
+      - 'skills/api-first-capability-router/**'
+      - 'skills/trace-to-pattern-feedback/**'
+      - 'config/openclaw-orchestrator-ownership.json'
+      - 'docs/openclaw-reuse-first-source-pool.md'
+      - 'evidence/openclaw-reuse-first-source-pool-20260820.json'
+      - '.github/workflows/openclaw-reuse-first-engine-validate.yml'
+  push:
+    branches:
+      - feat/supabase-emergency-bridge-20260819
+    paths:
+      - 'skills/pattern-promotion-engine/**'
+      - 'skills/reuse-first-solution-composer/**'
+      - 'skills/api-first-capability-router/**'
+      - 'skills/trace-to-pattern-feedback/**'
+      - 'config/openclaw-orchestrator-ownership.json'
+      - 'docs/openclaw-reuse-first-source-pool.md'
+      - 'evidence/openclaw-reuse-first-source-pool-20260820.json'
+      - '.github/workflows/openclaw-reuse-first-engine-validate.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openclaw-reuse-first-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+
+      - name: Validate skills, owner map, evidence and source policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import pathlib
+          import re
+
+          skill_paths = [
+              pathlib.Path('skills/pattern-promotion-engine/SKILL.md'),
+              pathlib.Path('skills/reuse-first-solution-composer/SKILL.md'),
+              pathlib.Path('skills/api-first-capability-router/SKILL.md'),
+              pathlib.Path('skills/trace-to-pattern-feedback/SKILL.md'),
+          ]
+          expected_names = {
+              'pattern-promotion-engine',
+              'reuse-first-solution-composer',
+              'api-first-capability-router',
+              'trace-to-pattern-feedback',
+          }
+          observed_names = set()
+          for path in skill_paths:
+              assert path.is_file(), path
+              text = path.read_text(encoding='utf-8')
+              assert text.startswith('---\n'), path
+              frontmatter = text.split('---', 2)[1]
+              name_match = re.search(r'^name:\s*([^\n]+)$', frontmatter, re.MULTILINE)
+              description_match = re.search(r'^description:\s*([^\n]+)$', frontmatter, re.MULTILINE)
+              assert name_match and description_match, path
+              observed_names.add(name_match.group(1).strip())
+              assert len(description_match.group(1).strip()) >= 20, path
+              assert 'Safety' in text or 'safety' in text, path
+              assert 'secret_values_included=false' in text, path
+          assert observed_names == expected_names, observed_names
+
+          owner_path = pathlib.Path('config/openclaw-orchestrator-ownership.json')
+          owner = json.loads(owner_path.read_text(encoding='utf-8'))
+          assert owner['authoritative_store'] == 'supabase'
+          assert owner['owners']['inbound_telegram'] == 'existing_openclaw_single_poller'
+          assert owner['owners']['portable_compatibility'] == 'docker'
+          assert owner['owners']['host_control'] == 'native_systemd_adapter'
+          assert owner['activation_rules']['unknown_intent'] == 'manual_review'
+          assert len(owner['owners']) == len(set(owner['owners'].keys()))
+          for key, value in owner['safety'].items():
+              assert value is False, (key, value)
+          assert owner['secret_values_included'] is False
+
+          evidence = json.loads(
+              pathlib.Path('evidence/openclaw-reuse-first-source-pool-20260820.json')
+              .read_text(encoding='utf-8')
+          )
+          assert evidence['source_catalog']['enabled_sources'] >= 20
+          assert evidence['source_catalog']['pattern_source_matches'] >= 20
+          assert evidence['research_pipeline']['english_queries_queued'] >= 1
+          assert evidence['projection_contract']['claim_complete_e2e'] == 'pass'
+          assert evidence['api']['e2e'] == 'pass'
+          assert evidence['api']['read_only'] is True
+          assert evidence['api']['promotion_exposed'] is False
+          assert evidence['api']['claim_exposed'] is False
+          assert evidence['safety']['secret_values_included'] is False
+
+          source_doc = pathlib.Path('docs/openclaw-reuse-first-source-pool.md').read_text(encoding='utf-8')
+          required_doc_markers = [
+              'Sustainable Use License',
+              'source-available',
+              'linux/arm64',
+              'linux/amd64',
+              'Supabase',
+              'LangGraph',
+              'OpenTelemetry',
+              'Notion',
+          ]
+          for marker in required_doc_markers:
+              assert marker in source_doc, marker
+
+          combined = '\n'.join(
+              path.read_text(encoding='utf-8')
+              for path in [*skill_paths, owner_path, pathlib.Path('evidence/openclaw-reuse-first-source-pool-20260820.json')]
+          )
+          secret_pattern = re.compile(
+              r'(sk-proj-[A-Za-z0-9_-]{12,}|ghp_[A-Za-z0-9]{16,}|'
+              r'github_pat_[A-Za-z0-9_]{16,}|xox[baprs]-[A-Za-z0-9-]{16,}|'
+              r'tskey-(?:auth|api|client)-[A-Za-z0-9_-]{12,}|'
+              r'BEGIN\s+(?:RSA|OPENSSH|EC)\s+PRIVATE\s+KEY)',
+              re.IGNORECASE,
+          )
+          assert secret_pattern.search(combined) is None
+          print('reuse_first_contract=pass')
+          PY
+
+      - name: Confirm workflow cannot mutate Production
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          text = Path('.github/workflows/openclaw-reuse-first-engine-validate.yml').read_text(encoding='utf-8')
+          forbidden = [
+              'contents: ' + 'write',
+              'gh pr ' + 'merge',
+              'vercel ' + '--prod',
+              'supabase functions ' + 'deploy',
+              'git push ' + 'origin main',
+          ]
+          for marker in forbidden:
+              assert marker not in text, marker
+          assert 'contents: read' in text
+          print('production_mutation=off')
+          PY
+
+      - name: Write validation summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## OpenClaw reuse-first validation'
+            echo
+            echo '- Official-source-first policy: checked'
+            echo '- License classification: checked'
+            echo '- One owner per intent: checked'
+            echo '- Read-only API evidence: checked'
+            echo '- Secret literal scan: checked'
+            echo '- Automatic merge/deploy: off'
+          } >> "$GITHUB_STEP_SUMMARY"

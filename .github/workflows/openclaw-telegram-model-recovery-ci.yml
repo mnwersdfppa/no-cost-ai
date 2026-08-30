@@ -1,0 +1,42 @@
+name: OpenClaw Telegram local-model recovery checks
+
+on:
+  pull_request:
+    paths:
+      - 'pi/recover-openclaw-telegram-models.sh'
+      - '.github/workflows/openclaw-telegram-model-recovery-ci.yml'
+  push:
+    branches:
+      - feat/supabase-emergency-bridge-20260819
+    paths:
+      - 'pi/recover-openclaw-telegram-models.sh'
+      - '.github/workflows/openclaw-telegram-model-recovery-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Validate recovery script
+        shell: bash
+        run: |
+          set -euo pipefail
+          script=pi/recover-openclaw-telegram-models.sh
+          test -s "$script"
+          bash -n "$script"
+          grep -F 'http://127.0.0.1:11434' "$script"
+          grep -F 'apiKey' "$script"
+          grep -F 'ollama-local' "$script"
+          grep -F 'openclaw config validate' "$script"
+          grep -F 'openclaw infer model run' "$script"
+          grep -F 'openclaw gateway restart' "$script"
+          grep -F 'pi-auth-refresh' "$script"
+          grep -F 'secret_values_included' "$script"
+          ! grep -F '/v1' "$script"
+          ! grep -E '(start_polling|getUpdates\(|run_polling\()' "$script"
+          ! grep -E '(OPENAI_API_KEY|SUPABASE_SERVICE_ROLE_KEY|TELEGRAM_BOT_TOKEN)' "$script"
+          ! grep -E '(sk-proj-|sk-[A-Za-z0-9]{20,}|ghp_|github_pat_|xox[baprs]-)' "$script"

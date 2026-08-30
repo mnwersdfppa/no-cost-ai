@@ -1,0 +1,127 @@
+name: Validate OpenClaw Pi compatibility installer
+
+on:
+  push:
+    branches:
+      - feat/supabase-emergency-bridge-20260819
+    paths:
+      - 'pi/install-openclaw-pi-compat-container.sh'
+      - '.github/workflows/openclaw-pi-compat-installer-validate.yml'
+  pull_request:
+    paths:
+      - 'pi/install-openclaw-pi-compat-container.sh'
+      - '.github/workflows/openclaw-pi-compat-installer-validate.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openclaw-pi-compat-installer-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Validate Bash syntax
+        shell: bash
+        run: bash -n pi/install-openclaw-pi-compat-container.sh
+
+      - name: Enforce fixed immutable and non-privileged contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from __future__ import annotations
+
+          import pathlib
+          import re
+
+          path = pathlib.Path('pi/install-openclaw-pi-compat-container.sh')
+          text = path.read_text(encoding='utf-8')
+
+          required = [
+              'openclaw-pi-compat-config',
+              'ghcr\\.io/mnwersdfppa/openclaw-pi-compat@sha256:',
+              'docker pull "$IMAGE_REF"',
+              '--read-only',
+              '--user 10001:10001',
+              '--cap-drop ALL',
+              '--security-opt no-new-privileges',
+              '--network none',
+              'openclaw-pi-compat.timer',
+              'native_openclaw_remains_canonical',
+              'second_telegram_poller_created',
+          ]
+          for marker in required:
+              assert marker in text, f'missing marker: {marker}'
+
+          forbidden = {
+              'telegram poller': r'getUpdates',
+              'telegram token': r'TELEGRAM_BOT_TOKEN',
+              'provider key': r'OPENCODE_API_KEY|OPENROUTER_API_KEY',
+              'tailscale key': r'TAILSCALE.*(?:KEY|TOKEN)',
+              'supabase server key': r'SUPABASE_(?:SERVICE_ROLE_KEY|SECRET_KEYS)',
+              'privileged mode': r'--privileged|privileged\s*:\s*true',
+              'host network': r'--network\s+host|network_mode\s*:\s*host',
+              'docker socket mount': r'docker\.sock',
+              'curl pipe shell': r'curl\s*\|\s*(?:sh|bash)',
+              'eval': r'\beval\b',
+              'shell source command': r'^[ \t]*(?:source|\.)[ \t]+(?![=])',
+              'unknown kill': r'kill\s+-9|pkill|killall',
+          }
+          for name, pattern in forbidden.items():
+              assert re.search(pattern, text, re.IGNORECASE | re.MULTILINE) is None, name
+
+          assert 'docker run --rm' in text
+          assert '--pull never' in text
+          assert 'ProtectSystem=strict' in text
+          assert 'NoNewPrivileges=true' in text
+          assert 'systemctl --user enable --now openclaw-pi-compat.timer' in text
+          print('pi_compat_installer_contract=pass')
+          PY
+
+      - name: Reject secret literals
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import pathlib
+          import re
+          text = pathlib.Path('pi/install-openclaw-pi-compat-container.sh').read_text(encoding='utf-8')
+          pattern = re.compile(
+              r'(sk-proj-[A-Za-z0-9_-]{16,}|ghp_[A-Za-z0-9]{20,}|'
+              r'xox[baprs]-[A-Za-z0-9-]{20,}|'
+              r'tskey-(?:auth|api|client)-[A-Za-z0-9_-]{16,}|'
+              r'eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})'
+          )
+          assert pattern.search(text) is None
+          print('secret_literal_scan=pass')
+          PY
+
+      - name: Confirm validation-only workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/openclaw-pi-compat-installer-validate.yml')
+          text = path.read_text(encoding='utf-8')
+          runtime = text.split('- name: Confirm validation-only workflow', 1)[0]
+          forbidden = (
+              'docker' + ' push',
+              'packages:' + ' write',
+              'gh pr' + ' merge',
+              'vercel ' + '--prod',
+              'supabase functions ' + 'deploy',
+              'git push ' + 'main',
+          )
+          assert all(marker not in runtime for marker in forbidden)
+          PY

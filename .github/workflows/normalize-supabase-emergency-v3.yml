@@ -1,0 +1,74 @@
+name: Inspect historical Supabase emergency v3 snapshots
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: inspect-supabase-emergency-v3-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify historical snapshots without overwriting canonical sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+
+          snapshots = {
+              'emergency-bridge': Path('supabase/functions/deployed/emergency-bridge-v3/index.ts'),
+              'credential-readiness': Path('supabase/functions/deployed/credential-readiness-v3/index.ts'),
+              'canonical-client-config': Path('supabase/functions/deployed/canonical-client-config-v3/index.ts'),
+          }
+          for name, path in snapshots.items():
+              assert path.is_file(), path
+              text = path.read_text(encoding='utf-8')
+              assert len(text) > 500, name
+              assert 'values_exposed' in text or 'values_returned' in text, name
+
+          manifest = json.loads(
+              Path('supabase/functions/manifest.json').read_text(encoding='utf-8')
+          )
+          assert manifest['canonical_supabase_server_key'] == 'SUPABASE_SECRET_KEYS.default'
+          assert manifest['canonical_model_gateway'] == 'pi-model-gateway-guardian'
+          assert manifest['canonical_pi_installer'] == 'pi-openclaw-current-master-recovery-verified'
+
+          print('HISTORICAL_V3_SNAPSHOTS=PASS canonical_overwrite=false')
+          PY
+
+      - name: Confirm workflow cannot mutate the repository or PR
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          text = Path('.github/workflows/normalize-supabase-emergency-v3.yml').read_text(
+              encoding='utf-8'
+          )
+          runtime = text.split(
+              '- name: Confirm workflow cannot mutate the repository or PR', 1
+          )[0]
+          forbidden = (
+              'contents:' + ' write',
+              'pull-requests:' + ' write',
+              'persist-credentials:' + ' true',
+              'git ' + 'commit',
+              'git ' + 'push',
+              'gh pr ' + 'comment',
+          )
+          assert all(marker not in runtime for marker in forbidden)
+          PY
