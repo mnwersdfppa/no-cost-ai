@@ -1,0 +1,202 @@
+name: Pi relay recovery once 20260904
+
+on:
+  push:
+    branches:
+      - ops/pi-entry-verification-20260823
+    paths:
+      - '.github/workflows/pi-relay-recovery-once-20260904.yml'
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: pi-relay-recovery-20260904
+  cancel-in-progress: false
+
+jobs:
+  relay-recovery:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      BROKER_URL: https://dpllasnpfskyyyzebyal.supabase.co/functions/v1/github-oidc-pi-relay-recovery-20260904
+      OIDC_AUDIENCE: odi-pi-relay-recovery-20260904
+      RUNNER_PATH: ops/pi-entry/physical-entry-runner.sh
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Open encrypted bounded relay
+        id: broker
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          mkdir -p artifacts
+          test -f "$RUNNER_PATH"
+          bash -n "$RUNNER_PATH"
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out /tmp/recipient-private.pem >/dev/null 2>&1
+          openssl pkey -in /tmp/recipient-private.pem -pubout -outform DER -out /tmp/recipient-public.der
+          SPKI="$(base64 -w0 /tmp/recipient-public.der)"
+          OIDC="$(curl --fail --silent --show-error -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${OIDC_AUDIENCE}" | python3 -c 'import json,sys;print(json.load(sys.stdin)["value"])')"
+          python3 - "$SPKI" >/tmp/body.json <<'PY'
+          import json,sys
+          print(json.dumps({'mode':'open','public_spki_b64':sys.argv[1]},separators=(',',':')))
+          PY
+          STATUS="$(curl --silent --show-error -X POST -H "Authorization: Bearer $OIDC" -H 'content-type: application/json' --data-binary @/tmp/body.json "$BROKER_URL" -o /tmp/broker.json -w '%{http_code}')"
+          unset OIDC SPKI
+          python3 - "$STATUS" <<'PY'
+          import base64,json,os,pathlib,sys
+          status=int(sys.argv[1]); d=json.load(open('/tmp/broker.json'))
+          safe={'http_status':status,'ok':d.get('ok') is True,'source_tag':d.get('source_tag'),'target_count':len(d.get('target_ips',[])) if isinstance(d.get('target_ips'),list) else 0,'policy_scope':d.get('policy_scope'),'auth_key_ephemeral':d.get('auth_key_ephemeral') is True,'secret_values_included':False}
+          pathlib.Path('artifacts/broker-safe.json').write_text(json.dumps(safe,separators=(',',':'))+'\n')
+          if not (200 <= status < 300 and d.get('ok') is True): raise SystemExit(20)
+          pathlib.Path('/tmp/safe.json').write_text(json.dumps({'target_ips':d['target_ips'],'pi_ssh_user':d['pi_ssh_user']},separators=(',',':')))
+          for src,dst in [('encrypted_auth_key_b64','/tmp/key.bin'),('encrypted_pi_password_b64','/tmp/pass.bin')]: pathlib.Path(dst).write_bytes(base64.b64decode(d[src],validate=True))
+          if isinstance(d.get('encrypted_bootstrap_token_b64'),str): pathlib.Path('/tmp/boot.bin').write_bytes(base64.b64decode(d['encrypted_bootstrap_token_b64'],validate=True))
+          for p in ['/tmp/safe.json','/tmp/key.bin','/tmp/pass.bin','/tmp/boot.bin']:
+            q=pathlib.Path(p)
+            if q.exists(): os.chmod(q,0o600)
+          PY
+          openssl pkeyutl -decrypt -inkey /tmp/recipient-private.pem -in /tmp/key.bin -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -out /tmp/tailscale-key
+          openssl pkeyutl -decrypt -inkey /tmp/recipient-private.pem -in /tmp/pass.bin -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -out /tmp/pi-password
+          if [[ -f /tmp/boot.bin ]]; then openssl pkeyutl -decrypt -inkey /tmp/recipient-private.pem -in /tmp/boot.bin -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -out /tmp/bootstrap-token; else : >/tmp/bootstrap-token; fi
+          chmod 600 /tmp/tailscale-key /tmp/pi-password /tmp/bootstrap-token
+          AUTH="$(cat /tmp/tailscale-key)"; PASS="$(cat /tmp/pi-password)"
+          [[ "$AUTH" == tskey-auth-* ]]; [[ ${#PASS} -ge 8 ]]
+          echo "::add-mask::$AUTH"; echo "::add-mask::$PASS"
+          if [[ -s /tmp/bootstrap-token ]]; then BOOT="$(cat /tmp/bootstrap-token)"; echo "::add-mask::$BOOT"; unset BOOT; fi
+          echo "authkey=$AUTH" >> "$GITHUB_OUTPUT"; echo "opened=true" >> "$GITHUB_OUTPUT"
+          unset AUTH PASS
+          rm -f /tmp/recipient-private.pem /tmp/recipient-public.der /tmp/key.bin /tmp/pass.bin /tmp/boot.bin /tmp/body.json /tmp/broker.json
+
+      - name: Join Tailnet with unique ephemeral source tag
+        if: steps.broker.outputs.opened == 'true'
+        uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade
+        with:
+          authkey: ${{ steps.broker.outputs.authkey }}
+          hostname: odi-relay-recovery-${{ github.run_id }}
+          statedir: /tmp/tailscale-state/
+          version: 1.102.3
+          timeout: 2m
+          retry: 3
+          use-cache: false
+
+      - name: Discover Pi from bounded relay neighbors and run verified recovery
+        id: recover
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          trap 'rm -f /tmp/relay.sh /tmp/pi-password /tmp/bootstrap-token /tmp/tailscale-key /tmp/safe.json' EXIT
+          python3 - "$RUNNER_PATH" >/tmp/relay.sh <<'PY'
+          import base64,json,pathlib,shlex,sys
+          runner=pathlib.Path(sys.argv[1]).read_bytes()
+          password=pathlib.Path('/tmp/pi-password').read_text()
+          boot=pathlib.Path('/tmp/bootstrap-token').read_text() if pathlib.Path('/tmp/bootstrap-token').exists() else ''
+          pi_user=json.load(open('/tmp/safe.json'))['pi_ssh_user']
+          script=r'''#!/usr/bin/env bash
+          set -Eeuo pipefail
+          umask 077
+          TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+          printf '%s' __PASSWORD__ >"$TMP/pass"; chmod 600 "$TMP/pass"
+          cat >"$TMP/askpass" <<'SH'
+          #!/bin/sh
+          cat "$PI_PASS_FILE"
+          SH
+          chmod 700 "$TMP/askpass"
+          export PI_PASS_FILE="$TMP/pass"
+          python3 - <<'PY2' >"$TMP/candidates"
+          import ipaddress,subprocess
+          out=[]
+          try:
+            text=subprocess.check_output(['ip','neigh','show'],text=True,stderr=subprocess.DEVNULL)
+          except Exception: text=''
+          for line in text.splitlines():
+            p=line.split()
+            if not p: continue
+            try:
+              ip=ipaddress.ip_address(p[0])
+              if ip.version==4 and ip.is_private: out.append(str(ip))
+            except Exception: pass
+          for name in ('raspberrypi.local','raspberrypi5.local','pi5.local'):
+            try:
+              text=subprocess.check_output(['getent','ahostsv4',name],text=True,stderr=subprocess.DEVNULL,timeout=2)
+              for line in text.splitlines():
+                try:
+                  ip=ipaddress.ip_address(line.split()[0])
+                  if ip.version==4 and ip.is_private: out.append(str(ip))
+                except Exception: pass
+            except Exception: pass
+          seen=set()
+          for x in out:
+            if x not in seen: seen.add(x); print(x)
+          PY2
+          SAFE='MODEL=unknown; [ ! -r /proc/device-tree/model ] || MODEL=$(tr -d "\000" </proc/device-tree/model | tr -cd "A-Za-z0-9 ._/-" | head -c 120); printf "SAFE host=%s arch=%s model=%s\n" "$(hostname|tr -cd "A-Za-z0-9._-")" "$(uname -m|tr -cd "A-Za-z0-9._/-")" "$MODEL"'
+          TARGET=''
+          while read -r ip; do
+            [[ -n "$ip" ]] || continue
+            INFO=$(timeout 20s env DISPLAY=:0 SSH_ASKPASS_REQUIRE=force SSH_ASKPASS="$TMP/askpass" setsid -w ssh -o BatchMode=no -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no -o KbdInteractiveAuthentication=yes -o NumberOfPasswordPrompts=1 -o ConnectTimeout=5 -o ConnectionAttempts=1 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$TMP/known" -o LogLevel=ERROR "__PI_USER__@$ip" "$SAFE" 2>/dev/null || true)
+            if grep -Fq 'model=Raspberry Pi 5' <<<"$INFO"; then TARGET="$ip"; break; fi
+          done <"$TMP/candidates"
+          if [[ -z "$TARGET" ]]; then echo RELAY_PI_NOT_FOUND; exit 20; fi
+          base64 -d >"$TMP/runner" <<'RUNNER_B64'
+          __RUNNER_B64__
+          RUNNER_B64
+          chmod 700 "$TMP/runner"
+          if [[ -n '__BOOTSTRAP__' ]]; then printf 'export ODI_BOOTSTRAP_TOKEN=%s\n' '__BOOTSTRAP__' >"$TMP/entry"; cat "$TMP/runner" >>"$TMP/entry"; else cp "$TMP/runner" "$TMP/entry"; fi
+          timeout 10m env DISPLAY=:0 SSH_ASKPASS_REQUIRE=force SSH_ASKPASS="$TMP/askpass" setsid -w ssh -o BatchMode=no -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no -o KbdInteractiveAuthentication=yes -o NumberOfPasswordPrompts=1 -o ConnectTimeout=5 -o ConnectionAttempts=1 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$TMP/known" -o LogLevel=ERROR "__PI_USER__@$TARGET" 'bash -s' <"$TMP/entry" | grep -E 'PHYSICAL_ENTRY_VERIFIED|SEQUENCE_ADVANCED|RECOVERY_OK|RESULT=' || true
+          echo RELAY_PI_EXECUTED
+          '''
+          script=script.replace('__PASSWORD__',shlex.quote(password)).replace('__PI_USER__',pi_user).replace('__RUNNER_B64__',base64.b64encode(runner).decode()).replace('__BOOTSTRAP__',shlex.quote(boot) if boot else '')
+          pathlib.Path('/tmp/relay.sh').write_text(script)
+          pathlib.Path('/tmp/relay.sh').chmod(0o700)
+          PY
+          python3 - <<'PY' >/tmp/targets
+          import json
+          for x in json.load(open('/tmp/safe.json'))['target_ips']: print(x)
+          PY
+          : > artifacts/relay-results.log
+          SUCCESS=false
+          for target in $(cat /tmp/targets); do
+            for user in mnwersdfppap mnwersdfppa pi ubuntu admin; do
+              set +e
+              OUT="$(timeout 11m tailscale ssh "$user@$target" 'bash -s' </tmp/relay.sh 2>/dev/null)"; RC=$?
+              set -e
+              SAFEOUT="$(printf '%s\n' "$OUT" | grep -E 'RELAY_PI_NOT_FOUND|RELAY_PI_EXECUTED|PHYSICAL_ENTRY_VERIFIED|SEQUENCE_ADVANCED|RECOVERY_OK|RESULT=' || true)"
+              printf 'target=%s user=%s rc=%s\n%s\n' "$target" "$user" "$RC" "$SAFEOUT" >> artifacts/relay-results.log
+              if grep -Fq 'RELAY_PI_EXECUTED' <<<"$OUT" && grep -Eq 'PHYSICAL_ENTRY_VERIFIED|SEQUENCE_ADVANCED|RECOVERY_OK' <<<"$OUT"; then SUCCESS=true; break 2; fi
+            done
+          done
+          echo "success=$SUCCESS" >> "$GITHUB_OUTPUT"
+          [[ "$SUCCESS" == true ]]
+
+      - name: Close relay and restore Tailscale policy
+        if: always() && steps.broker.outputs.opened == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          OIDC="$(curl --fail --silent --show-error -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${OIDC_AUDIENCE}" | python3 -c 'import json,sys;print(json.load(sys.stdin)["value"])')"
+          curl --silent --show-error -X POST -H "Authorization: Bearer $OIDC" -H 'content-type: application/json' --data '{"mode":"cleanup"}' "$BROKER_URL" > artifacts/cleanup-safe.json || true
+          unset OIDC
+
+      - name: Upload redacted evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: pi-relay-recovery-evidence-${{ github.run_id }}
+          path: artifacts/*
+          retention-days: 3
+          if-no-files-found: warn
+
+      - name: Enforce recovery evidence
+        if: always()
+        shell: bash
+        run: |
+          [[ "${{ steps.recover.outputs.success }}" == "true" ]] || { echo PI_RELAY_RECOVERY_NOT_ATTESTED; exit 1; }
+          echo PI_RELAY_RECOVERY_ATTESTED
