@@ -1,0 +1,64 @@
+version: 3
+state: active
+strategy: fast_first_then_progressive_quality
+memory:
+  ssot: supabase
+  preserve_brain_v13: true
+routing:
+  tier0:
+    type: deterministic
+    use_llm: false
+    sources: [rules, cache, tools, receipts]
+  tier1:
+    type: local_parallel
+    models: [qwen3:0.6b]
+    fanout: 3
+  tier2:
+    type: free_cloud_parallel
+    fanout: 3
+  tier3:
+    type: paid_mid
+    trigger: disagreement_or_quality_gate_failure
+    monthly_soft_cap_usd: 20
+  tier4:
+    type: frontier
+    trigger: hard_finalization_only
+parallel:
+  draft_fanout: 3
+  code_fanout: 2
+  judge_fanout: 1
+  early_exit_on_consensus: true
+  reuse_success_receipts: true
+  retry_same_work_when_receipt_exists: false
+quality_pipeline:
+  - fast_draft
+  - parallel_crosscheck
+  - merge
+  - targeted_test
+  - escalate_only_on_failure
+  - final_receipt
+runtime_languages:
+  python: orchestration_data_glue
+  typescript: edge_api_n8n_extensions
+  go: small_daemons_network_workers
+  rust: high_reliability_performance_workers
+  mojo: numeric_kernels_accelerator_experiments
+  bash: bootstrap_only
+accelerators:
+  gpu: on_demand
+  tpu: on_demand_jax_xla
+  qpu: research_only_simulator_first
+cost:
+  monthly_core_target_usd: [25, 40]
+  paid_model_soft_cap_usd: 20
+  burst_soft_cap_usd: 20
+  prefer_usage_based: true
+  require_roi_for_subscription: true
+infra:
+  primary: oracle_a1_docker
+  edge: cloudflare_workers
+  backup: cloudflare_r2
+  fallback: aws_existing_credit_bounded
+  scheduler: n8n_community_target
+  pi_role: secondary_edge_worker
+  vercel_role: status_ui_api_cache
