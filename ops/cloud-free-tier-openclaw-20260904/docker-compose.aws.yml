@@ -1,0 +1,14 @@
+services:
+  openclaw:
+    image: ghcr.io/openclaw/openclaw:latest
+    container_name: openclaw-main
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      HOME: /home/node
+      OPENCLAW_GATEWAY_BIND: loopback
+      OPENCLAW_GATEWAY_PORT: "18789"
+    volumes:
+      - ${OPENCLAW_CONFIG_DIR:-/opt/openclaw/state}:/home/node/.openclaw
+      - ${OPENCLAW_WORKSPACE_DIR:-/opt/openclaw/workspace}:/home/node/.openclaw/workspace
+    command: ["node","dist/index.js","gateway","--bind","loopback","--port","18789"]
